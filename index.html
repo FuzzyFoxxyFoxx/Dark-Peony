@@ -186,6 +186,7 @@
         const renderer = new THREE.WebGLRenderer({ 
             antialias: true, 
             alpha: false, 
+            premultipliedAlpha: false, // <- Добавить эту строку
             powerPreference: "high-performance",
             canvas: document.createElement('canvas') 
         });
