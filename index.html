@@ -180,16 +180,20 @@
         camera.position.set(0, 5.6, 5.4);
         camera.lookAt(0, -0.48, 0);
 
+        const oldCanvas = document.getElementById('webglCanvas');
+        if (oldCanvas) oldCanvas.remove();
+
         const renderer = new THREE.WebGLRenderer({ 
             antialias: true, 
-            alpha: true, 
+            alpha: false, 
             powerPreference: "high-performance",
             canvas: document.createElement('canvas') 
         });
+        
+        renderer.setClearColor(0x000102, 1.0);
         renderer.domElement.id = 'webglCanvas';
         document.body.appendChild(renderer.domElement);
         renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.outputColorSpace = THREE.SRGBColorSpace;
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
         let isPointsMode = true;
