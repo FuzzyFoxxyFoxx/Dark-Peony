@@ -425,8 +425,8 @@
                         vec3 color = mix(vec3(0.04, 0.1, 0.2), vec3(0.7, 0.88, 1.0), vFresnel * 1.1);
                         
                         // Агрессивное сжатие альфы для подавления выжигания в центре при AdditiveBlending
-                        float finalAlpha = tex.a * vAlpha * 0.18;
-                        finalAlpha = finalAlpha / (0.5 + finalAlpha * 2.8);
+                        float finalAlpha = tex.a * vAlpha * 0.25;
+                        finalAlpha = finalAlpha / (0.4 + finalAlpha * 1.8);
 
                         gl_FragColor = vec4(color, finalAlpha);
                     }
@@ -549,7 +549,7 @@
                 uTime: { value: 0 }, 
                 uTexture: { value: particleTexture }, 
                 uViewportScale: { value: getViewportScale() }, 
-                uSize: { value: 2.2 } 
+                uSize: { value: 3.8 } 
             },
             vertexShader: `
                 ${stamenVertexPars} 
