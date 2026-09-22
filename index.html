@@ -15,8 +15,6 @@
             position: absolute; 
             top: 0; 
             left: 0; 
-            image-rendering: -webkit-optimize-contrast;
-            image-rendering: crisp-edges;
         }
 
         #hudCanvas {
@@ -205,21 +203,21 @@
         document.body.appendChild(renderer.domElement);
         renderer.setSize(window.innerWidth, window.innerHeight);
         
-        // Жестко фиксируем честный DPR с ограничением до 2 для производительности и четкости
+        // Стабильный DPR без сюрпризов
         const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
         renderer.setPixelRatio(pixelRatio);
 
         let isPointsMode = true;
 
         function createParticleTexture() {
-            const size = 256; // Увеличено для максимальной четкости точек без мыла
+            const size = 128; 
             const canvas = document.createElement('canvas');
             canvas.width = size; canvas.height = size;
             const ctx = canvas.getContext('2d');
             const gradient = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
             gradient.addColorStop(0, 'rgba(255,255,255,1.0)');
-            gradient.addColorStop(0.2, 'rgba(220,240,255,0.7)');
-            gradient.addColorStop(0.5, 'rgba(120,190,255,0.2)');
+            gradient.addColorStop(0.25, 'rgba(200,230,255,0.7)');
+            gradient.addColorStop(0.5, 'rgba(100,170,255,0.2)');
             gradient.addColorStop(1, 'rgba(255,255,255,0.0)');
             ctx.fillStyle = gradient; ctx.fillRect(0, 0, size, size);
             return new THREE.CanvasTexture(canvas);
@@ -238,6 +236,11 @@
         scene.add(meshGroup, pointsGroup);
 
         const allMaterials = [];
+
+        // Функция для вычисления железобетонного размера точек независимо от хостинга
+        function getViewportScale() {
+            return Math.min(window.innerWidth, window.innerHeight) * 0.0012;
+        }
 
         // ==========================================
         // ФОНОВЫЕ ЧАСТИЦЫ
@@ -263,19 +266,19 @@
             ...pointsMaterialConfig,
             uniforms: {
                 uTexture: { value: particleTexture },
-                uPixelRatio: { value: pixelRatio },
-                uSize: { value: 4.0 },
+                uViewportScale: { value: getViewportScale() },
+                uSize: { value: 3.5 },
                 uTime: { value: 0 }
             },
             vertexShader: `
-                uniform float uPixelRatio, uSize, uTime;
+                uniform float uViewportScale, uSize, uTime;
                 attribute float aSizeScale;
                 varying float vAlpha;
                 void main() {
                     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
                     gl_Position = projectionMatrix * mvPosition;
                     float dist = max(-mvPosition.z, 0.1);
-                    gl_PointSize = uSize * uPixelRatio * (0.8 + aSizeScale * 0.7) / (0.4 + 0.08 * dist);
+                    gl_PointSize = uSize * uViewportScale * (0.8 + aSizeScale * 0.7) / (0.4 + 0.08 * dist);
                     vAlpha = 0.3 + 0.4 * aSizeScale;
                 }
             `,
@@ -286,7 +289,7 @@
                     vec4 tex = texture2D(uTexture, gl_PointCoord);
                     if (tex.a < 0.01) discard;
                     vec3 col = mix(vec3(0.1, 0.35, 0.7), vec3(0.7, 0.9, 1.0), tex.a);
-                    gl_FragColor = vec4(col, tex.a * vAlpha * 0.3);
+                    gl_FragColor = vec4(col, tex.a * vAlpha * 0.25);
                 }
             `
         });
@@ -386,19 +389,16 @@
                 uniforms: { 
                     uTime: {value:0}, uPhase: {value:pSeed}, uAmpFactor: {value:amp}, 
                     uFlexFactor: {value:flex}, uSCurveStrength: {value:sStr}, uLayerTier: {value:tier},
-                    uTexture: {value:particleTexture}, uPixelRatio: {value:pixelRatio}, uSize: {value: 3.0} 
+                    uTexture: {value:particleTexture}, uViewportScale: {value:getViewportScale()}, uSize: {value: 2.2} 
                 },
                 vertexShader: `
                     ${petalVertexPars}
-                    uniform float uPixelRatio, uSize;
+                    uniform float uViewportScale, uSize;
                     varying float vAlpha, vFresnel, vHeight;
-                    varying vec4 vScreenPos;
                     void main() {
                         ${petalVertexDisplacement}
                         vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
-                        vec4 projected = projectionMatrix * mvPosition;
-                        gl_Position = projected;
-                        vScreenPos = projected;
+                        gl_Position = projectionMatrix * mvPosition;
                         float dist = max(-mvPosition.z, 0.1);
 
                         vec3 N = normalize(normalMatrix * normal);
@@ -406,33 +406,27 @@
                         vFresnel = pow(clamp(1.0 - abs(dot(N, V)), 0.0, 1.0), 1.3);
                         vHeight = vUv.y;
 
-                        float depthCompensation = 1.0 / (0.32 + 0.07 * dist);
-                        float tierScaleBonus = 1.0 + vTier * 0.25; 
-                        float sScale = (0.75 + aSizeScale * 0.65) * depthCompensation * tierScaleBonus; 
-                        gl_PointSize = uSize * uPixelRatio * sScale;
+                        float depthCompensation = 1.0 / (0.35 + 0.06 * dist);
+                        float tierScaleBonus = 1.0 + vTier * 0.2; 
+                        float sScale = (0.7 + aSizeScale * 0.5) * depthCompensation * tierScaleBonus; 
+                        gl_PointSize = uSize * uViewportScale * sScale;
 
-                        float tierAlphaBoost = 1.0 + vTier * 0.5;
-                        vAlpha = (0.22 + 0.55 * vFresnel * tierAlphaBoost) * (0.35 + 0.65 * smoothstep(0.0, 0.4, vUv.y));
+                        vAlpha = (0.2 + 0.5 * vFresnel) * (0.3 + 0.7 * smoothstep(0.0, 0.35, vUv.y));
                     }
                 `,
                 fragmentShader: `
                     uniform sampler2D uTexture;
                     varying float vAlpha, vFresnel, vHeight;
                     varying float vTier;
-                    varying vec4 vScreenPos;
                     void main() {
                         vec4 tex = texture2D(uTexture, gl_PointCoord);
                         if (tex.a < 0.01) discard;
 
-                        vec2 screenUv = (vScreenPos.xy / vScreenPos.w) * 0.5 + 0.5;
-                        float distFromCenter = length(screenUv - vec2(0.5));
-
-                        float edgeVisibilityBoost = 1.0 + smoothstep(0.25, 0.75, distFromCenter) * 12.0;
-
-                        vec3 color = mix(vec3(0.04, 0.1, 0.2), vec3(0.75, 0.9, 1.0), vFresnel * 1.2);
+                        vec3 color = mix(vec3(0.04, 0.1, 0.2), vec3(0.7, 0.88, 1.0), vFresnel * 1.1);
                         
-                        float finalAlpha = tex.a * vAlpha * 0.22 * edgeVisibilityBoost;
-                        finalAlpha = finalAlpha / (0.42 + finalAlpha * 1.9);
+                        // Агрессивное сжатие альфы для подавления выжигания в центре при AdditiveBlending
+                        float finalAlpha = tex.a * vAlpha * 0.18;
+                        finalAlpha = finalAlpha / (0.5 + finalAlpha * 2.8);
 
                         gl_FragColor = vec4(color, finalAlpha);
                     }
@@ -481,18 +475,18 @@
             uniforms: { 
                 uTime: { value: 0 }, 
                 uTexture: { value: particleTexture }, 
-                uPixelRatio: { value: pixelRatio }, 
-                uSize: { value: 2.5 } 
+                uViewportScale: { value: getViewportScale() }, 
+                uSize: { value: 2.0 } 
             },
             vertexShader: `
                 ${tentVertexPars} 
-                uniform float uPixelRatio, uSize; 
+                uniform float uViewportScale, uSize; 
                 varying float vFresnel;
                 void main(){ 
                     ${tentVertexDisplacement} 
                     vec4 mv = modelViewMatrix * vec4(pos, 1.0);
                     float dist = max(-mv.z, 0.1); 
-                    gl_PointSize = uSize * uPixelRatio * (0.85 / (0.4 + 0.06 * dist));
+                    gl_PointSize = uSize * uViewportScale * (0.85 / (0.4 + 0.06 * dist));
                     vFresnel = pow(clamp(1.0 - abs(dot(normalize(normalMatrix * normal), normalize(-mv.xyz))), 0.0, 1.0), 1.2); 
                     gl_Position = projectionMatrix * mv; 
                 }
@@ -507,14 +501,13 @@
 
                     float baseFade = smoothstep(0.05, 0.3, vUv.y);
                     float edgeFade = 1.0 - smoothstep(0.85, 1.0, vUv.y);
-                    float tipGlow = smoothstep(0.1, 0.85, vUv.y) * 1.6;
+                    float tipGlow = smoothstep(0.1, 0.85, vUv.y) * 1.4;
                     
-                    float a = tex.a * (0.16 + tipGlow * 0.25) * baseFade * edgeFade; 
-                    a = a / (0.35 + a * 0.9); 
+                    float a = tex.a * (0.12 + tipGlow * 0.2) * baseFade * edgeFade; 
+                    a = a / (0.45 + a * 1.2); 
 
                     vec3 baseColor = mix(vec3(0.1, 0.22, 0.38), vec3(0.7, 0.85, 1.0), vFresnel * 1.1);
-                    vec3 tipColor = vec3(0.4, 0.7, 0.95);
-                    vec3 finalColor = mix(baseColor, tipColor, smoothstep(0.4, 0.85, vUv.y));
+                    vec3 finalColor = mix(baseColor, vec3(0.4, 0.7, 0.95), smoothstep(0.4, 0.85, vUv.y));
 
                     gl_FragColor = vec4(finalColor, a); 
                 }
@@ -540,13 +533,8 @@
                 void main(){ 
                     float baseFade = smoothstep(0.02, 0.2, vUv.y);
                     float edgeFade = 1.0 - smoothstep(0.85, 1.0, vUv.y);
-                    float bottomLift = mix(1.2, 1.0, smoothstep(0.0, 0.5, vUv.y));
-                    float topBoost = mix(0.7, 1.0, smoothstep(0.7, 0.95, vUv.y));
-                    float alpha = 0.48 * baseFade * edgeFade * bottomLift * topBoost;
-                    
-                    vec3 tipColor = vec3(0.75, 0.92, 1.0);
-                    vec3 finalCol = mix(vFresnelColor, tipColor, smoothstep(0.7, 1.0, vUv.y));
-
+                    float alpha = 0.48 * baseFade * edgeFade;
+                    vec3 finalCol = mix(vFresnelColor, vec3(0.75, 0.92, 1.0), smoothstep(0.7, 1.0, vUv.y));
                     gl_FragColor = vec4(finalCol, alpha); 
                 }
             `,
@@ -560,19 +548,19 @@
             uniforms: { 
                 uTime: { value: 0 }, 
                 uTexture: { value: particleTexture }, 
-                uPixelRatio: { value: pixelRatio }, 
-                uSize: { value: 2.8 } 
+                uViewportScale: { value: getViewportScale() }, 
+                uSize: { value: 2.2 } 
             },
             vertexShader: `
                 ${stamenVertexPars} 
-                uniform float uPixelRatio, uSize; 
+                uniform float uViewportScale, uSize; 
                 void main(){ 
                     ${stamenVertexDisplacement} 
                     vec4 mv = modelViewMatrix * vec4(pos, 1.0); 
                     float fresnel = pow(clamp(1.0 - abs(dot(normalize(normalMatrix * normal), normalize(-mv.xyz))), 0.0, 1.0), 1.3);
                     vFresnelColor = mix(vec3(0.09, 0.22, 0.36), vec3(0.75, 0.9, 1.0), fresnel * 1.2); 
                     float dist = max(-mv.z, 0.1); 
-                    gl_PointSize = uSize * uPixelRatio * (0.85 / (0.4 + 0.06 * dist)); 
+                    gl_PointSize = uSize * uViewportScale * (0.85 / (0.4 + 0.06 * dist)); 
                     gl_Position = projectionMatrix * mv; 
                 }
             `,
@@ -586,11 +574,10 @@
 
                     float baseFade = smoothstep(0.02, 0.2, vUv.y);
                     float edgeFade = 1.0 - smoothstep(0.85, 1.0, vUv.y);
-                    float bottomLift = mix(1.2, 1.0, smoothstep(0.0, 0.5, vUv.y));
-                    float tipGlow = smoothstep(0.5, 0.98, vUv.y) * 2.8; 
+                    float tipGlow = smoothstep(0.5, 0.98, vUv.y) * 2.0; 
                     
-                    float a = tex.a * (0.075 + tipGlow * 0.18) * baseFade * edgeFade * bottomLift; 
-                    a = a / (0.4 + a * 1.0); 
+                    float a = tex.a * (0.06 + tipGlow * 0.15) * baseFade * edgeFade; 
+                    a = a / (0.5 + a * 1.5); 
 
                     vec3 finalColor = mix(vFresnelColor, vec3(0.9, 0.96, 1.0), smoothstep(0.6, 1.0, vUv.y));
 
@@ -618,12 +605,12 @@
 
         const recepPointsMat = new THREE.ShaderMaterial({
             ...pointsMaterialConfig,
-            uniforms: { uTime: {value:0}, uTexture: {value:particleTexture}, uPixelRatio: {value:pixelRatio}, uSize: {value: 2.4} },
+            uniforms: { uTime: {value:0}, uTexture: {value:particleTexture}, uViewportScale: {value:getViewportScale()}, uSize: {value: 2.0} },
             vertexShader: `
-                ${recepVertexPars} uniform float uPixelRatio, uSize; void main(){ ${recepVertexDisplacement} vec4 mv=modelViewMatrix*vec4(pos,1.); gl_Position=projectionMatrix*mv;
-                float dist=max(-mv.z, 0.1); gl_PointSize=uSize*uPixelRatio*(0.85 / (0.35 + 0.06 * dist));
+                ${recepVertexPars} uniform float uViewportScale, uSize; void main(){ ${recepVertexDisplacement} vec4 mv=modelViewMatrix*vec4(pos,1.); gl_Position=projectionMatrix*mv;
+                float dist=max(-mv.z, 0.1); gl_PointSize=uSize*uViewportScale*(0.85 / (0.35 + 0.06 * dist));
                 vec3 tN=normal; tN.y/=0.55; vNormal=normalize(normalMatrix*tN); vViewPosition=-mv.xyz; }`,
-            fragmentShader: `uniform sampler2D uTexture; varying vec3 vNormal, vViewPosition; void main(){ vec4 tex=texture2D(uTexture,gl_PointCoord); if(tex.a<0.02)discard; vec3 N = normalize(vNormal); float fresnel = pow(clamp(1.-abs(dot(N, normalize(vViewPosition))),0.,1.), 2.0); float a = tex.a * 0.24; a = a / (0.42 + a * 1.8); gl_FragColor = vec4(mix(vec3(0.03, 0.08, 0.16), vec3(0.6, 0.75, 0.95), fresnel), a); }`
+            fragmentShader: `uniform sampler2D uTexture; varying vec3 vNormal, vViewPosition; void main(){ vec4 tex=texture2D(uTexture,gl_PointCoord); if(tex.a<0.02)discard; vec3 N = normalize(vNormal); float fresnel = pow(clamp(1.-abs(dot(N, normalize(vViewPosition))),0.,1.), 2.0); float a = tex.a * 0.18; a = a / (0.5 + a * 2.0); gl_FragColor = vec4(mix(vec3(0.03, 0.08, 0.16), vec3(0.6, 0.75, 0.95), fresnel), a); }`
         });
         allMaterials.push(recepPointsMat);
 
@@ -655,7 +642,6 @@
             const normAttr = baseGeo.attributes.normal;
             const uvAttr = baseGeo.attributes.uv;
             
-            // Золотая середина плотности (объем сохранен, пересвета нет)
             const multiplier = 3; 
             const totalPoints = baseCount * multiplier;
 
@@ -929,9 +915,14 @@
             camera.aspect = window.innerWidth / window.innerHeight; 
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
+            
             const pr = Math.min(window.devicePixelRatio || 1, 2);
             renderer.setPixelRatio(pr);
-            allMaterials.forEach(mat => { if(mat.uniforms.uPixelRatio) mat.uniforms.uPixelRatio.value = pr; });
+            
+            const newViewportScale = getViewportScale();
+            allMaterials.forEach(mat => { 
+                if(mat.uniforms.uViewportScale) mat.uniforms.uViewportScale.value = newViewportScale; 
+            });
             resizeHud();
         });
 
