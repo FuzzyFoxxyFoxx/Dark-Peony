@@ -424,9 +424,12 @@
 
                         vec3 color = mix(vec3(0.04, 0.1, 0.2), vec3(0.7, 0.88, 1.0), vFresnel * 1.1);
                         
-                        // Агрессивное сжатие альфы для подавления выжигания в центре при AdditiveBlending
-                        float finalAlpha = tex.a * vAlpha * 0.25;
-                        finalAlpha = finalAlpha / (0.4 + finalAlpha * 1.8);
+                        // Усиливаем видимость на периферии по vHeight (центр чистый, края ярче)
+                        float edgeGlow = smoothstep(0.2, 0.9, vHeight) * 1.5;
+                        float radialMultiplier = 1.0 + edgeGlow;
+
+                        float finalAlpha = tex.a * vAlpha * 0.20 * radialMultiplier;
+                        finalAlpha = finalAlpha / (0.45 + finalAlpha * 2.2);
 
                         gl_FragColor = vec4(color, finalAlpha);
                     }
