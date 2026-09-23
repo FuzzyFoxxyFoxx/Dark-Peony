@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dark Peony Hub - Morphing Architecture & Dispersion</title>
+    <title>Dark Peony Hub - Morphing Kinematics Assembly</title>
     <style>
         * { box-sizing: border-box; }
         body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000102; font-family: sans-serif; }
@@ -85,10 +85,9 @@
     <canvas id="hudCanvas"></canvas>
 
     <div id="ui">
-        <button id="btnToggleMode" class="btn">POINTS MODE (M)</button>
-        <button id="btnToggleDisperse" class="btn">DISPERSE (D)</button>
+        <button id="btnToggle" class="btn">POINTS MODE (M)</button>
     </div>
-    <div id="ui-overlay">Dark Peony Hub • Morphing & Dispersion Architecture</div>
+    <div id="ui-overlay">Dark Peony Hub • 3s Morphic Kinematics Assembly</div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
 
@@ -208,8 +207,6 @@
         renderer.setPixelRatio(pixelRatio);
 
         let isPointsMode = true;
-        let targetDisperse = 0.0;
-        let currentDisperse = 0.0;
 
         function createParticleTexture() {
             const size = 128; 
@@ -247,29 +244,6 @@
         }
 
         // ==========================================
-        // SHARED DISPERSION GLSL SNIPPET
-        // ==========================================
-        const dispersionGlslUniforms = `
-            uniform float uDisperse;
-        `;
-
-        const dispersionGlslCode = `
-            float rDist = length(pos.xz);
-            float peripheryMask = clamp((rDist * 0.4 + (vUv.y) * 0.6) * 0.85, 0.0, 1.0);
-            float effectiveDisperse = smoothstep(0.0, 1.0, (uDisperse - (1.0 - peripheryMask) * 0.45) / 0.55);
-            effectiveDisperse = clamp(effectiveDisperse, 0.0, 1.0);
-
-            float swirlAngle = effectiveDisperse * 6.2831853 * (1.0 + peripheryMask * 0.7);
-            float c = cos(swirlAngle);
-            float s = sin(swirlAngle);
-            mat2 swirlMatrix = mat2(c, -s, s, c);
-            pos.xz = swirlMatrix * pos.xz;
-
-            pos.xz *= (1.0 + effectiveDisperse * 2.2 * (0.4 + peripheryMask * 1.2));
-            pos.y += effectiveDisperse * (2.2 + peripheryMask * 1.8) + sin(effectiveDisperse * 3.14159 + rDist * 2.5) * 0.35 * effectiveDisperse;
-        `;
-
-        // ==========================================
         // ФОНОВЫЕ ЧАСТИЦЫ
         // ==========================================
         const galaxyParticleCount = 900;
@@ -295,21 +269,18 @@
                 uTexture: { value: particleTexture },
                 uViewportScale: { value: getViewportScale() },
                 uSize: { value: 3.5 },
-                uTime: { value: 0 },
-                uDisperse: { value: 0 }
+                uTime: { value: 0 }
             },
             vertexShader: `
-                uniform float uViewportScale, uSize, uTime, uDisperse;
+                uniform float uViewportScale, uSize, uTime;
                 attribute float aSizeScale;
                 varying float vAlpha;
                 void main() {
-                    vec3 pos = position;
-                    pos.y += uDisperse * 0.5;
-                    vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+                    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
                     gl_Position = projectionMatrix * mvPosition;
                     float dist = max(-mvPosition.z, 0.1);
                     gl_PointSize = uSize * uViewportScale * (0.8 + aSizeScale * 0.7) / (0.4 + 0.08 * dist);
-                    vAlpha = (0.3 + 0.4 * aSizeScale) * (1.0 - uDisperse * 0.5);
+                    vAlpha = 0.3 + 0.4 * aSizeScale;
                 }
             `,
             fragmentShader: `
@@ -327,7 +298,7 @@
         scene.add(new THREE.Points(galaxyGeo, galaxyMat));
 
         // ==========================================
-        // ЦВЕТОК
+        // ЦВЕТОК & КИНЕМАТИКА МОРФИНГА (ТЗ 3с)
         // ==========================================
         const FLOWER_SCALE = 0.72;
         meshGroup.scale.set(FLOWER_SCALE, FLOWER_SCALE, FLOWER_SCALE);
@@ -344,13 +315,51 @@
             uniform float uFlexFactor;
             uniform float uSCurveStrength;
             uniform float uLayerTier;
-            uniform float uDisperse;
             varying vec3 vNormal;
             varying vec3 vViewPosition;
             varying vec2 vUv;
             varying float vTier;
             attribute float aSizeScale;
             attribute vec3 aVolumetricOffset;
+        `;
+
+        // Единая математика 3-секундного цикла с послойным эффектом бархана и 360° орбитой
+        const morphKinematicsSnippet = `
+            // 3-секундный цикл: 0.0 - 1.2с распад, 1.2 - 1.8с орбитальный вихрь, 1.8 - 3.0с сборка
+            float cycle = mod(uTime, 3.0);
+            
+            // Иерархический сдвиг по слоям (tier и высота/удаление): периферия срывается первой, ядро позже
+            float tierDelay = (2.0 - uLayerTier) * 0.12 + vNorm * 0.15;
+            
+            // Функция фазы трансформации (0 = собрано, 1 = полностью в облаке/разборе)
+            float morphFactor = 0.0;
+            if (cycle < 1.3) {
+                float p = clamp((cycle - tierDelay) / 1.0, 0.0, 1.0);
+                morphFactor = smoothstep(0.0, 1.0, p);
+            } else if (cycle < 1.7) {
+                morphFactor = 1.0; // Пик вихря
+            } else {
+                // Обратная сборка: периферия садится на места первой (раньше по времени), ядро догоняет
+                float assembleDelay = (2.0 - uLayerTier) * 0.10 + (1.0 - vNorm) * 0.1;
+                float p = clamp((cycle - 1.7 - assembleDelay) / 0.9, 0.0, 1.0);
+                morphFactor = 1.0 - smoothstep(0.0, 1.0, p);
+            }
+
+            // Управляемое орбитальное смещение 360 градусов вокруг оси Y в пределах жестких лимитов
+            float angleOffset = morphFactor * (1.58 + uLayerTier * 0.4) + sin(uPhase + cycle * 2.0) * 0.2;
+            float cosA = cos(angleOffset);
+            float sinA = sin(angleOffset);
+            
+            // Вращение координат X и Z для орбитального вихря
+            float ox = pos.x * cosA - pos.z * sinA;
+            float oz = pos.x * sinA + pos.z * cosA;
+            pos.x = mix(pos.x, ox, morphFactor);
+            pos.z = mix(pos.z, oz, morphFactor);
+            
+            // Контролируемый вертикальный и радиальный разлет (без хаоса)
+            pos.y += morphFactor * (0.8 + vNorm * 0.6 + uLayerTier * 0.25);
+            pos.x += morphFactor * (aVolumetricOffset.x * 2.5);
+            pos.z += morphFactor * (aVolumetricOffset.z * 2.5);
         `;
 
         const petalVertexDisplacement = `
@@ -379,16 +388,15 @@
             pos.z += baseSCurve + transverseSine + (wave1 + wave2 + edgeFlutter) * hMask;
             pos += aVolumetricOffset * (0.005 + 0.012 * smoothstep(0.0, 0.3, vNorm));
 
-            // Применение архитектуры морфинга и послойного завихрения
-            ${dispersionGlslCode}
+            // Применяем архитектуру морфинга и кинематики ТЗ
+            ${morphKinematicsSnippet}
         `;
 
         function createPetalMeshMat(pSeed, amp, flex, sStr, tier) {
             const mat = new THREE.ShaderMaterial({
                 uniforms: { 
                     uTime: {value:0}, uPhase: {value:pSeed}, uAmpFactor: {value:amp}, 
-                    uFlexFactor: {value:flex}, uSCurveStrength: {value:sStr}, uLayerTier: {value:tier},
-                    uDisperse: {value:0} 
+                    uFlexFactor: {value:flex}, uSCurveStrength: {value:sStr}, uLayerTier: {value:tier} 
                 },
                 vertexShader: `
                     ${petalVertexPars}
@@ -424,8 +432,7 @@
                 uniforms: { 
                     uTime: {value:0}, uPhase: {value:pSeed}, uAmpFactor: {value:amp}, 
                     uFlexFactor: {value:flex}, uSCurveStrength: {value:sStr}, uLayerTier: {value:tier},
-                    uTexture: {value:particleTexture}, uViewportScale: {value:getViewportScale()}, uSize: {value: 2.2},
-                    uDisperse: {value:0} 
+                    uTexture: {value:particleTexture}, uViewportScale: {value:getViewportScale()}, uSize: {value: 2.2} 
                 },
                 vertexShader: `
                     ${petalVertexPars}
@@ -472,20 +479,37 @@
             allMaterials.push(mat); return mat;
         }
 
-        const tentVertexPars = `uniform float uTime; uniform float uDisperse; attribute float aSeed; varying vec3 vNormal, vViewPosition; varying vec2 vUv;`;
+        const tentVertexPars = `uniform float uTime; attribute float aSeed; varying vec3 vNormal, vViewPosition; varying vec2 vUv;`;
         const tentVertexDisplacement = `
             vUv = uv; vec3 pos = position; float whip = pow(vUv.y, 1.3);
             float t1 = uTime * 1.2 - pos.y * 1.5 + aSeed * 9.1;
             float t2 = uTime * 0.9 - pos.y * 2.1 + aSeed * 4.3;
             pos.x += (sin(t1) * 0.25 + cos(t2) * 0.12) * whip;
             pos.z += (cos(t1 * 0.85) * 0.25 + sin(t2 * 1.1) * 0.12) * whip;
-            
+
+            // Кинематика морфинга для щупалец
+            float cycle = mod(uTime, 3.0);
             float vNorm = vUv.y;
-            ${dispersionGlslCode}
+            float tierDelay = 0.1 + vNorm * 0.1;
+            float morphFactor = 0.0;
+            if (cycle < 1.3) {
+                morphFactor = smoothstep(0.0, 1.0, clamp((cycle - tierDelay)/1.0, 0.0, 1.0));
+            } else if (cycle < 1.7) {
+                morphFactor = 1.0;
+            } else {
+                morphFactor = 1.0 - smoothstep(0.0, 1.0, clamp((cycle - 1.7 - (1.0-vNorm)*0.1)/0.9, 0.0, 1.0));
+            }
+            float ang = morphFactor * 1.4;
+            float cA = cos(ang), sA = sin(ang);
+            float ox = pos.x * cA - pos.z * sA;
+            float oz = pos.x * sA + pos.z * cA;
+            pos.x = mix(pos.x, ox, morphFactor);
+            pos.z = mix(pos.z, oz, morphFactor);
+            pos.y += morphFactor * 0.7;
         `;
 
         const tentMeshMat = new THREE.ShaderMaterial({
-            uniforms: { uTime: {value:0}, uDisperse: {value:0} },
+            uniforms: { uTime: {value:0} },
             vertexShader: `${tentVertexPars} void main(){ ${tentVertexDisplacement} vec4 mv=modelViewMatrix*vec4(pos,1.); vViewPosition=-mv.xyz; vNormal=normalize(normalMatrix*normal); gl_Position=projectionMatrix*mv; }`,
             fragmentShader: `
                 varying vec3 vNormal, vViewPosition;
@@ -493,15 +517,12 @@
                 void main(){ 
                     vec3 N = gl_FrontFacing ? normalize(vNormal) : -normalize(vNormal); 
                     float fresnel = pow(clamp(1.0 - abs(dot(N, normalize(vViewPosition))), 0.0, 1.0), 1.2); 
-                    
                     float baseFade = smoothstep(0.05, 0.3, vUv.y);
                     float edgeFade = 1.0 - smoothstep(0.85, 1.0, vUv.y);
                     float alpha = 0.5 * baseFade * edgeFade;
-                    
                     vec3 baseColor = mix(vec3(0.06, 0.14, 0.25), vec3(0.5, 0.7, 0.9), fresnel * 1.1);
                     vec3 tipColor = vec3(0.4, 0.7, 0.95);
                     vec3 finalColor = mix(baseColor, tipColor, smoothstep(0.4, 0.85, vUv.y));
-
                     gl_FragColor = vec4(finalColor, alpha); 
                 }
             `,
@@ -514,7 +535,6 @@
             depthTest: false,
             uniforms: { 
                 uTime: { value: 0 }, 
-                uDisperse: { value: 0 },
                 uTexture: { value: particleTexture }, 
                 uViewportScale: { value: getViewportScale() }, 
                 uSize: { value: 2.0 } 
@@ -539,35 +559,46 @@
                 void main(){ 
                     vec4 tex = texture2D(uTexture, gl_PointCoord); 
                     if(tex.a < 0.02) discard; 
-
                     float baseFade = smoothstep(0.05, 0.3, vUv.y);
                     float edgeFade = 1.0 - smoothstep(0.85, 1.0, vUv.y);
                     float tipGlow = smoothstep(0.1, 0.85, vUv.y) * 1.4;
-                    
                     float a = tex.a * (0.12 + tipGlow * 0.2) * baseFade * edgeFade; 
                     a = a / (0.45 + a * 1.2); 
-
                     vec3 baseColor = mix(vec3(0.1, 0.22, 0.38), vec3(0.7, 0.85, 1.0), vFresnel * 1.1);
                     vec3 finalColor = mix(baseColor, vec3(0.4, 0.7, 0.95), smoothstep(0.4, 0.85, vUv.y));
-
                     gl_FragColor = vec4(finalColor, a); 
                 }
             `,
         });
         allMaterials.push(tentPointsMat);
 
-        const stamenVertexPars = `uniform float uTime; uniform float uDisperse; attribute float aSeed; varying vec2 vUv; varying vec3 vFresnelColor;`;
+        const stamenVertexPars = `uniform float uTime; attribute float aSeed; varying vec2 vUv; varying vec3 vFresnelColor;`;
         const stamenVertexDisplacement = `
             vUv = uv; vec3 pos = position; float whip = pow(vUv.y, 1.2);
             float t = uTime * 1.4 - pos.y * 1.8 + aSeed * 6.5;
             pos.x += sin(t) * 0.12 * whip; pos.z += cos(t * 1.1) * 0.12 * whip;
-            
+
+            float cycle = mod(uTime, 3.0);
             float vNorm = vUv.y;
-            ${dispersionGlslCode}
+            float morphFactor = 0.0;
+            if (cycle < 1.3) {
+                morphFactor = smoothstep(0.0, 1.0, clamp((cycle - 0.05)/1.0, 0.0, 1.0));
+            } else if (cycle < 1.7) {
+                morphFactor = 1.0;
+            } else {
+                morphFactor = 1.0 - smoothstep(0.0, 1.0, clamp((cycle - 1.7)/0.9, 0.0, 1.0));
+            }
+            float ang = morphFactor * 1.2;
+            float cA = cos(ang), sA = sin(ang);
+            float ox = pos.x * cA - pos.z * sA;
+            float oz = pos.x * sA + pos.z * cA;
+            pos.x = mix(pos.x, ox, morphFactor);
+            pos.z = mix(pos.z, oz, morphFactor);
+            pos.y += morphFactor * 0.5;
         `;
 
         const stamenMeshMat = new THREE.ShaderMaterial({
-            uniforms: { uTime: {value:0}, uDisperse: {value:0} },
+            uniforms: { uTime: {value:0} },
             vertexShader: `${stamenVertexPars} void main(){ ${stamenVertexDisplacement} vec4 mv=modelViewMatrix*vec4(pos,1.); 
             float fresnel=pow(clamp(1.-abs(dot(normalize(normalMatrix*normal),normalize(-mv.xyz))),0.,1.),1.3);
             vFresnelColor=mix(vec3(0.08, 0.18, 0.3), vec3(0.7, 0.85, 1.0), fresnel*1.2); gl_Position=projectionMatrix*mv; }`,
@@ -591,7 +622,6 @@
             depthTest: false,
             uniforms: { 
                 uTime: { value: 0 }, 
-                uDisperse: { value: 0 },
                 uTexture: { value: particleTexture }, 
                 uViewportScale: { value: getViewportScale() }, 
                 uSize: { value: 3.8 } 
@@ -616,35 +646,39 @@
                 void main(){ 
                     vec4 tex = texture2D(uTexture, gl_PointCoord); 
                     if(tex.a < 0.02) discard; 
-
                     float baseFade = smoothstep(0.02, 0.2, vUv.y);
                     float edgeFade = 1.0 - smoothstep(0.85, 1.0, vUv.y);
                     float tipGlow = smoothstep(0.5, 0.98, vUv.y) * 2.0; 
-                    
                     float a = tex.a * (0.06 + tipGlow * 0.15) * baseFade * edgeFade; 
                     a = a / (0.5 + a * 1.5); 
-
                     vec3 finalColor = mix(vFresnelColor, vec3(0.9, 0.96, 1.0), smoothstep(0.6, 1.0, vUv.y));
-
                     gl_FragColor = vec4(finalColor, a); 
                 }
             `,
         });
         allMaterials.push(stamenPointsMat);
 
-        const recepVertexPars = `uniform float uTime; uniform float uDisperse; varying vec3 vNormal, vViewPosition; varying vec2 vUv;`;
+        const recepVertexPars = `uniform float uTime; varying vec3 vNormal, vViewPosition;`;
         const recepVertexDisplacement = `
-            vUv = uv;
             vec3 norm = normalize(position);
             float wave = (sin(norm.x*2.5+uTime*0.9)*cos(norm.y*2.0+uTime*0.7) + cos(norm.z*2.8-uTime*0.8)*sin(norm.y*3.1+uTime*0.5)) * 0.06;
             vec3 pos = position + norm * wave; pos.y *= 0.55;
-            
-            float vNorm = 0.2;
-            ${dispersionGlslCode}
+
+            // Цветоложе замыкает сборку последним
+            float cycle = mod(uTime, 3.0);
+            float morphFactor = 0.0;
+            if (cycle < 1.3) {
+                morphFactor = smoothstep(0.0, 1.0, clamp((cycle - 0.2)/1.0, 0.0, 1.0));
+            } else if (cycle < 1.7) {
+                morphFactor = 1.0;
+            } else {
+                morphFactor = 1.0 - smoothstep(0.0, 1.0, clamp((cycle - 1.7)/0.8, 0.0, 1.0));
+            }
+            pos.y += morphFactor * 0.3;
         `;
 
         const recepMeshMat = new THREE.ShaderMaterial({
-            uniforms: { uTime: {value:0}, uDisperse: {value:0} },
+            uniforms: { uTime: {value:0} },
             vertexShader: `${recepVertexPars} void main(){ ${recepVertexDisplacement} vec4 mv=modelViewMatrix*vec4(pos,1.); vViewPosition=-mv.xyz;
             vec3 tN=normal; tN.y/=0.55; vNormal=normalize(normalMatrix*tN); gl_Position=projectionMatrix*mv; }`,
             fragmentShader: `varying vec3 vNormal, vViewPosition; void main(){ vec3 N = normalize(vNormal); float fresnel = pow(clamp(1.-abs(dot(N, normalize(vViewPosition))),0.,1.), 2.0); gl_FragColor = vec4(mix(vec3(0.02, 0.05, 0.1), vec3(0.6, 0.75, 0.95), fresnel), 0.8); }`,
@@ -654,7 +688,7 @@
 
         const recepPointsMat = new THREE.ShaderMaterial({
             ...pointsMaterialConfig,
-            uniforms: { uTime: {value:0}, uDisperse: {value:0}, uTexture: {value:particleTexture}, uViewportScale: {value:getViewportScale()}, uSize: {value: 2.0} },
+            uniforms: { uTime: {value:0}, uTexture: {value:particleTexture}, uViewportScale: {value:getViewportScale()}, uSize: {value: 2.0} },
             vertexShader: `
                 ${recepVertexPars} uniform float uViewportScale, uSize; void main(){ ${recepVertexDisplacement} vec4 mv=modelViewMatrix*vec4(pos,1.); gl_Position=projectionMatrix*mv;
                 float dist=max(-mv.z, 0.1); gl_PointSize=uSize*uViewportScale*(0.85 / (0.35 + 0.06 * dist));
@@ -929,41 +963,16 @@
         // ==========================================
         // UI & TOGGLE LOGIC
         // ==========================================
-        const btnToggleMode = document.getElementById('btnToggleMode');
-        const btnToggleDisperse = document.getElementById('btnToggleDisperse');
-
+        const btnToggle = document.getElementById('btnToggle');
         function updateMode() {
             meshGroup.visible = !isPointsMode; 
             pointsGroup.visible = isPointsMode;
-            btnToggleMode.classList.toggle('active', isPointsMode);
-            btnToggleMode.innerText = isPointsMode ? 'POINTS MODE (M)' : 'MESH MODE (M)';
+            btnToggle.classList.toggle('active', isPointsMode);
+            btnToggle.innerText = isPointsMode ? 'POINTS MODE (M)' : 'MESH MODE (M)';
         }
-
-        function updateDisperseUI() {
-            const isDisp = targetDisperse > 0.5;
-            btnToggleDisperse.classList.toggle('active', isDisp);
-            btnToggleDisperse.innerText = isDisp ? 'ASSEMBLY (D)' : 'DISPERSE (D)';
-        }
-
-        btnToggleMode.addEventListener('click', () => { isPointsMode = !isPointsMode; updateMode(); });
-        btnToggleDisperse.addEventListener('click', () => { 
-            targetDisperse = targetDisperse === 0.0 ? 1.0 : 0.0; 
-            updateDisperseUI();
-        });
-
-        window.addEventListener('keydown', (e) => { 
-            if (e.key.toLowerCase() === 'm' || e.key === 'ь') { 
-                isPointsMode = !isPointsMode; 
-                updateMode(); 
-            }
-            if (e.key.toLowerCase() === 'd' || e.key === 'в') { 
-                targetDisperse = targetDisperse === 0.0 ? 1.0 : 0.0; 
-                updateDisperseUI();
-            }
-        });
-
+        btnToggle.addEventListener('click', () => { isPointsMode = !isPointsMode; updateMode(); });
+        window.addEventListener('keydown', (e) => { if (e.key.toLowerCase() === 'm' || e.key === 'ь') { isPointsMode = !isPointsMode; updateMode(); } });
         updateMode();
-        updateDisperseUI();
 
         // ==========================================
         // ANIMATION LOOP
@@ -973,14 +982,11 @@
             requestAnimationFrame(animate);
             const t = clock.getElapsedTime();
 
-            // Плавная интерполяция параметра распада (морфинг стейтов)
-            currentDisperse += (targetDisperse - currentDisperse) * 0.05;
-
             allMaterials.forEach(mat => {
                 if (mat.uniforms.uTime) mat.uniforms.uTime.value = t;
-                if (mat.uniforms.uDisperse) mat.uniforms.uDisperse.value = currentDisperse;
             });
 
+            // Непрерывное фоновое вращение объекта по оси Y по ТЗ
             meshGroup.rotation.y = t * 0.03;
             pointsGroup.rotation.y = t * 0.03;
 
