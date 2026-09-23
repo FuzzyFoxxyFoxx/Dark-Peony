@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dark Peony Hub - Layout Assembly</title>
+    <title>Dark Peony Hub - Layout Assembly & Morphing Core</title>
     <style>
         * { box-sizing: border-box; }
         body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000102; font-family: sans-serif; }
@@ -86,8 +86,10 @@
 
     <div id="ui">
         <button id="btnToggle" class="btn">POINTS MODE (M)</button>
+        <button id="btnMorph" class="btn">РАЗЛЕТ / СБОРКА</button>
+        <button id="btnState" class="btn">ФОРМА [STATE A]</button>
     </div>
-    <div id="ui-overlay">Dark Peony Hub • Layout Assembly</div>
+    <div id="ui-overlay">Dark Peony Hub • Morphing Core Active</div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
 
@@ -207,6 +209,8 @@
         renderer.setPixelRatio(pixelRatio);
 
         let isPointsMode = true;
+        let morphProgressTarget = 0.0;     // 0.0 - собран, 1.0 - полный разлет 360°
+        let currentMorphStateIndex = 0.0;  // 0.0 - State A, 1.0 - State B (альтернативная форма)
 
         function createParticleTexture() {
             const size = 128; 
@@ -298,7 +302,7 @@
         scene.add(new THREE.Points(galaxyGeo, galaxyMat));
 
         // ==========================================
-        // ЦВЕТОК & МАТЕМАТИКА АНИМАЦИИ СБОРКИ (360° от краев к центру)
+        // ЦВЕТОК & МОДИФИЦИРОВАННЫЕ ШЕЙДЕРЫ (MoGraph + 360° Разлет + Морфинг)
         // ==========================================
         const FLOWER_SCALE = 0.72;
         meshGroup.scale.set(FLOWER_SCALE, FLOWER_SCALE, FLOWER_SCALE);
@@ -308,71 +312,52 @@
         meshGroup.position.y = FLOWER_Y_OFFSET;
         pointsGroup.position.y = FLOWER_Y_OFFSET;
 
-        const commonVertexPars = `
+        const sharedUniforms = {
+            uTime: { value: 0 },
+            uProgress: { value: 0 },
+            uMorphState: { value: 0 },
+            uCenterOfMass: { value: new THREE.Vector3(0, 0, 0) }
+        };
+
+        const petalVertexPars = `
             uniform float uTime;
+            uniform float uProgress;
+            uniform float uMorphState;
+            uniform vec3 uCenterOfMass;
             uniform float uPhase;
             uniform float uAmpFactor;
             uniform float uFlexFactor;
             uniform float uSCurveStrength;
             uniform float uLayerTier;
-            attribute float aSizeScale;
-            attribute vec3 aVolumetricOffset;
-        `;
-
-        // Единая логика разрушения/сборки: вращение вокруг оси Y цветка на 360 градусов, 
-        // где края элемента (и верхушка) реагируют первыми, а основание и середина догоняют.
-        const assemblyDeformationGLSL = `
-            vec3 pos = position;
-
-            // Цикл сборки/разрушения (период, например, 8 секунд)
-            float cycleTime = uTime * 0.75 + uPhase;
-            float progress = sin(cycleTime) * 0.5 + 0.5; // от 0 до 1
-            // Делаем паузы в собранном и разобранном состоянии
-            progress = smoothstep(0.1, 0.9, progress);
-
-            // Фактор удаления от центра элемента/края (edges vs center)
-            // vUv.x: от 0 до 1 (края по 0 и 1, середина 0.5)
-            // vUv.y: от 0 (основание) до 1 (кончик)
-            float edgeDistX = abs(uv.x - 0.5) * 2.0; // 0 в центре, 1 на боковых краях
-            float heightDistY = uv.y;                // 0 у основания, 1 на кончике
-
-            // Степень "ранжирования": первыми срываются боковые края и кончики
-            float urgency = clamp(edgeDistX * 0.7 + heightDistY * 0.5, 0.0, 1.0);
             
-            // Локальный прогресс для конкретной вершины с учетом задержки центра
-            float vertexProgress = clamp((progress - (1.0 - urgency) * 0.4) / 0.6, 0.0, 1.0);
-            vertexProgress = smoothstep(0.0, 1.0, vertexProgress);
-
-            // Полный оборот 360 градусов (2 * PI) при разлете/сборке вокруг оси Y цветка
-            float rotAngle = vertexProgress * 6.283185;
-            float cosA = cos(rotAngle);
-            float sinA = sin(rotAngle);
-
-            // Вращаем текущую точку вокруг центральной оси Y (0,0,0 локального пивота)
-            float rx = pos.x * cosA - pos.z * sinA;
-            float rz = pos.x * sinA + pos.z * cosA;
-            pos.x = mix(pos.x, rx, vertexProgress);
-            pos.z = mix(pos.z, rz, vertexProgress);
-
-            // Рассеивание наружу от центра при разлете
-            pos.x += (pos.x * vertexProgress * 1.8);
-            pos.z += (pos.z * vertexProgress * 1.8);
-            pos.y += vertexProgress * 0.8 * heightDistY;
-        `;
-
-        const petalVertexPars = `
-            ${commonVertexPars}
+            attribute vec3 aTargetPosition;
+            attribute float aDelay;
+            attribute float aRandomRot;
+            
             varying vec3 vNormal;
             varying vec3 vViewPosition;
             varying vec2 vUv;
             varying float vTier;
+            attribute float aSizeScale;
+            attribute vec3 aVolumetricOffset;
+
+            mat4 rotateY(float angle) {
+                float c = cos(angle);
+                float s = sin(angle);
+                return mat4(
+                    c, 0.0, s, 0.0,
+                    0.0, 1.0, 0.0, 0.0,
+                    -s, 0.0, c, 0.0,
+                    0.0, 0.0, 0.0, 1.0
+                );
+            }
         `;
 
         const petalVertexDisplacement = `
             vUv = uv;
             vTier = uLayerTier;
+            vec3 pos = position;
 
-            // Сначала применяем органическую форму лепестка
             float hMask = smoothstep(0.01, 1.0, vUv.y);
             float vNorm = vUv.y; 
             float uNorm = (vUv.x - 0.5) * 2.0;
@@ -394,14 +379,29 @@
             pos.z += baseSCurve + transverseSine + (wave1 + wave2 + edgeFlutter) * hMask;
             pos += aVolumetricOffset * (0.005 + 0.012 * smoothstep(0.0, 0.3, vNorm));
 
-            // Применяем общую логику 360-градусной сборки/разрушения от краев к центру
-            ${assemblyDeformationGLSL}
+            // MoGraph логика срыва от краев к центру и орбитальный разлет на 360°
+            vec3 posOriginal = pos;
+            vec3 posTarget = mix(posOriginal, aTargetPosition, uMorphState);
+
+            float localProgress = clamp((uProgress - aDelay * 0.35) / (1.0 - 0.35), 0.0, 1.0);
+            float easedProgress = smoothstep(0.0, 1.0, localProgress);
+
+            float angle = easedProgress * 6.28318530718 * (1.2 + aRandomRot * 1.5);
+            vec3 translated = posOriginal - uCenterOfMass;
+            vec4 rotated = rotateY(angle) * vec4(translated, 1.0);
+            vec3 explodedPos = rotated.xyz + uCenterOfMass;
+            
+            float explodeFactor = sin(easedProgress * 3.14159265359);
+            explodedPos += normalize(explodedPos + vec3(0.0001)) * explodeFactor * 2.2;
+
+            pos = mix(mix(posOriginal, explodedPos, explodeFactor), posTarget, easedProgress);
         `;
 
         function createPetalMeshMat(pSeed, amp, flex, sStr, tier) {
             const mat = new THREE.ShaderMaterial({
                 uniforms: { 
-                    uTime: {value:0}, uPhase: {value:pSeed}, uAmpFactor: {value:amp}, 
+                    ...sharedUniforms,
+                    uPhase: {value:pSeed}, uAmpFactor: {value:amp}, 
                     uFlexFactor: {value:flex}, uSCurveStrength: {value:sStr}, uLayerTier: {value:tier} 
                 },
                 vertexShader: `
@@ -436,7 +436,8 @@
             const mat = new THREE.ShaderMaterial({
                 ...pointsMaterialConfig,
                 uniforms: { 
-                    uTime: {value:0}, uPhase: {value:pSeed}, uAmpFactor: {value:amp}, 
+                    ...sharedUniforms,
+                    uPhase: {value:pSeed}, uAmpFactor: {value:amp}, 
                     uFlexFactor: {value:flex}, uSCurveStrength: {value:sStr}, uLayerTier: {value:tier},
                     uTexture: {value:particleTexture}, uViewportScale: {value:getViewportScale()}, uSize: {value: 2.2} 
                 },
@@ -472,6 +473,7 @@
                         if (tex.a < 0.01) discard;
 
                         vec3 color = mix(vec3(0.04, 0.1, 0.2), vec3(0.7, 0.88, 1.0), vFresnel * 1.1);
+                        
                         float edgeGlow = smoothstep(0.2, 0.9, vHeight) * 1.5;
                         float radialMultiplier = 1.0 + edgeGlow;
 
@@ -485,7 +487,30 @@
             allMaterials.push(mat); return mat;
         }
 
-        const tentVertexPars = `uniform float uTime; attribute float aSeed; varying vec3 vNormal, vViewPosition; varying vec2 vUv;`;
+        const tentVertexPars = `
+            uniform float uTime;
+            uniform float uProgress;
+            uniform float uMorphState;
+            uniform vec3 uCenterOfMass;
+            attribute float aSeed;
+            attribute vec3 aTargetPosition;
+            attribute float aDelay;
+            attribute float aRandomRot;
+            varying vec3 vNormal, vViewPosition;
+            varying vec2 vUv;
+
+            mat4 rotateY(float angle) {
+                float c = cos(angle);
+                float s = sin(angle);
+                return mat4(
+                    c, 0.0, s, 0.0,
+                    0.0, 1.0, 0.0, 0.0,
+                    -s, 0.0, c, 0.0,
+                    0.0, 0.0, 0.0, 1.0
+                );
+            }
+        `;
+
         const tentVertexDisplacement = `
             vUv = uv; vec3 pos = position; float whip = pow(vUv.y, 1.3);
             float t1 = uTime * 1.2 - pos.y * 1.5 + aSeed * 9.1;
@@ -493,23 +518,23 @@
             pos.x += (sin(t1) * 0.25 + cos(t2) * 0.12) * whip;
             pos.z += (cos(t1 * 0.85) * 0.25 + sin(t2 * 1.1) * 0.12) * whip;
 
-            // Анимация разлета тычинок/тентаклей от краев к центру
-            float cycleTime = uTime * 0.75 + aSeed;
-            float progress = smoothstep(0.1, 0.9, sin(cycleTime) * 0.5 + 0.5);
-            float edgeFactor = uv.y; // Кончики тычинок летят первыми
-            float vProg = clamp((progress - (1.0 - edgeFactor) * 0.4) / 0.6, 0.0, 1.0);
-            
-            float rotAngle = vProg * 6.283185;
-            float cosA = cos(rotAngle), sinA = sin(rotAngle);
-            float rx = pos.x * cosA - pos.z * sinA;
-            float rz = pos.x * sinA + pos.z * cosA;
-            pos.x = mix(pos.x, rx, vProg) + pos.x * vProg * 1.5;
-            pos.z = mix(pos.z, rz, vProg) + pos.z * vProg * 1.5;
-            pos.y += vProg * 0.6;
+            vec3 posOriginal = pos;
+            vec3 posTarget = mix(posOriginal, aTargetPosition, uMorphState);
+            float localProgress = clamp((uProgress - aDelay * 0.35) / (1.0 - 0.35), 0.0, 1.0);
+            float easedProgress = smoothstep(0.0, 1.0, localProgress);
+
+            float angle = easedProgress * 6.28318530718 * (1.2 + aRandomRot * 1.5);
+            vec3 translated = posOriginal - uCenterOfMass;
+            vec4 rotated = rotateY(angle) * vec4(translated, 1.0);
+            vec3 explodedPos = rotated.xyz + uCenterOfMass;
+            float explodeFactor = sin(easedProgress * 3.14159265359);
+            explodedPos += normalize(explodedPos + vec3(0.0001)) * explodeFactor * 2.2;
+
+            pos = mix(mix(posOriginal, explodedPos, explodeFactor), posTarget, easedProgress);
         `;
 
         const tentMeshMat = new THREE.ShaderMaterial({
-            uniforms: { uTime: {value:0} },
+            uniforms: { ...sharedUniforms },
             vertexShader: `${tentVertexPars} void main(){ ${tentVertexDisplacement} vec4 mv=modelViewMatrix*vec4(pos,1.); vViewPosition=-mv.xyz; vNormal=normalize(normalMatrix*normal); gl_Position=projectionMatrix*mv; }`,
             fragmentShader: `
                 varying vec3 vNormal, vViewPosition;
@@ -537,7 +562,7 @@
             ...pointsMaterialConfig,
             depthTest: false,
             uniforms: { 
-                uTime: { value: 0 }, 
+                ...sharedUniforms,
                 uTexture: { value: particleTexture }, 
                 uViewportScale: { value: getViewportScale() }, 
                 uSize: { value: 2.0 } 
@@ -579,36 +604,18 @@
         });
         allMaterials.push(tentPointsMat);
 
-        const stamenVertexPars = `uniform float uTime; attribute float aSeed; varying vec2 vUv; varying vec3 vFresnelColor;`;
-        const stamenVertexDisplacement = `
-            vUv = uv; vec3 pos = position; float whip = pow(vUv.y, 1.2);
-            float t = uTime * 1.4 - pos.y * 1.8 + aSeed * 6.5;
-            pos.x += sin(t) * 0.12 * whip; pos.z += cos(t * 1.1) * 0.12 * whip;
-
-            float cycleTime = uTime * 0.75 + aSeed * 1.2;
-            float progress = smoothstep(0.1, 0.9, sin(cycleTime) * 0.5 + 0.5);
-            float vProg = clamp((progress - (1.0 - uv.y) * 0.3) / 0.7, 0.0, 1.0);
-            float rotAngle = vProg * 6.283185;
-            float cosA = cos(rotAngle), sinA = sin(rotAngle);
-            float rx = pos.x * cosA - pos.z * sinA;
-            float rz = pos.x * sinA + pos.z * cosA;
-            pos.x = mix(pos.x, rx, vProg) + pos.x * vProg * 1.3;
-            pos.z = mix(pos.z, rz, vProg) + pos.z * vProg * 1.3;
-        `;
-
         const stamenMeshMat = new THREE.ShaderMaterial({
-            uniforms: { uTime: {value:0} },
-            vertexShader: `${stamenVertexPars} void main(){ ${stamenVertexDisplacement} vec4 mv=modelViewMatrix*vec4(pos,1.); 
+            uniforms: { ...sharedUniforms },
+            vertexShader: `${tentVertexPars} void main(){ ${tentVertexDisplacement} vec4 mv=modelViewMatrix*vec4(pos,1.); 
             float fresnel=pow(clamp(1.-abs(dot(normalize(normalMatrix*normal),normalize(-mv.xyz))),0.,1.),1.3);
-            vFresnelColor=mix(vec3(0.08, 0.18, 0.3), vec3(0.7, 0.85, 1.0), fresnel*1.2); gl_Position=projectionMatrix*mv; }`,
+            vec3 vFresnelColor=mix(vec3(0.08, 0.18, 0.3), vec3(0.7, 0.85, 1.0), fresnel*1.2); gl_Position=projectionMatrix*mv; }`,
             fragmentShader: `
                 varying vec2 vUv; 
-                varying vec3 vFresnelColor; 
                 void main(){ 
                     float baseFade = smoothstep(0.02, 0.2, vUv.y);
                     float edgeFade = 1.0 - smoothstep(0.85, 1.0, vUv.y);
                     float alpha = 0.48 * baseFade * edgeFade;
-                    vec3 finalCol = mix(vFresnelColor, vec3(0.75, 0.92, 1.0), smoothstep(0.7, 1.0, vUv.y));
+                    vec3 finalCol = mix(vec3(0.08, 0.18, 0.3), vec3(0.75, 0.92, 1.0), smoothstep(0.7, 1.0, vUv.y));
                     gl_FragColor = vec4(finalCol, alpha); 
                 }
             `,
@@ -620,19 +627,17 @@
             ...pointsMaterialConfig,
             depthTest: false,
             uniforms: { 
-                uTime: { value: 0 }, 
+                ...sharedUniforms,
                 uTexture: { value: particleTexture }, 
                 uViewportScale: { value: getViewportScale() }, 
                 uSize: { value: 3.8 } 
             },
             vertexShader: `
-                ${stamenVertexPars} 
+                ${tentVertexPars} 
                 uniform float uViewportScale, uSize; 
                 void main(){ 
-                    ${stamenVertexDisplacement} 
+                    ${tentVertexDisplacement} 
                     vec4 mv = modelViewMatrix * vec4(pos, 1.0); 
-                    float fresnel = pow(clamp(1.0 - abs(dot(normalize(normalMatrix * normal), normalize(-mv.xyz))), 0.0, 1.0), 1.3);
-                    vFresnelColor = mix(vec3(0.09, 0.22, 0.36), vec3(0.75, 0.9, 1.0), fresnel * 1.2); 
                     float dist = max(-mv.z, 0.1); 
                     gl_PointSize = uSize * uViewportScale * (0.85 / (0.4 + 0.06 * dist)); 
                     gl_Position = projectionMatrix * mv; 
@@ -641,7 +646,6 @@
             fragmentShader: `
                 uniform sampler2D uTexture; 
                 varying vec2 vUv; 
-                varying vec3 vFresnelColor; 
                 void main(){ 
                     vec4 tex = texture2D(uTexture, gl_PointCoord); 
                     if(tex.a < 0.02) discard; 
@@ -653,23 +657,56 @@
                     float a = tex.a * (0.06 + tipGlow * 0.15) * baseFade * edgeFade; 
                     a = a / (0.5 + a * 1.5); 
 
-                    vec3 finalColor = mix(vFresnelColor, vec3(0.9, 0.96, 1.0), smoothstep(0.6, 1.0, vUv.y));
-
-                    gl_FragColor = vec4(finalColor, a); 
+                    gl_FragColor = vec4(vec3(0.9, 0.96, 1.0), a); 
                 }
             `,
         });
         allMaterials.push(stamenPointsMat);
 
-        const recepVertexPars = `uniform float uTime; varying vec3 vNormal, vViewPosition;`;
+        const recepVertexPars = `
+            uniform float uTime;
+            uniform float uProgress;
+            uniform float uMorphState;
+            uniform vec3 uCenterOfMass;
+            attribute vec3 aTargetPosition;
+            attribute float aDelay;
+            attribute float aRandomRot;
+            varying vec3 vNormal, vViewPosition;
+
+            mat4 rotateY(float angle) {
+                float c = cos(angle);
+                float s = sin(angle);
+                return mat4(
+                    c, 0.0, s, 0.0,
+                    0.0, 1.0, 0.0, 0.0,
+                    -s, 0.0, c, 0.0,
+                    0.0, 0.0, 0.0, 1.0
+                );
+            }
+        `;
+
         const recepVertexDisplacement = `
             vec3 norm = normalize(position);
             float wave = (sin(norm.x*2.5+uTime*0.9)*cos(norm.y*2.0+uTime*0.7) + cos(norm.z*2.8-uTime*0.8)*sin(norm.y*3.1+uTime*0.5)) * 0.06;
             vec3 pos = position + norm * wave; pos.y *= 0.55;
+
+            vec3 posOriginal = pos;
+            vec3 posTarget = mix(posOriginal, aTargetPosition, uMorphState);
+            float localProgress = clamp((uProgress - aDelay * 0.35) / (1.0 - 0.35), 0.0, 1.0);
+            float easedProgress = smoothstep(0.0, 1.0, localProgress);
+
+            float angle = easedProgress * 6.28318530718 * (1.2 + aRandomRot * 1.5);
+            vec3 translated = posOriginal - uCenterOfMass;
+            vec4 rotated = rotateY(angle) * vec4(translated, 1.0);
+            vec3 explodedPos = rotated.xyz + uCenterOfMass;
+            float explodeFactor = sin(easedProgress * 3.14159265359);
+            explodedPos += normalize(explodedPos + vec3(0.0001)) * explodeFactor * 2.2;
+
+            pos = mix(mix(posOriginal, explodedPos, explodeFactor), posTarget, easedProgress);
         `;
 
         const recepMeshMat = new THREE.ShaderMaterial({
-            uniforms: { uTime: {value:0} },
+            uniforms: { ...sharedUniforms },
             vertexShader: `${recepVertexPars} void main(){ ${recepVertexDisplacement} vec4 mv=modelViewMatrix*vec4(pos,1.); vViewPosition=-mv.xyz;
             vec3 tN=normal; tN.y/=0.55; vNormal=normalize(normalMatrix*tN); gl_Position=projectionMatrix*mv; }`,
             fragmentShader: `varying vec3 vNormal, vViewPosition; void main(){ vec3 N = normalize(vNormal); float fresnel = pow(clamp(1.-abs(dot(N, normalize(vViewPosition))),0.,1.), 2.0); gl_FragColor = vec4(mix(vec3(0.02, 0.05, 0.1), vec3(0.6, 0.75, 0.95), fresnel), 0.8); }`,
@@ -679,7 +716,7 @@
 
         const recepPointsMat = new THREE.ShaderMaterial({
             ...pointsMaterialConfig,
-            uniforms: { uTime: {value:0}, uTexture: {value:particleTexture}, uViewportScale: {value:getViewportScale()}, uSize: {value: 2.0} },
+            uniforms: { ...sharedUniforms, uTexture: {value:particleTexture}, uViewportScale: {value:getViewportScale()}, uSize: {value: 2.0} },
             vertexShader: `
                 ${recepVertexPars} uniform float uViewportScale, uSize; void main(){ ${recepVertexDisplacement} vec4 mv=modelViewMatrix*vec4(pos,1.); gl_Position=projectionMatrix*mv;
                 float dist=max(-mv.z, 0.1); gl_PointSize=uSize*uViewportScale*(0.85 / (0.35 + 0.06 * dist));
@@ -687,6 +724,38 @@
             fragmentShader: `uniform sampler2D uTexture; varying vec3 vNormal, vViewPosition; void main(){ vec4 tex=texture2D(uTexture,gl_PointCoord); if(tex.a<0.02)discard; vec3 N = normalize(vNormal); float fresnel = pow(clamp(1.-abs(dot(N, normalize(vViewPosition))),0.,1.), 2.0); float a = tex.a * 0.18; a = a / (0.5 + a * 2.0); gl_FragColor = vec4(mix(vec3(0.03, 0.08, 0.16), vec3(0.6, 0.75, 0.95), fresnel), a); }`
         });
         allMaterials.push(recepPointsMat);
+
+        // Функция автоматического добавления атрибутов анимации к любой геометрии
+        function injectAnimationAttributes(geometry, centerVec) {
+            const posAttr = geometry.attributes.position;
+            const count = posAttr.count;
+            const targets = new Float32Array(count * 3);
+            const delays = new Float32Array(count);
+            const rots = new Float32Array(count);
+
+            for (let i = 0; i < count; i++) {
+                const x = posAttr.getX(i);
+                const y = posAttr.getY(i);
+                const z = posAttr.getZ(i);
+
+                // Альтернативная цель (State B) — разворот в более широкую звездную матрицу
+                const r = Math.sqrt(x*x + z*z);
+                const theta = Math.atan2(z, x) * 1.5;
+                const targetR = r * 1.4;
+                targets[i * 3 + 0] = Math.cos(theta) * targetR;
+                targets[i * 3 + 1] = y * 0.5 + 1.2;
+                targets[i * 3 + 2] = Math.sin(theta) * targetR;
+
+                // MoGraph задержка по удалению от центра (края срываются раньше)
+                const distFromCenter = Math.sqrt((x - centerVec.x)**2 + (y - centerVec.y)**2 + (z - centerVec.z)**2);
+                delays[i] = THREE.MathUtils.clamp(distFromCenter / 3.5, 0.0, 0.85);
+                rots[i] = (Math.random() - 0.5);
+            }
+
+            geometry.setAttribute('aTargetPosition', new THREE.BufferAttribute(targets, 3));
+            geometry.setAttribute('aDelay', new THREE.BufferAttribute(delays, 1));
+            geometry.setAttribute('aRandomRot', new THREE.BufferAttribute(rots, 1));
+        }
 
         function createPetalGeometries(length, maxWidth, seed) {
             const segX = 100, segY = 100;
@@ -762,6 +831,9 @@
             const dummyOffsets = new Float32Array(baseCount * 3).fill(0.0);
             meshGeo.setAttribute('aSizeScale', new THREE.BufferAttribute(dummyScales, 1));
             meshGeo.setAttribute('aVolumetricOffset', new THREE.BufferAttribute(dummyOffsets, 3));
+
+            injectAnimationAttributes(meshGeo, new THREE.Vector3(0, length*0.5, 0));
+            injectAnimationAttributes(pointsGeo, new THREE.Vector3(0, length*0.5, 0));
 
             return { meshGeo, pointsGeo };
         }
@@ -857,6 +929,8 @@
             geo.setAttribute('normal', new THREE.Float32BufferAttribute(normArray, 3));
             geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvArray, 2));
             geo.setAttribute('aSeed', new THREE.Float32BufferAttribute(seedArray, 1));
+            
+            injectAnimationAttributes(geo, new THREE.Vector3(0, height*0.5, 0));
             return geo;
         }
 
@@ -926,6 +1000,8 @@
             mergedGeo.setAttribute('normal', new THREE.BufferAttribute(mergedNorm, 3));
             mergedGeo.setAttribute('uv', new THREE.BufferAttribute(mergedUv, 2));
             mergedGeo.setAttribute('aSeed', new THREE.BufferAttribute(new Float32Array(posCount1 + posCount2).fill(seed), 1));
+            
+            injectAnimationAttributes(mergedGeo, new THREE.Vector3(0, height*0.5, 0));
 
             const angle = (i / stamenCount) * Math.PI * 2 + (Math.sin(seed) * 0.15);
             const r = 0.28 + (Math.sin(seed * 1.9) * 0.5 + 0.5) * 0.25;
@@ -943,6 +1019,8 @@
         }
 
         const receptacleGeo = new THREE.SphereGeometry(RECEPTACLE_RADIUS, 48, 48);
+        injectAnimationAttributes(receptacleGeo, new THREE.Vector3(0, 0, 0));
+
         const recepMeshObj = new THREE.Mesh(receptacleGeo, recepMeshMat);
         recepMeshObj.position.y = -0.25;
         meshGroup.add(recepMeshObj);
@@ -952,18 +1030,38 @@
         pointsGroup.add(recepPointsObj);
 
         // ==========================================
-        // UI & TOGGLE LOGIC
+        // UI & INTERACTION CONTROLS
         // ==========================================
         const btnToggle = document.getElementById('btnToggle');
+        const btnMorph = document.getElementById('btnMorph');
+        const btnState = document.getElementById('btnState');
+
         function updateMode() {
             meshGroup.visible = !isPointsMode; 
             pointsGroup.visible = isPointsMode;
             btnToggle.classList.toggle('active', isPointsMode);
             btnToggle.innerText = isPointsMode ? 'POINTS MODE (M)' : 'MESH MODE (M)';
         }
+        
         btnToggle.addEventListener('click', () => { isPointsMode = !isPointsMode; updateMode(); });
         window.addEventListener('keydown', (e) => { if (e.key.toLowerCase() === 'm' || e.key === 'ь') { isPointsMode = !isPointsMode; updateMode(); } });
         updateMode();
+
+        btnMorph.addEventListener('click', () => {
+            morphProgressTarget = morphProgressTarget === 0.0 ? 1.0 : 0.0;
+            btnMorph.classList.toggle('active', morphProgressTarget > 0.5);
+        });
+
+        btnState.addEventListener('click', () => {
+            currentMorphStateIndex = currentMorphStateIndex === 0.0 ? 1.0 : 0.0;
+            if (currentMorphStateIndex > 0.5) {
+                btnState.innerText = "ФОРМА [STATE B]";
+                btnState.classList.add('active');
+            } else {
+                btnState.innerText = "ФОРМА [STATE A]";
+                btnState.classList.remove('active');
+            }
+        });
 
         // ==========================================
         // ANIMATION LOOP
@@ -972,6 +1070,13 @@
         function animate() {
             requestAnimationFrame(animate);
             const t = clock.getElapsedTime();
+
+            // Плавное интерполирование MoGraph параметров
+            const currentProgress = sharedUniforms.uProgress.value;
+            sharedUniforms.uProgress.value += (morphProgressTarget - currentProgress) * 0.06;
+
+            const currentMorphState = sharedUniforms.uMorphState.value;
+            sharedUniforms.uMorphState.value += (currentMorphStateIndex - currentMorphState) * 0.04;
 
             allMaterials.forEach(mat => {
                 if (mat.uniforms.uTime) mat.uniforms.uTime.value = t;
