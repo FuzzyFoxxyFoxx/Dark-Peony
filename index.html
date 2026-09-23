@@ -203,7 +203,6 @@
         document.body.appendChild(renderer.domElement);
         renderer.setSize(window.innerWidth, window.innerHeight);
         
-        // Стабильный DPR без сюрпризов
         const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
         renderer.setPixelRatio(pixelRatio);
 
@@ -237,13 +236,9 @@
 
         const allMaterials = [];
 
-        // Функция для вычисления железобетонного размера точек независимо от хостинга
         function getViewportScale() {
             const w = window.innerWidth;
             const h = window.innerHeight;
-            // Пока экран горизонтальный или квадратный (w >= h), берем меньшую сторону (h).
-            // Как только экран становится вертикальным (w < h), фиксируем размер по высоте (h), 
-            // чтобы при дальнейшем сужении ширины масштаб не уменьшался.
             const effectiveDim = w >= h ? Math.min(w, h) : h;
             return effectiveDim * 0.0012;
         }
@@ -303,7 +298,7 @@
         scene.add(new THREE.Points(galaxyGeo, galaxyMat));
 
         // ==========================================
-        // ЦВЕТОК
+        // ЦВЕТОК & МАТЕМАТИКА АНИМАЦИИ СБОРКИ (360° от краев к центру)
         // ==========================================
         const FLOWER_SCALE = 0.72;
         meshGroup.scale.set(FLOWER_SCALE, FLOWER_SCALE, FLOWER_SCALE);
@@ -313,26 +308,71 @@
         meshGroup.position.y = FLOWER_Y_OFFSET;
         pointsGroup.position.y = FLOWER_Y_OFFSET;
 
-        const petalVertexPars = `
+        const commonVertexPars = `
             uniform float uTime;
             uniform float uPhase;
             uniform float uAmpFactor;
             uniform float uFlexFactor;
             uniform float uSCurveStrength;
             uniform float uLayerTier;
+            attribute float aSizeScale;
+            attribute vec3 aVolumetricOffset;
+        `;
+
+        // Единая логика разрушения/сборки: вращение вокруг оси Y цветка на 360 градусов, 
+        // где края элемента (и верхушка) реагируют первыми, а основание и середина догоняют.
+        const assemblyDeformationGLSL = `
+            vec3 pos = position;
+
+            // Цикл сборки/разрушения (период, например, 8 секунд)
+            float cycleTime = uTime * 0.75 + uPhase;
+            float progress = sin(cycleTime) * 0.5 + 0.5; // от 0 до 1
+            // Делаем паузы в собранном и разобранном состоянии
+            progress = smoothstep(0.1, 0.9, progress);
+
+            // Фактор удаления от центра элемента/края (edges vs center)
+            // vUv.x: от 0 до 1 (края по 0 и 1, середина 0.5)
+            // vUv.y: от 0 (основание) до 1 (кончик)
+            float edgeDistX = abs(uv.x - 0.5) * 2.0; // 0 в центре, 1 на боковых краях
+            float heightDistY = uv.y;                // 0 у основания, 1 на кончике
+
+            // Степень "ранжирования": первыми срываются боковые края и кончики
+            float urgency = clamp(edgeDistX * 0.7 + heightDistY * 0.5, 0.0, 1.0);
+            
+            // Локальный прогресс для конкретной вершины с учетом задержки центра
+            float vertexProgress = clamp((progress - (1.0 - urgency) * 0.4) / 0.6, 0.0, 1.0);
+            vertexProgress = smoothstep(0.0, 1.0, vertexProgress);
+
+            // Полный оборот 360 градусов (2 * PI) при разлете/сборке вокруг оси Y цветка
+            float rotAngle = vertexProgress * 6.283185;
+            float cosA = cos(rotAngle);
+            float sinA = sin(rotAngle);
+
+            // Вращаем текущую точку вокруг центральной оси Y (0,0,0 локального пивота)
+            float rx = pos.x * cosA - pos.z * sinA;
+            float rz = pos.x * sinA + pos.z * cosA;
+            pos.x = mix(pos.x, rx, vertexProgress);
+            pos.z = mix(pos.z, rz, vertexProgress);
+
+            // Рассеивание наружу от центра при разлете
+            pos.x += (pos.x * vertexProgress * 1.8);
+            pos.z += (pos.z * vertexProgress * 1.8);
+            pos.y += vertexProgress * 0.8 * heightDistY;
+        `;
+
+        const petalVertexPars = `
+            ${commonVertexPars}
             varying vec3 vNormal;
             varying vec3 vViewPosition;
             varying vec2 vUv;
             varying float vTier;
-            attribute float aSizeScale;
-            attribute vec3 aVolumetricOffset;
         `;
 
         const petalVertexDisplacement = `
             vUv = uv;
             vTier = uLayerTier;
-            vec3 pos = position;
 
+            // Сначала применяем органическую форму лепестка
             float hMask = smoothstep(0.01, 1.0, vUv.y);
             float vNorm = vUv.y; 
             float uNorm = (vUv.x - 0.5) * 2.0;
@@ -353,6 +393,9 @@
 
             pos.z += baseSCurve + transverseSine + (wave1 + wave2 + edgeFlutter) * hMask;
             pos += aVolumetricOffset * (0.005 + 0.012 * smoothstep(0.0, 0.3, vNorm));
+
+            // Применяем общую логику 360-градусной сборки/разрушения от краев к центру
+            ${assemblyDeformationGLSL}
         `;
 
         function createPetalMeshMat(pSeed, amp, flex, sStr, tier) {
@@ -429,8 +472,6 @@
                         if (tex.a < 0.01) discard;
 
                         vec3 color = mix(vec3(0.04, 0.1, 0.2), vec3(0.7, 0.88, 1.0), vFresnel * 1.1);
-                        
-                        // Усиливаем видимость на периферии по vHeight (центр чистый, края ярче)
                         float edgeGlow = smoothstep(0.2, 0.9, vHeight) * 1.5;
                         float radialMultiplier = 1.0 + edgeGlow;
 
@@ -451,6 +492,20 @@
             float t2 = uTime * 0.9 - pos.y * 2.1 + aSeed * 4.3;
             pos.x += (sin(t1) * 0.25 + cos(t2) * 0.12) * whip;
             pos.z += (cos(t1 * 0.85) * 0.25 + sin(t2 * 1.1) * 0.12) * whip;
+
+            // Анимация разлета тычинок/тентаклей от краев к центру
+            float cycleTime = uTime * 0.75 + aSeed;
+            float progress = smoothstep(0.1, 0.9, sin(cycleTime) * 0.5 + 0.5);
+            float edgeFactor = uv.y; // Кончики тычинок летят первыми
+            float vProg = clamp((progress - (1.0 - edgeFactor) * 0.4) / 0.6, 0.0, 1.0);
+            
+            float rotAngle = vProg * 6.283185;
+            float cosA = cos(rotAngle), sinA = sin(rotAngle);
+            float rx = pos.x * cosA - pos.z * sinA;
+            float rz = pos.x * sinA + pos.z * cosA;
+            pos.x = mix(pos.x, rx, vProg) + pos.x * vProg * 1.5;
+            pos.z = mix(pos.z, rz, vProg) + pos.z * vProg * 1.5;
+            pos.y += vProg * 0.6;
         `;
 
         const tentMeshMat = new THREE.ShaderMaterial({
@@ -529,6 +584,16 @@
             vUv = uv; vec3 pos = position; float whip = pow(vUv.y, 1.2);
             float t = uTime * 1.4 - pos.y * 1.8 + aSeed * 6.5;
             pos.x += sin(t) * 0.12 * whip; pos.z += cos(t * 1.1) * 0.12 * whip;
+
+            float cycleTime = uTime * 0.75 + aSeed * 1.2;
+            float progress = smoothstep(0.1, 0.9, sin(cycleTime) * 0.5 + 0.5);
+            float vProg = clamp((progress - (1.0 - uv.y) * 0.3) / 0.7, 0.0, 1.0);
+            float rotAngle = vProg * 6.283185;
+            float cosA = cos(rotAngle), sinA = sin(rotAngle);
+            float rx = pos.x * cosA - pos.z * sinA;
+            float rz = pos.x * sinA + pos.z * cosA;
+            pos.x = mix(pos.x, rx, vProg) + pos.x * vProg * 1.3;
+            pos.z = mix(pos.z, rz, vProg) + pos.z * vProg * 1.3;
         `;
 
         const stamenMeshMat = new THREE.ShaderMaterial({
