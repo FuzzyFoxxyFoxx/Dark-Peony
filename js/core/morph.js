@@ -31,13 +31,16 @@
         uMeshMode: { value: 0 },
         uMorphSched: { value: new THREE.Vector4() },  // leaveStart, leaveSpread, arriveStart, arriveSpread
         uMorphSched2: { value: new THREE.Vector4() }, // assembleInvert, meshRevealLag, meshFade, -
-        uFlowA: { value: new THREE.Vector4() },       // flowAmp, flowFreq, -, flowSpeed
-        uFlowB: { value: new THREE.Vector4() },       // -, jitter, precession, shiver
+        uFlowA: { value: new THREE.Vector4() },       // flowAmp, flowFreq, flowDetailAmp, flowSpeed
+        uFlowB: { value: new THREE.Vector4() },       // flowDetailFreq, jitter, precession, shiver
         uClumpA: { value: new THREE.Vector4() },      // strength, freq, filaments, maxDist
         uClumpB: { value: new THREE.Vector4() },      // fraction, speed, spin (рад/с), shear
         uClumpC: { value: new THREE.Vector4() },      // levels, fibers, dustAlpha, ramp
         uTrail: { value: new THREE.Vector4() },       // lag (с), длина хвоста - 1, затухание, ширина разгона w
         uSwirlA: { value: new THREE.Vector4() },      // size, sizeMin, alpha, visibleFraction
+        uSwirlB: { value: new THREE.Vector4() },      // leaveGlow, swirlBlend, swirlTint, -
+        uTwist: { value: new THREE.Vector4() },       // перекрутов за оборот, скорость проворота, центр сечения r, y
+        uTwist2: { value: new THREE.Vector4() },      // сжатие по высоте, -, -, -
         uSwirlColor: { value: new THREE.Vector3() }
     };
 
@@ -45,8 +48,12 @@
         const c = DP.config.morph;
         shared.uMorphSched.value.set(c.leaveStart, c.leaveSpread, c.arriveStart, c.arriveSpread);
         shared.uMorphSched2.value.set(c.assemble === 'outside-in' ? 0 : 1, c.meshRevealLag, c.meshFade, 0);
-        shared.uFlowA.value.set(c.flowAmp, c.flowFreq, 0, c.flowSpeed);
-        shared.uFlowB.value.set(0, c.jitter, c.precession, c.shiver);
+        shared.uFlowA.value.set(c.flowAmp, c.flowFreq, c.flowDetailAmp, c.flowSpeed);
+        shared.uFlowB.value.set(c.flowDetailFreq, c.jitter, c.precession, c.shiver);
+        const rc = c.ringInner + (c.ringOuter - c.ringInner) * c.ringPeak;
+        shared.uTwist.value.set(c.twistPerTurn, c.twistSpeed, rc, c.ringY);
+        shared.uTwist2.value.set(c.twistSquash, 0, 0, 0);
+        shared.uSwirlB.value.set(c.leaveGlow, c.swirlBlend, c.swirlTint, 0);
         shared.uClumpA.value.set(c.clumpStrength, c.clumpFreq, c.clumpFilaments, c.clumpMaxDist);
         // Поля вращаются вместе с вихрем: fieldSpin — доля пиковой угловой скорости частиц.
         const meanTravel = 0.5 * (c.minTravel + c.maxTravel);
@@ -199,7 +206,11 @@
         uniform vec3 uSwirlColor;
         attribute vec4 aMorphOut;
         attribute vec4 aMorphIn;
+        uniform vec4 uSwirlB;
+        uniform vec4 uTwist;
+        uniform vec4 uTwist2;
         varying float vDpW;
+        varying float vDpWA;
         varying float vDpGlow;
         varying float vDpFade;
         varying vec3 vDpSwirlColor;
@@ -216,7 +227,7 @@
         // Обе в локальных координатах объекта. Возвращает мировую позицию.
         vec4 dpMorph(vec3 restLocal, vec3 animLocal) {
             dpHidden = 0.0; dpSizeMul = 1.0;
-            vDpW = 0.0; vDpGlow = 0.0; vDpFade = 1.0;
+            vDpW = 0.0; vDpWA = 0.0; vDpGlow = 0.0; vDpFade = 1.0;
             vDpSwirlColor = uSwirlColor; vDpSwirlAlpha = 0.0;
 
             vec4 world = modelMatrix * vec4(animLocal, 1.0);
@@ -264,6 +275,17 @@
             float thPath = outRole ? thRest + delta * g : thRest - delta * (1.0 - g);
             float th = thPath + dTh * (1.0 - w);
 
+            // Перекрут ленты: сечение кольца поворачивается вокруг своей средней линии по ходу
+            // вращения (uTwist.x раз за оборот) и медленно проворачивается во времени — плоская
+            // лента складывается в жгут, частицы внутри идут по спиралям, а не по ровным кругам.
+            {
+                float ang = uTwist.x * thPath + uTwist.y * (t - rank * uTrail.x);
+                vec2 off = vec2(rMid - uTwist.z, yMid - uTwist.w);
+                float ca = cos(ang), sa = sin(ang);
+                off = vec2(off.x * ca - off.y * sa, (off.x * sa + off.y * ca) * uTwist2.x);
+                rMid = max(uTwist.z + off.x, 0.15);
+                yMid = uTwist.w + off.y;
+            }
             float r = mix(length(cur.xz), rMid, w);
             float y = mix(cur.y, yMid, w);
             vec3 p = vec3(sin(th) * r, y, cos(th) * r);
@@ -295,8 +317,11 @@
                 vec3 fe = vec3(p.x * ce - p.z * se, p.y, p.z * ce + p.x * se);
 
                 // 1) Поле течения — крупные изгибы вихря.
+                //    Крупная волна — подъёмы, спуски, уходы внутрь и наружу (частица идёт по синусоиде,
+                //    а не по кругу); мелкая — неоднородность среды.
                 vec3 q = fe * uFlowA.y + vec3(0.0, -te * uFlowA.w, te * uFlowA.w * 0.37);
-                fe += dpNoise3(q) * uFlowA.x * w;
+                vec3 q2 = fe * uFlowB.x + vec3(te * uFlowA.w * 0.6, 7.3, -te * uFlowA.w);
+                fe += (dpNoise3(q) * uFlowA.x + dpNoise3(q2) * uFlowA.z) * w;
                 p = vec3(fe.x * ce + fe.z * se, fe.y, fe.z * ce - fe.x * se);
                 vec3 grain = vec3(sin(te * 1.7 + ph * 3.0), sin(te * 1.3 + ph * 5.0), cos(te * 1.9 + ph * 4.0));
                 p += grain * uFlowB.y * w;
@@ -342,6 +367,9 @@
             float spark = h2 * h2 * h2;
             float visible = step(h3, uSwirlA.w);
             vDpW = w;
+            // Яркость и цвет вихря частица набирает только глубоко в вихре: пока лепесток
+            // срывается, частица остаётся такой же, какой была на цветке (без «проявления сверху»).
+            vDpWA = pow(w, uSwirlB.y);
             vDpSwirlColor = mix(uSwirlColor * (0.7 + 0.5 * h1), vec3(0.9, 0.97, 1.0), spark * 0.7);
             vDpSwirlAlpha = uSwirlA.z * (0.6 + 1.8 * spark) * mix(0.25, 1.0, visible) * mix(uClumpC.z, 1.0, clumped)
                 * (1.0 - uTrail.z * rank / max(uTrail.y, 1.0));   // хвост к концу тускнеет
@@ -359,7 +387,9 @@
     `;
 
     const pointsFragment = `
+        uniform vec4 uSwirlB;
         varying float vDpW;
+        varying float vDpWA;
         varying float vDpGlow;
         varying float vDpFade;
         varying vec3 vDpSwirlColor;
@@ -367,10 +397,10 @@
 
         // color/alpha — «родной» цвет точки фигуры, texA — альфа текстуры частицы.
         vec4 dpMorphColor(vec3 color, float alpha, float texA) {
-            vec3 c = mix(color, vDpSwirlColor, vDpW);
-            float a = mix(alpha, texA * vDpSwirlAlpha, vDpW);
-            c = mix(c, vec3(0.85, 0.95, 1.0), vDpGlow * 0.6);
-            a *= (1.0 + vDpGlow * 1.8) * vDpFade;
+            vec3 c = mix(color, vDpSwirlColor, vDpWA * uSwirlB.z + vDpWA * vDpWA * (1.0 - uSwirlB.z));
+            float a = mix(alpha, texA * vDpSwirlAlpha, vDpWA);
+            c = mix(c, vec3(0.85, 0.95, 1.0), vDpGlow * 0.6 * uSwirlB.x);
+            a *= (1.0 + vDpGlow * 1.8 * uSwirlB.x) * vDpFade;
             return vec4(c, a);
         }
     `;
