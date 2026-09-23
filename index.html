@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dark Peony Hub - Assembly, Dust & Vortex Morphing</title>
+    <title>Dark Peony Hub - Sequential Wave Vortex</title>
     <style>
         * { box-sizing: border-box; }
         body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000102; font-family: sans-serif; }
@@ -87,7 +87,7 @@
     <div id="ui">
         <button id="btnToggle" class="btn">POINTS MODE (M)</button>
     </div>
-    <div id="ui-overlay">Dark Peony Hub • Dust & Vortex Assembly</div>
+    <div id="ui-overlay">Dark Peony Hub • Sequential Wave Vortex</div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
 
@@ -236,7 +236,6 @@
 
         const allMaterials = [];
 
-        // Стабильный размер точек с защитой вертикального режима из версии 005
         function getViewportScale() {
             const w = window.innerWidth;
             const h = window.innerHeight;
@@ -302,7 +301,7 @@
         scene.add(new THREE.Points(galaxyGeo, galaxyMat));
 
         // ==========================================
-        // ЦВЕТОК (С МОРФИНГОМ, РАСПАДОМ И ВИХРЕМ)
+        // ЦВЕТОК (ПОСЛЕДОВАТЕЛЬНАЯ ВОЛНА И СТРОГИЙ ВИХРЬ ВОКРУГ Y)
         // ==========================================
         const FLOWER_SCALE = 0.72;
         meshGroup.scale.set(FLOWER_SCALE, FLOWER_SCALE, FLOWER_SCALE);
@@ -328,7 +327,7 @@
             varying float vTier;
         `;
 
-        // Единая логика деформации, распада в пыль и вихря для лепестков
+        // Плавная волна разрушения: задержка зависит от высоты (vUv.y) и сида элемента
         const petalVertexDisplacement = `
             vUv = uv;
             vTier = uLayerTier;
@@ -354,24 +353,28 @@
 
             pos.z += baseSCurve + transverseSine + (wave1 + wave2 + edgeFlutter) * hMask;
 
-            // --- МОРФИНГ: РАСПАД В ПЫЛЬ И ВИХРЬ ---
+            // --- ПОСЛЕДОВАТЕЛЬНЫЙ СТРОГИЙ ВИХРЬ ВОКРУГ ОСИ Y ---
             if (uProgress > 0.0) {
-                // Случайный вектор разлета для каждой точки
-                vec3 scatterDir = normalize(vec3(
-                    sin(aSeed * 12.9898), 
-                    cos(aSeed * 78.233), 
-                    sin(aSeed * 45.164)
-                ) + normal * 0.5);
-                
-                vec3 scatteredPos = pos + scatterDir * uProgress * 2.8;
+                // Задержка срыва: нижние части и центр держатся дольше, кончики и периферия срываются первыми (или наоборот по волне)
+                float delay = (1.0 - vNorm) * 0.3 + fract(aSeed * 0.1) * 0.2;
+                float localProgress = clamp((uProgress - delay) / (1.0 - delay), 0.0, 1.0);
+                localProgress = smoothstep(0.0, 1.0, localProgress);
 
-                // Закручивание в вихрь вокруг оси Y (сильнее на кончиках лепестков)
-                float angle = uProgress * 4.5 * (0.2 + vNorm * 0.8);
-                float c = cos(angle), s = sin(angle);
-                mat2 vortexRot = mat2(c, -s, s, c);
-                scatteredPos.xz = vortexRot * scatteredPos.xz;
+                if (localProgress > 0.0) {
+                    // Контролируемый подъем и удержание близко к оси Y (минимальный разлет в стороны)
+                    vec3 vortexPos = pos;
+                    vortexPos.y += localProgress * 1.2 * (0.5 + vNorm * 0.8);
 
-                pos = mix(pos, scatteredPos, uProgress);
+                    // Честный вихрь строго вокруг оси Y
+                    float angle = localProgress * 6.2831853 * (0.8 + vNorm * 0.5);
+                    float c = cos(angle), s = sin(angle);
+                    mat2 rotY = mat2(c, -s, s, c);
+                    
+                    // Слегка прижимаем радиус к центру, чтобы точки не разлетались широко
+                    vortexPos.xz = rotY * vortexPos.xz * (0.9 + 0.1 * (1.0 - localProgress));
+
+                    pos = mix(pos, vortexPos, localProgress);
+                }
             }
         `;
 
@@ -403,8 +406,7 @@
                         float fresnel = pow(clamp(1.0 - abs(dot(N, V)), 0.0, 1.0), 1.5);
                         float rimBoost = 1.0 + vTier * 0.6;
                         vec3 color = mix(vec3(0.02, 0.05, 0.1), vec3(0.75, 0.9, 1.0), fresnel * 1.2 * rimBoost);
-                        // Затухание при распаде
-                        float alpha = mix(1.0, 0.35, uProgress * 0.6);
+                        float alpha = mix(1.0, 0.25, uProgress * 0.6);
                         gl_FragColor = vec4(color, alpha);
                     }
                 `,
@@ -440,8 +442,7 @@
                         float depthCompensation = 1.0 / (0.35 + 0.06 * dist);
                         float tierScaleBonus = 1.0 + vTier * 0.2; 
                         float sScale = (0.7 + aSizeScale * 0.5) * depthCompensation * tierScaleBonus; 
-                        // При распаде точки немного увеличиваются для эффекта светящейся пыли
-                        gl_PointSize = uSize * uViewportScale * sScale * (1.0 + uProgress * 0.5);
+                        gl_PointSize = uSize * uViewportScale * sScale * (1.0 + uProgress * 0.4);
 
                         vAlpha = (0.2 + 0.5 * vFresnel) * (0.3 + 0.7 * smoothstep(0.0, 0.35, vUv.y));
                     }
@@ -461,8 +462,7 @@
 
                         float finalAlpha = tex.a * vAlpha * 0.20 * radialMultiplier;
                         finalAlpha = finalAlpha / (0.45 + finalAlpha * 2.2);
-                        // Ярче пыль во время разлета
-                        finalAlpha *= mix(1.0, 1.8, uProgress);
+                        finalAlpha *= mix(1.0, 1.6, uProgress);
 
                         gl_FragColor = vec4(color, finalAlpha);
                     }
@@ -480,12 +480,15 @@
             pos.z += (cos(t1 * 0.85) * 0.25 + sin(t2 * 1.1) * 0.12) * whip;
 
             if (uProgress > 0.0) {
-                vec3 scatterDir = normalize(vec3(sin(aSeed*5.0), 1.0, cos(aSeed*5.0)));
-                vec3 scatteredPos = pos + scatterDir * uProgress * 3.2;
-                float angle = uProgress * 3.0 * vUv.y;
-                float c = cos(angle), s = sin(angle);
-                scatteredPos.xz = mat2(c, -s, s, c) * scatteredPos.xz;
-                pos = mix(pos, scatteredPos, uProgress);
+                float delay = (1.0 - vUv.y) * 0.25 + fract(aSeed * 0.2) * 0.15;
+                float localProgress = clamp((uProgress - delay) / (1.0 - delay), 0.0, 1.0);
+                localProgress = smoothstep(0.0, 1.0, localProgress);
+
+                if (localProgress > 0.0) {
+                    pos.y += localProgress * 1.5;
+                    float angle = localProgress * 6.2831853 * vUv.y;
+                    pos.xz = mat2(cos(angle), -sin(angle), sin(angle), cos(angle)) * pos.xz * 0.95;
+                }
             }
         `;
 
@@ -501,7 +504,7 @@
                     float fresnel = pow(clamp(1.0 - abs(dot(N, normalize(vViewPosition))), 0.0, 1.0), 1.2); 
                     float baseFade = smoothstep(0.05, 0.3, vUv.y);
                     float edgeFade = 1.0 - smoothstep(0.85, 1.0, vUv.y);
-                    float alpha = 0.5 * baseFade * edgeFade * mix(1.0, 0.4, uProgress);
+                    float alpha = 0.5 * baseFade * edgeFade * mix(1.0, 0.3, uProgress);
                     vec3 baseColor = mix(vec3(0.06, 0.14, 0.25), vec3(0.5, 0.7, 0.9), fresnel * 1.1);
                     vec3 tipColor = vec3(0.4, 0.7, 0.95);
                     vec3 finalColor = mix(baseColor, tipColor, smoothstep(0.4, 0.85, vUv.y));
@@ -547,7 +550,7 @@
                     float baseFade = smoothstep(0.05, 0.3, vUv.y);
                     float edgeFade = 1.0 - smoothstep(0.85, 1.0, vUv.y);
                     float tipGlow = smoothstep(0.1, 0.85, vUv.y) * 1.4;
-                    float a = tex.a * (0.12 + tipGlow * 0.2) * baseFade * edgeFade * mix(1.0, 1.6, uProgress); 
+                    float a = tex.a * (0.12 + tipGlow * 0.2) * baseFade * edgeFade * mix(1.0, 1.5, uProgress); 
                     a = a / (0.45 + a * 1.2); 
                     vec3 baseColor = mix(vec3(0.1, 0.22, 0.38), vec3(0.7, 0.85, 1.0), vFresnel * 1.1);
                     vec3 finalColor = mix(baseColor, vec3(0.4, 0.7, 0.95), smoothstep(0.4, 0.85, vUv.y));
@@ -565,11 +568,15 @@
             pos.z += cos(t * 1.1) * 0.12 * whip;
 
             if (uProgress > 0.0) {
-                vec3 scatterDir = normalize(vec3(cos(aSeed*3.0), 1.2, sin(aSeed*3.0)));
-                vec3 scatteredPos = pos + scatterDir * uProgress * 2.5;
-                float angle = uProgress * 3.5;
-                scatteredPos.xz = mat2(cos(angle), -sin(angle), sin(angle), cos(angle)) * scatteredPos.xz;
-                pos = mix(pos, scatteredPos, uProgress);
+                float delay = (1.0 - vUv.y) * 0.3 + fract(aSeed * 0.3) * 0.1;
+                float localProgress = clamp((uProgress - delay) / (1.0 - delay), 0.0, 1.0);
+                localProgress = smoothstep(0.0, 1.0, localProgress);
+
+                if (localProgress > 0.0) {
+                    pos.y += localProgress * 1.0;
+                    float angle = localProgress * 6.2831853;
+                    pos.xz = mat2(cos(angle), -sin(angle), sin(angle), cos(angle)) * pos.xz * 0.95;
+                }
             }
         `;
 
@@ -585,7 +592,7 @@
                 void main(){ 
                     float baseFade = smoothstep(0.02, 0.2, vUv.y);
                     float edgeFade = 1.0 - smoothstep(0.85, 1.0, vUv.y);
-                    float alpha = 0.48 * baseFade * edgeFade * mix(1.0, 0.4, uProgress);
+                    float alpha = 0.48 * baseFade * edgeFade * mix(1.0, 0.3, uProgress);
                     vec3 finalCol = mix(vFresnelColor, vec3(0.75, 0.92, 1.0), smoothstep(0.7, 1.0, vUv.y));
                     gl_FragColor = vec4(finalCol, alpha); 
                 }
@@ -629,7 +636,7 @@
                     float baseFade = smoothstep(0.02, 0.2, vUv.y);
                     float edgeFade = 1.0 - smoothstep(0.85, 1.0, vUv.y);
                     float tipGlow = smoothstep(0.5, 0.98, vUv.y) * 2.0; 
-                    float a = tex.a * (0.06 + tipGlow * 0.15) * baseFade * edgeFade * mix(1.0, 1.5, uProgress); 
+                    float a = tex.a * (0.06 + tipGlow * 0.15) * baseFade * edgeFade * mix(1.0, 1.4, uProgress); 
                     a = a / (0.5 + a * 1.5); 
                     vec3 finalColor = mix(vFresnelColor, vec3(0.9, 0.96, 1.0), smoothstep(0.6, 1.0, vUv.y));
                     gl_FragColor = vec4(finalColor, a); 
@@ -644,7 +651,7 @@
             float wave = (sin(norm.x*2.5+uTime*0.9)*cos(norm.y*2.0+uTime*0.7) + cos(norm.z*2.8-uTime*0.8)*sin(norm.y*3.1+uTime*0.5)) * 0.06;
             vec3 pos = position + norm * wave; pos.y *= 0.55;
             if (uProgress > 0.0) {
-                pos += norm * uProgress * 0.4;
+                pos += norm * uProgress * 0.2;
             }
         `;
 
@@ -672,7 +679,7 @@
                 ${recepVertexPars} uniform float uViewportScale, uSize; uniform float uProgress; void main(){ ${recepVertexDisplacement} vec4 mv=modelViewMatrix*vec4(pos,1.); gl_Position=projectionMatrix*mv;
                 float dist=max(-mv.z, 0.1); gl_PointSize=uSize*uViewportScale*(0.85 / (0.35 + 0.06 * dist));
                 vec3 tN=normal; tN.y/=0.55; vNormal=normalize(normalMatrix*tN); vViewPosition=-mv.xyz; }`,
-            fragmentShader: `uniform sampler2D uTexture; uniform float uProgress; varying vec3 vNormal, vViewPosition; void main(){ vec4 tex=texture2D(uTexture,gl_PointCoord); if(tex.a<0.02)discard; vec3 N = normalize(vNormal); float fresnel = pow(clamp(1.-abs(dot(N, normalize(vViewPosition))),0.,1.), 2.0); float a = tex.a * 0.18 * mix(1.0, 1.4, uProgress); a = a / (0.5 + a * 2.0); gl_FragColor = vec4(mix(vec3(0.03, 0.08, 0.16), vec3(0.6, 0.75, 0.95), fresnel), a); }`
+            fragmentShader: `uniform sampler2D uTexture; uniform float uProgress; varying vec3 vNormal, vViewPosition; void main(){ vec4 tex=texture2D(uTexture,gl_PointCoord); if(tex.a<0.02)discard; vec3 N = normalize(vNormal); float fresnel = pow(clamp(1.-abs(dot(N, normalize(vViewPosition))),0.,1.), 2.0); float a = tex.a * 0.18 * mix(1.0, 1.2, uProgress); a = a / (0.5 + a * 2.0); gl_FragColor = vec4(mix(vec3(0.03, 0.08, 0.16), vec3(0.6, 0.75, 0.95), fresnel), a); }`
         });
         allMaterials.push(recepPointsMat);
 
@@ -952,18 +959,22 @@
         updateMode();
 
         // ==========================================
-        // ANIMATION LOOP WITH AUTO MORPHING CYCLE
+        // ANIMATION LOOP WITH SEQUENTIAL WAVE
         // ==========================================
         const clock = new THREE.Clock();
         function animate() {
             requestAnimationFrame(animate);
             const t = clock.getElapsedTime();
 
-            // Автоматический циклический морфинг (8 секунд на полный цикл: сборка -> распад/вихрь -> сборка)
-            const cycleTime = 8.0;
+            const cycleTime = 10.0;
             const phase = (t % cycleTime) / cycleTime;
-            // Плавная кривая с задержкой в собранном состоянии
-            const morphProgress = Math.pow(Math.sin(phase * Math.PI * 2) * 0.5 + 0.5, 1.8);
+            
+            // Плавный однонаправленный цикл развертки/сборки без резких рывков
+            let morphProgress = 0.0;
+            if (phase > 0.3 && phase < 0.9) {
+                const subPhase = (phase - 0.3) / 0.6; 
+                morphProgress = Math.sin(subPhase * Math.PI); 
+            }
 
             allMaterials.forEach(mat => {
                 if (mat.uniforms.uTime) mat.uniforms.uTime.value = t;
