@@ -31,8 +31,9 @@
         uMeshMode: { value: 0 },
         uMorphSched: { value: new THREE.Vector4() },  // leaveStart, leaveSpread, arriveStart, arriveSpread
         uMorphSched2: { value: new THREE.Vector4() }, // assembleInvert, meshRevealLag, meshFade, -
-        uVortexA: { value: new THREE.Vector4() },     // radiusMin, radiusMax, flare, turbulence
-        uVortexB: { value: new THREE.Vector4() },     // flow, precession, swirlSize, swirlAlpha
+        uFlowA: { value: new THREE.Vector4() },       // flowAmp, flowFreq, detailAmp, flowSpeed
+        uFlowB: { value: new THREE.Vector4() },       // warp, jitter, precession, shiver
+        uSwirlA: { value: new THREE.Vector4() },      // size, sizeMin, alpha, visibleFraction
         uSwirlColor: { value: new THREE.Vector3() }
     };
 
@@ -40,8 +41,9 @@
         const c = DP.config.morph;
         shared.uMorphSched.value.set(c.leaveStart, c.leaveSpread, c.arriveStart, c.arriveSpread);
         shared.uMorphSched2.value.set(c.assemble === 'outside-in' ? 0 : 1, c.meshRevealLag, c.meshFade, 0);
-        shared.uVortexA.value.set(c.vortexRadiusMin, c.vortexRadiusMax, c.vortexFlare, c.turbulence);
-        shared.uVortexB.value.set(c.flow, c.precession, c.swirlSize, c.swirlAlpha);
+        shared.uFlowA.value.set(c.flowAmp, c.flowFreq, c.detailAmp, c.flowSpeed);
+        shared.uFlowB.value.set(c.flowWarp, c.jitter, c.precession, c.shiver);
+        shared.uSwirlA.value.set(c.swirlSize, c.swirlSizeMin, c.swirlAlpha, c.swirlVisible);
         shared.uSwirlColor.value.fromArray(c.swirlColor);
     }
     syncConfig();
@@ -71,12 +73,66 @@
         uniform vec4 uMorphSched2;
     `;
 
+    // 3D simplex noise — Ashima Arts / Stefan Gustavson (MIT), совместим с WebGL1.
+    const simplexNoise = `
+        vec3 dpMod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+        vec4 dpMod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+        vec4 dpPermute(vec4 x) { return dpMod289(((x * 34.0) + 1.0) * x); }
+        vec4 dpTaylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+        float dpSnoise(vec3 v) {
+            const vec2 C = vec2(1.0 / 6.0, 1.0 / 3.0);
+            const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+            vec3 i = floor(v + dot(v, C.yyy));
+            vec3 x0 = v - i + dot(i, C.xxx);
+            vec3 g = step(x0.yzx, x0.xyz);
+            vec3 l = 1.0 - g;
+            vec3 i1 = min(g.xyz, l.zxy);
+            vec3 i2 = max(g.xyz, l.zxy);
+            vec3 x1 = x0 - i1 + C.xxx;
+            vec3 x2 = x0 - i2 + C.yyy;
+            vec3 x3 = x0 - D.yyy;
+            i = dpMod289(i);
+            vec4 p = dpPermute(dpPermute(dpPermute(
+                i.z + vec4(0.0, i1.z, i2.z, 1.0)) +
+                i.y + vec4(0.0, i1.y, i2.y, 1.0)) +
+                i.x + vec4(0.0, i1.x, i2.x, 1.0));
+            float n_ = 0.142857142857;
+            vec3 ns = n_ * D.wyz - D.xzx;
+            vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+            vec4 x_ = floor(j * ns.z);
+            vec4 y_ = floor(j - 7.0 * x_);
+            vec4 x = x_ * ns.x + ns.yyyy;
+            vec4 y = y_ * ns.x + ns.yyyy;
+            vec4 h = 1.0 - abs(x) - abs(y);
+            vec4 b0 = vec4(x.xy, y.xy);
+            vec4 b1 = vec4(x.zw, y.zw);
+            vec4 s0 = floor(b0) * 2.0 + 1.0;
+            vec4 s1 = floor(b1) * 2.0 + 1.0;
+            vec4 sh = -step(h, vec4(0.0));
+            vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy;
+            vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww;
+            vec3 p0 = vec3(a0.xy, h.x);
+            vec3 p1 = vec3(a0.zw, h.y);
+            vec3 p2 = vec3(a1.xy, h.z);
+            vec3 p3 = vec3(a1.zw, h.w);
+            vec4 norm = dpTaylorInvSqrt(vec4(dot(p0, p0), dot(p1, p1), dot(p2, p2), dot(p3, p3)));
+            p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
+            vec4 m = max(0.6 - vec4(dot(x0, x0), dot(x1, x1), dot(x2, x2), dot(x3, x3)), 0.0);
+            m = m * m;
+            return 42.0 * dot(m * m, vec4(dot(p0, x0), dot(p1, x1), dot(p2, x2), dot(p3, x3)));
+        }
+        vec3 dpNoise3(vec3 q) {
+            return vec3(dpSnoise(q), dpSnoise(q + vec3(31.4, 7.1, 5.3)), dpSnoise(q + vec3(-11.7, 23.9, -3.1)));
+        }
+    `;
+
     const pointsVertex = `
         ${commonPars}
         uniform mat4 uStageMatrix;
         uniform mat4 uStageMatrixInv;
-        uniform vec4 uVortexA;
-        uniform vec4 uVortexB;
+        uniform vec4 uFlowA;
+        uniform vec4 uFlowB;
+        uniform vec4 uSwirlA;
         uniform vec3 uSwirlColor;
         attribute vec4 aMorphOut;
         attribute vec4 aMorphIn;
@@ -87,6 +143,8 @@
         varying float vDpSwirlAlpha;
         float dpHidden;
         float dpSizeMul;
+
+        ${simplexNoise}
 
         float dpHash(float n) { return fract(sin(n * 127.1 + 311.7) * 43758.5453); }
         float dpAzimuth(vec3 p) { return (abs(p.x) + abs(p.z) < 1e-5) ? 0.0 : atan(p.x, p.z); }
@@ -113,18 +171,19 @@
             if (outRole) {
                 if (s >= 0.5) dpHidden = 1.0;
                 if (uMeshMode > 0.5 && t < L) dpHidden = 1.0;       // в MESH до отрыва видна поверхность
-                vDpGlow = smoothstep(L - 0.7, L, t) * (1.0 - smoothstep(0.0, 0.3, s));
+                vDpGlow = smoothstep(L - 0.9, L, t) * (1.0 - smoothstep(0.0, 0.25, s));
             } else {
                 if (s < 0.5) dpHidden = 1.0;
                 if (uMeshMode > 0.5) vDpFade = 1.0 - smoothstep(uMorphSched2.y, uMorphSched2.y + uMorphSched2.z, t - arrive);
-                vDpGlow = smoothstep(0.75, 1.0, s) * (1.0 - smoothstep(0.0, 0.6, t - arrive));
+                vDpGlow = smoothstep(0.8, 1.0, s) * (1.0 - smoothstep(0.0, 0.7, t - arrive));
             }
             if (dpHidden > 0.5) return world;
 
             float seed = fract(m.z);
             float extra = step(1.5, m.z);  // точка без пары: гаснет / рождается в вихре
             float delta = m.y;             // полный угол поворота пары вокруг оси
-            float yMid = m.w;              // высота пары в середине вихря
+            float yMid = floor(m.w / 1024.0) / 256.0 - 2.0;  // высота пары в середине пути
+            float rMid = mod(m.w, 1024.0) / 256.0;            // радиус пары в середине пути
 
             vec3 cur = (uStageMatrixInv * world).xyz;
             vec3 rest = (uStageMatrixInv * modelMatrix * vec4(restLocal, 1.0)).xyz;
@@ -138,29 +197,39 @@
             float thPath = outRole ? thRest + delta * g : thRest - delta * (1.0 - g);
             float th = thPath + dTh * (1.0 - w);
 
-            float h1 = dpHash(seed * 91.7);
-            float h2 = dpHash(seed * 53.3 + 1.7);
-            float rMid = mix(uVortexA.x, uVortexA.y, h1) * (1.0 + uVortexA.z * max(yMid, 0.0));
-            // Когерентные струи: зависят от угла/высоты пути — соседи движутся согласованно.
-            rMid += uVortexB.x * (sin(3.0 * thPath + 1.7 * yMid - 1.9 * t) * 0.6 + sin(5.0 * thPath - 1.1 * yMid + 1.3 * t) * 0.4);
-
             float r = mix(length(cur.xz), rMid, w);
             float y = mix(cur.y, yMid, w);
             vec3 p = vec3(sin(th) * r, y, cos(th) * r);
 
-            // Индивидуальные флуктуации.
+            float h1 = dpHash(seed * 91.7);
+            float h2 = dpHash(seed * 53.3 + 1.7);
+            float h3 = dpHash(seed * 17.9 + 4.1);
             float ph = seed * 6.2831853;
-            vec3 turb = vec3(
-                sin(t * 1.7 + ph * 3.0 + yMid * 1.3) + 0.5 * sin(t * 3.3 + ph * 7.0),
-                0.7 * sin(t * 1.3 + ph * 5.0 + 2.0 * thPath),
-                cos(t * 1.9 + ph * 4.0 + yMid * 1.1) + 0.5 * cos(t * 2.9 + ph * 9.0));
-            p += turb * uVortexA.w * w;
-            p.xz += vec2(sin(t * 0.63), cos(t * 0.47)) * uVortexB.y * w;
 
+            // Дрожь перед отрывом — «песок» начинает шевелиться.
+            float shiver = outRole ? smoothstep(L - 0.9, L, t) * (1.0 - w) : 0.0;
+            p += vec3(sin(t * 37.0 + ph * 11.0), sin(t * 41.0 + ph * 7.0), cos(t * 33.0 + ph * 13.0)) * uFlowB.w * shiver;
+
+            if (w > 0.0005) {
+                // Поле течения (как Turbulence/Flow в Particular): считается в точке «идеального пути»,
+                // одинаковой у соседей — поэтому частицы собираются в ленты и складки, а не в туман.
+                vec3 np = vec3(sin(thPath) * rMid, yMid, cos(thPath) * rMid);
+                vec3 q = np * uFlowA.y + vec3(0.0, -t * uFlowA.w, t * uFlowA.w * 0.37);
+                vec3 d1 = dpNoise3(q);
+                vec3 q2 = q * 2.3 + d1 * uFlowB.x + vec3(12.0, 3.0, -7.0);   // искажение координат — складки
+                vec3 d2 = dpNoise3(q2);
+                vec3 grain = vec3(sin(t * 1.7 + ph * 3.0), sin(t * 1.3 + ph * 5.0), cos(t * 1.9 + ph * 4.0));
+                p += (d1 * uFlowA.x + d2 * uFlowA.z + grain * uFlowB.y) * w;
+                p.xz += vec2(sin(t * 0.63), cos(t * 0.47)) * uFlowB.z * w;
+            }
+
+            // Вид в полёте: большинство частиц мельче и тусклее, часть — яркие искры.
+            float spark = h2 * h2 * h2;
+            float visible = step(h3, uSwirlA.w);
             vDpW = w;
-            vDpSwirlColor = uSwirlColor * (0.7 + 0.6 * h2);
-            vDpSwirlAlpha = uVortexB.w * (0.5 + h2);
-            dpSizeMul = mix(1.0, uVortexB.z * (0.7 + 0.6 * h1), w);
+            vDpSwirlColor = mix(uSwirlColor * (0.7 + 0.5 * h1), vec3(0.9, 0.97, 1.0), spark * 0.7);
+            vDpSwirlAlpha = uSwirlA.z * (0.35 + 2.2 * spark) * mix(0.12, 1.0, visible);
+            dpSizeMul = mix(1.0, uSwirlA.x * mix(uSwirlA.y, 1.0, h1 * h1), w);
             if (extra > 0.5) vDpFade *= outRole ? 1.0 - smoothstep(0.3, 0.5, s) : smoothstep(0.5, 0.7, s);
 
             return uStageMatrix * vec4(p, 1.0);
@@ -300,16 +369,25 @@
             const packed = Lq * 2048 + Dq;
             end = Math.max(end, (Lq + Dq) * 0.01);
 
-            const delta = TWO_PI + U.wrapPi(U.azimuth(bx, bz) - U.azimuth(ax, az));
-            const yMid = U.clamp(0.5 * (ay + by) + c.vortexLift * (0.35 + seed), c.vortexYMin, c.vortexYMax);
+            const delta = TWO_PI * c.turns + U.wrapPi(U.azimuth(bx, bz) - U.azimuth(ax, az));
+
+            // Середина пути: не общий «бублик», а объём — смесь положений пары и случайной точки облака.
+            const r1 = U.seededRandom(k * 2.113 + 9.7), r2 = U.seededRandom(k * 0.917 + 2.9);
+            const rPair = 0.5 * (Math.hypot(ax, az) + Math.hypot(bx, bz));
+            const rCloud = c.cloudRadiusMin + (c.cloudRadiusMax - c.cloudRadiusMin) * Math.sqrt(r1);
+            const rMid = U.clamp(rPair + (rCloud - rPair) * c.cloudMix, 0, 3.99);
+            const yCloud = c.cloudYMin + (c.cloudYMax - c.cloudYMin) * r2;
+            const yMid = U.clamp(0.5 * (ay + by) + (yCloud - 0.5 * (ay + by)) * c.cloudMix + c.lift * seed, -2, 5.99);
+            // Высота и радиус упакованы в одно число: шаг 1/256.
+            const midPacked = Math.round((yMid + 2) * 256) * 1024 + Math.round(rMid * 256);
 
             if (firstA) {
                 const o = pa.outAttr.array, j = la * 4;
-                o[j] = packed; o[j + 1] = delta; o[j + 2] = seed + (firstB ? 0 : 2); o[j + 3] = yMid;
+                o[j] = packed; o[j + 1] = delta; o[j + 2] = seed + (firstB ? 0 : 2); o[j + 3] = midPacked;
             }
             if (firstB) {
                 const o = pb.inAttr.array, j = lb * 4;
-                o[j] = packed; o[j + 1] = delta; o[j + 2] = seed + (firstA ? 0 : 2); o[j + 3] = yMid;
+                o[j] = packed; o[j + 1] = delta; o[j + 2] = seed + (firstA ? 0 : 2); o[j + 3] = midPacked;
             }
         }
 
