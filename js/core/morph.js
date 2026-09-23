@@ -35,6 +35,7 @@
         uFlowB: { value: new THREE.Vector4() },       // -, jitter, precession, shiver
         uClumpA: { value: new THREE.Vector4() },      // strength, freq, filaments, maxDist
         uClumpB: { value: new THREE.Vector4() },      // fraction, speed, spin (рад/с), shear
+        uClumpC: { value: new THREE.Vector4() },      // levels, fibers, dustAlpha, ramp
         uSwirlA: { value: new THREE.Vector4() },      // size, sizeMin, alpha, visibleFraction
         uSwirlColor: { value: new THREE.Vector3() }
     };
@@ -50,6 +51,7 @@
         const meanTravel = 0.5 * (c.minTravel + c.maxTravel);
         const spin = c.fieldSpin * 1.5 * TWO_PI * c.turns / meanTravel;
         shared.uClumpB.value.set(c.clumpFraction, c.clumpSpeed, spin, c.fieldShear);
+        shared.uClumpC.value.set(c.clumpLevels, c.clumpFibers, c.dustAlpha, c.clumpRamp);
         shared.uSwirlA.value.set(c.swirlSize, c.swirlSizeMin, c.swirlAlpha, c.swirlVisible);
         shared.uSwirlColor.value.fromArray(c.swirlColor);
     }
@@ -176,13 +178,6 @@
             grad += m4.x * p0 + m4.y * p1 + m4.z * p2 + m4.w * p3;
             return vec4(grad * 105.0, 105.0 * dot(m4, pdotx));
         }
-        // Шаг к ближайшей нулевой поверхности поля (ньютоновский), ограниченный maxd.
-        vec3 dpSnapToSurface(vec3 q, float maxd) {
-            vec4 n = dpSnoiseGrad(q);
-            vec3 d = -n.w * n.xyz / (dot(n.xyz, n.xyz) + 1e-3);
-            float len = length(d);
-            return len > maxd ? d * (maxd / len) : d;
-        }
         vec3 dpNoise3(vec3 q) {
             return vec3(dpSnoise(q), dpSnoise(q + vec3(31.4, 7.1, 5.3)), dpSnoise(q + vec3(-11.7, 23.9, -3.1)));
         }
@@ -196,6 +191,7 @@
         uniform vec4 uFlowB;
         uniform vec4 uClumpA;
         uniform vec4 uClumpB;
+        uniform vec4 uClumpC;
         uniform vec4 uSwirlA;
         uniform vec3 uSwirlColor;
         attribute vec4 aMorphOut;
@@ -274,39 +270,56 @@
             float shiver = outRole ? smoothstep(L - 0.9, L, t) * (1.0 - w) : 0.0;
             p += vec3(sin(t * 37.0 + ph * 11.0), sin(t * 41.0 + ph * 7.0), cos(t * 33.0 + ph * 13.0)) * uFlowB.w * shiver;
 
+            float clumped = step(h3, uClumpB.x);  // остальные — свободная пыль вокруг
             if (w > 0.0005) {
-                // Всё считается в точке «идеального пути», одинаковой у соседей и у обеих фигур пары.
-                vec3 np = vec3(sin(thPath) * rMid, yMid, cos(thPath) * rMid);
+                // Поля считаются в РЕАЛЬНОЙ позиции частицы: тогда стянутые частицы действительно
+                // лежат на одних и тех же поверхностях в пространстве и жгуты получаются резкими.
+                // В середине пути (s = 0.5) позиция зависит только от данных пары — эстафета сохраняется.
 
                 // 0) Поля живут в потоке: считаем их во вращающейся системе координат.
                 //    У оси она крутится быстрее, снаружи медленнее — сдвиг наматывает
                 //    структуры в спиральные ленты вдоль кольца.
-                float phi = t * (uClumpB.z + uClumpB.w * log(1.4 / max(rMid, 0.3)));
+                float phi = t * (uClumpB.z + uClumpB.w * log(1.4 / max(length(p.xz), 0.3)));
                 float cphi = cos(phi), sphi = sin(phi);
-                vec3 fp = vec3(np.x * cphi - np.z * sphi, np.y, np.z * cphi + np.x * sphi);
+                vec3 fp = vec3(p.x * cphi - p.z * sphi, p.y, p.z * cphi + p.x * sphi);
 
                 // 1) Поле течения — крупные изгибы вихря.
                 vec3 q = fp * uFlowA.y + vec3(0.0, -t * uFlowA.w, t * uFlowA.w * 0.37);
-                vec3 flow = dpNoise3(q) * uFlowA.x;
+                fp += dpNoise3(q) * uFlowA.x * w;
 
-                // 2) Стягивание: частицы притягиваются к нулевой поверхности поля шума (перепонки),
-                //    а второе поле стягивает их к линиям пересечения (жгуты). Плотность растёт —
-                //    в режиме Add частицы светятся за счёт скучивания.
-                //    Две поверхности дрейфуют в разные стороны — жгуты на их пересечении
-                //    ползут, рвутся и пересоединяются.
-                vec3 qc = (fp + flow) * uClumpA.y;
-                vec3 s1 = dpSnapToSurface(qc + vec3(0.3, -1.0, 0.2) * (t * uClumpB.y), uClumpA.w);
-                vec3 s2 = dpSnapToSurface(qc + s1 + vec3(19.1, -7.3, 4.7) + vec3(-0.6, 0.5, 0.7) * (t * uClumpB.y), uClumpA.w) * uClumpA.z;
-                // Смещения посчитаны во вращающейся системе — возвращаем их в систему сцены.
-                s1 = vec3(s1.x * cphi + s1.z * sphi, s1.y, s1.z * cphi - s1.x * sphi);
-                s2 = vec3(s2.x * cphi + s2.z * sphi, s2.y, s2.z * cphi - s2.x * sphi);
-                flow = vec3(flow.x * cphi + flow.z * sphi, flow.y, flow.z * cphi - flow.x * sphi);
-                float clumped = step(h3, uClumpB.x);  // остальные — свободная пыль вокруг
-                vec3 snap = (s1 + s2) / uClumpA.y * uClumpA.x * clumped;
+                // 2) Стягивание (частицы светятся за счёт скучивания в режиме Add):
+                //    а) к поверхности первого поля: часть частиц — на нулевую (яркие перепонки),
+                //       часть — на ближайший из параллельных уровней (тонкие волокна);
+                //    б) вдоль этой поверхности — к линии пересечения со вторым полем (жгуты).
+                //    Поля дрейфуют в разные стороны — жгуты ползут, рвутся и пересоединяются.
+                float wc = smoothstep(0.0, uClumpC.w, w) * uClumpA.x * clumped;
+                vec3 qc = fp * uClumpA.y;
+                vec3 o1 = vec3(0.3, -1.0, 0.2) * (t * uClumpB.y);
+                vec3 o2 = vec3(19.1, -7.3, 4.7) + vec3(-0.6, 0.5, 0.7) * (t * uClumpB.y);
+                float fiber = step(h1, uClumpC.y) * step(0.001, uClumpC.x);
+                vec3 d = vec3(0.0);
+                // Два шага: один шаг Ньютона сажает частицу на поверхность лишь примерно —
+                // второй делает жгуты тонкими и резкими.
+                for (int it = 0; it < 2; it++) {
+                    vec4 n1 = dpSnoiseGrad(qc + d + o1);
+                    float level = fiber * floor(n1.w / max(uClumpC.x, 0.001) + 0.5) * uClumpC.x;
+                    float g1 = dot(n1.xyz, n1.xyz) + 1e-3;
+                    vec3 d1 = -(n1.w - level) * n1.xyz / g1;
+                    vec4 n2 = dpSnoiseGrad(qc + d + d1 + o2);
+                    vec3 d2 = -n2.w * n2.xyz / (dot(n2.xyz, n2.xyz) + 1e-3);
+                    d2 -= n1.xyz * dot(d2, n1.xyz) / g1;   // двигаться вдоль первой поверхности
+                    d += d1 + d2 * uClumpA.z * (1.0 - 0.7 * fiber); // волокна остаются в основном плёнками
+                }
+                float ld = length(d);
+                if (ld > uClumpA.w) d *= uClumpA.w / ld;
+
+                fp += d / uClumpA.y * wc;
+
+                // Обратно из вращающейся системы в систему сцены.
+                p = vec3(fp.x * cphi + fp.z * sphi, fp.y, fp.z * cphi - fp.x * sphi);
 
                 vec3 grain = vec3(sin(t * 1.7 + ph * 3.0), sin(t * 1.3 + ph * 5.0), cos(t * 1.9 + ph * 4.0));
-                float wc = smoothstep(0.0, 0.6, w);   // стягивание набирает силу раньше середины пути
-                p += flow * w + snap * wc + grain * uFlowB.y * w;
+                p += grain * uFlowB.y * w;
                 p.xz += vec2(sin(t * 0.63), cos(t * 0.47)) * uFlowB.z * w;
             }
 
@@ -315,7 +328,7 @@
             float visible = step(h3, uSwirlA.w);
             vDpW = w;
             vDpSwirlColor = mix(uSwirlColor * (0.7 + 0.5 * h1), vec3(0.9, 0.97, 1.0), spark * 0.7);
-            vDpSwirlAlpha = uSwirlA.z * (0.6 + 1.8 * spark) * mix(0.25, 1.0, visible);
+            vDpSwirlAlpha = uSwirlA.z * (0.6 + 1.8 * spark) * mix(0.25, 1.0, visible) * mix(uClumpC.z, 1.0, clumped);
             dpSizeMul = mix(1.0, uSwirlA.x * mix(uSwirlA.y, 1.0, h1 * h1), w);
             if (extra > 0.5) vDpFade *= outRole ? 1.0 - smoothstep(0.3, 0.5, s) : smoothstep(0.5, 0.7, s);
 
@@ -414,6 +427,25 @@
         return { parts: out, partOf, total, sorted };
     }
 
+    // Случайная точка сечения кольца (равномерно по площади). Сечение — «крыло»:
+    // толщина u^a (1-u)^b, максимум в ringPeak, в степени ringSharp — острые концы.
+    function sampleRing(c, k) {
+        const a = 2 * c.ringPeak, b = 2 * (1 - c.ringPeak);
+        const fmax = Math.pow(c.ringPeak, a) * Math.pow(1 - c.ringPeak, b);
+        let u = 0.5, v = 0;
+        for (let i = 0; i < 24; i++) {
+            u = U.seededRandom(k * 2.113 + 9.7 + i * 13.1);
+            v = U.seededRandom(k * 0.917 + 2.9 + i * 7.3) * 2 - 1;
+            const f = Math.pow(Math.pow(u, a) * Math.pow(1 - u, b) / fmax, c.ringSharp);
+            if (Math.abs(v) <= f) break;
+            v = 0;
+        }
+        return {
+            r: c.ringInner + (c.ringOuter - c.ringInner) * u,
+            y: c.ringY + v * c.ringThickness
+        };
+    }
+
     // ------------------------------------------
     // ПЛАНИРОВЩИК
     // ------------------------------------------
@@ -459,11 +491,10 @@
             const delta = TWO_PI * c.turns + U.wrapPi(U.azimuth(bx, bz) - U.azimuth(ax, az));
 
             // Середина пути: не общий «бублик», а объём — смесь положений пары и случайной точки облака.
-            const r1 = U.seededRandom(k * 2.113 + 9.7), r2 = U.seededRandom(k * 0.917 + 2.9);
+            const ring = sampleRing(c, k);
             const rPair = 0.5 * (Math.hypot(ax, az) + Math.hypot(bx, bz));
-            const rCloud = c.cloudRadiusMin + (c.cloudRadiusMax - c.cloudRadiusMin) * Math.sqrt(r1);
-            const rMid = U.clamp(rPair + (rCloud - rPair) * c.cloudMix, 0, 3.99);
-            const yCloud = c.cloudYMin + (c.cloudYMax - c.cloudYMin) * r2;
+            const rMid = U.clamp(rPair + (ring.r - rPair) * c.cloudMix, 0, 3.99);
+            const yCloud = ring.y;
             const yMid = U.clamp(0.5 * (ay + by) + (yCloud - 0.5 * (ay + by)) * c.cloudMix + c.lift * seed, -2, 5.99);
             // Высота и радиус упакованы в одно число: шаг 1/256.
             const midPacked = Math.round((yMid + 2) * 256) * 1024 + Math.round(rMid * 256);
