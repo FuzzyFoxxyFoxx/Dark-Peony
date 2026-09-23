@@ -34,7 +34,7 @@
         uFlowA: { value: new THREE.Vector4() },       // flowAmp, flowFreq, -, flowSpeed
         uFlowB: { value: new THREE.Vector4() },       // -, jitter, precession, shiver
         uClumpA: { value: new THREE.Vector4() },      // strength, freq, filaments, maxDist
-        uClumpB: { value: new THREE.Vector4() },      // fraction, speed, -, -
+        uClumpB: { value: new THREE.Vector4() },      // fraction, speed, spin (рад/с), shear
         uSwirlA: { value: new THREE.Vector4() },      // size, sizeMin, alpha, visibleFraction
         uSwirlColor: { value: new THREE.Vector3() }
     };
@@ -46,7 +46,10 @@
         shared.uFlowA.value.set(c.flowAmp, c.flowFreq, 0, c.flowSpeed);
         shared.uFlowB.value.set(0, c.jitter, c.precession, c.shiver);
         shared.uClumpA.value.set(c.clumpStrength, c.clumpFreq, c.clumpFilaments, c.clumpMaxDist);
-        shared.uClumpB.value.set(c.clumpFraction, c.clumpSpeed, 0, 0);
+        // Поля вращаются вместе с вихрем: fieldSpin — доля пиковой угловой скорости частиц.
+        const meanTravel = 0.5 * (c.minTravel + c.maxTravel);
+        const spin = c.fieldSpin * 1.5 * TWO_PI * c.turns / meanTravel;
+        shared.uClumpB.value.set(c.clumpFraction, c.clumpSpeed, spin, c.fieldShear);
         shared.uSwirlA.value.set(c.swirlSize, c.swirlSizeMin, c.swirlAlpha, c.swirlVisible);
         shared.uSwirlColor.value.fromArray(c.swirlColor);
     }
@@ -275,17 +278,29 @@
                 // Всё считается в точке «идеального пути», одинаковой у соседей и у обеих фигур пары.
                 vec3 np = vec3(sin(thPath) * rMid, yMid, cos(thPath) * rMid);
 
+                // 0) Поля живут в потоке: считаем их во вращающейся системе координат.
+                //    У оси она крутится быстрее, снаружи медленнее — сдвиг наматывает
+                //    структуры в спиральные ленты вдоль кольца.
+                float phi = t * (uClumpB.z + uClumpB.w * log(1.4 / max(rMid, 0.3)));
+                float cphi = cos(phi), sphi = sin(phi);
+                vec3 fp = vec3(np.x * cphi - np.z * sphi, np.y, np.z * cphi + np.x * sphi);
+
                 // 1) Поле течения — крупные изгибы вихря.
-                vec3 q = np * uFlowA.y + vec3(0.0, -t * uFlowA.w, t * uFlowA.w * 0.37);
+                vec3 q = fp * uFlowA.y + vec3(0.0, -t * uFlowA.w, t * uFlowA.w * 0.37);
                 vec3 flow = dpNoise3(q) * uFlowA.x;
 
                 // 2) Стягивание: частицы притягиваются к нулевой поверхности поля шума (перепонки),
                 //    а второе поле стягивает их к линиям пересечения (жгуты). Плотность растёт —
                 //    в режиме Add частицы светятся за счёт скучивания.
-                vec3 base = np + flow;
-                vec3 qc = base * uClumpA.y + vec3(0.0, -t * uClumpB.y, 0.0);
-                vec3 s1 = dpSnapToSurface(qc, uClumpA.w);
-                vec3 s2 = dpSnapToSurface(qc + s1 + vec3(19.1, -7.3, 4.7), uClumpA.w) * uClumpA.z;
+                //    Две поверхности дрейфуют в разные стороны — жгуты на их пересечении
+                //    ползут, рвутся и пересоединяются.
+                vec3 qc = (fp + flow) * uClumpA.y;
+                vec3 s1 = dpSnapToSurface(qc + vec3(0.3, -1.0, 0.2) * (t * uClumpB.y), uClumpA.w);
+                vec3 s2 = dpSnapToSurface(qc + s1 + vec3(19.1, -7.3, 4.7) + vec3(-0.6, 0.5, 0.7) * (t * uClumpB.y), uClumpA.w) * uClumpA.z;
+                // Смещения посчитаны во вращающейся системе — возвращаем их в систему сцены.
+                s1 = vec3(s1.x * cphi + s1.z * sphi, s1.y, s1.z * cphi - s1.x * sphi);
+                s2 = vec3(s2.x * cphi + s2.z * sphi, s2.y, s2.z * cphi - s2.x * sphi);
+                flow = vec3(flow.x * cphi + flow.z * sphi, flow.y, flow.z * cphi - flow.x * sphi);
                 float clumped = step(h3, uClumpB.x);  // остальные — свободная пыль вокруг
                 vec3 snap = (s1 + s2) / uClumpA.y * uClumpA.x * clumped;
 
