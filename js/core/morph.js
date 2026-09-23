@@ -36,6 +36,7 @@
         uClumpA: { value: new THREE.Vector4() },      // strength, freq, filaments, maxDist
         uClumpB: { value: new THREE.Vector4() },      // fraction, speed, spin (рад/с), shear
         uClumpC: { value: new THREE.Vector4() },      // levels, fibers, dustAlpha, ramp
+        uTrail: { value: new THREE.Vector4() },       // lag (с), длина хвоста - 1, затухание, ширина разгона w
         uSwirlA: { value: new THREE.Vector4() },      // size, sizeMin, alpha, visibleFraction
         uSwirlColor: { value: new THREE.Vector3() }
     };
@@ -52,6 +53,7 @@
         const spin = c.fieldSpin * 1.5 * TWO_PI * c.turns / meanTravel;
         shared.uClumpB.value.set(c.clumpFraction, c.clumpSpeed, spin, c.fieldShear);
         shared.uClumpC.value.set(c.clumpLevels, c.clumpFibers, c.dustAlpha, c.clumpRamp);
+        shared.uTrail.value.set(c.trailLag, Math.max(1, Math.round(c.trailLength) - 1), c.trailFade, Math.max(0.05, 0.5 - c.swirlHold));
         shared.uSwirlA.value.set(c.swirlSize, c.swirlSizeMin, c.swirlAlpha, c.swirlVisible);
         shared.uSwirlColor.value.fromArray(c.swirlColor);
     }
@@ -192,6 +194,7 @@
         uniform vec4 uClumpA;
         uniform vec4 uClumpB;
         uniform vec4 uClumpC;
+        uniform vec4 uTrail;
         uniform vec4 uSwirlA;
         uniform vec3 uSwirlColor;
         attribute vec4 aMorphOut;
@@ -240,7 +243,9 @@
             if (dpHidden > 0.5) return world;
 
             float seed = fract(m.z);
-            float extra = step(1.5, m.z);  // точка без пары: гаснет / рождается в вихре
+            float extra = step(1.5, mod(m.z, 4.0));  // точка без пары: гаснет / рождается в вихре
+            float rank = floor(m.z / 4.0);            // номер в хвосте (0 — лидер)
+            float te = t - rank * uTrail.x;            // «время лидера»: поля видны с задержкой
             float delta = m.y;             // полный угол поворота пары вокруг оси
             float yMid = floor(m.w / 1024.0) / 256.0 - 2.0;  // высота пары в середине пути
             float rMid = mod(m.w, 1024.0) / 256.0;            // радиус пары в середине пути
@@ -248,7 +253,9 @@
             vec3 cur = (uStageMatrixInv * world).xyz;
             vec3 rest = (uStageMatrixInv * modelMatrix * vec4(restLocal, 1.0)).xyz;
 
-            float w = sin(3.14159265 * s); w *= w;       // 0 → 1 (середина) → 0
+            // 0 → 1 (плато в середине пути) → 0. На плато частица целиком в вихре — братья
+            // по хвосту идут точно по траектории лидера, и хвост получается линией.
+            float w = smoothstep(0.0, uTrail.w, s) * smoothstep(0.0, uTrail.w, 1.0 - s);
             float g = s * s * (3.0 - 2.0 * s);            // плавный разгон и торможение по углу
 
             float thRest = dpAzimuth(rest);
@@ -279,13 +286,25 @@
                 // 0) Поля живут в потоке: считаем их во вращающейся системе координат.
                 //    У оси она крутится быстрее, снаружи медленнее — сдвиг наматывает
                 //    структуры в спиральные ленты вдоль кольца.
-                float phi = t * (uClumpB.z + uClumpB.w * log(1.4 / max(length(p.xz), 0.3)));
-                float cphi = cos(phi), sphi = sin(phi);
-                vec3 fp = vec3(p.x * cphi - p.z * sphi, p.y, p.z * cphi + p.x * sphi);
+                //    Хвосты: плавную часть пути (поток, покачивание) брат повторяет за лидером
+                //    с задержкой — «время лидера» te; а к жгутам прилипает по текущему времени t,
+                //    поэтому весь хвост ложится вдоль текущего жгута, а не рассыпается облаком.
+                float spinK = uClumpB.z + uClumpB.w * log(1.4 / max(length(p.xz), 0.3));
+                float phiE = te * spinK;
+                float ce = cos(phiE), se = sin(phiE);
+                vec3 fe = vec3(p.x * ce - p.z * se, p.y, p.z * ce + p.x * se);
 
                 // 1) Поле течения — крупные изгибы вихря.
-                vec3 q = fp * uFlowA.y + vec3(0.0, -t * uFlowA.w, t * uFlowA.w * 0.37);
-                fp += dpNoise3(q) * uFlowA.x * w;
+                vec3 q = fe * uFlowA.y + vec3(0.0, -te * uFlowA.w, te * uFlowA.w * 0.37);
+                fe += dpNoise3(q) * uFlowA.x * w;
+                p = vec3(fe.x * ce + fe.z * se, fe.y, fe.z * ce - fe.x * se);
+                vec3 grain = vec3(sin(te * 1.7 + ph * 3.0), sin(te * 1.3 + ph * 5.0), cos(te * 1.9 + ph * 4.0));
+                p += grain * uFlowB.y * w;
+                p.xz += vec2(sin(te * 0.63), cos(te * 0.47)) * uFlowB.z * w;
+
+                float phi = t * spinK;
+                float cphi = cos(phi), sphi = sin(phi);
+                vec3 fp = vec3(p.x * cphi - p.z * sphi, p.y, p.z * cphi + p.x * sphi);
 
                 // 2) Стягивание (частицы светятся за счёт скучивания в режиме Add):
                 //    а) к поверхности первого поля: часть частиц — на нулевую (яркие перепонки),
@@ -317,10 +336,6 @@
 
                 // Обратно из вращающейся системы в систему сцены.
                 p = vec3(fp.x * cphi + fp.z * sphi, fp.y, fp.z * cphi - fp.x * sphi);
-
-                vec3 grain = vec3(sin(t * 1.7 + ph * 3.0), sin(t * 1.3 + ph * 5.0), cos(t * 1.9 + ph * 4.0));
-                p += grain * uFlowB.y * w;
-                p.xz += vec2(sin(t * 0.63), cos(t * 0.47)) * uFlowB.z * w;
             }
 
             // Вид в полёте: большинство частиц мельче и тусклее, часть — яркие искры.
@@ -328,7 +343,8 @@
             float visible = step(h3, uSwirlA.w);
             vDpW = w;
             vDpSwirlColor = mix(uSwirlColor * (0.7 + 0.5 * h1), vec3(0.9, 0.97, 1.0), spark * 0.7);
-            vDpSwirlAlpha = uSwirlA.z * (0.6 + 1.8 * spark) * mix(0.25, 1.0, visible) * mix(uClumpC.z, 1.0, clumped);
+            vDpSwirlAlpha = uSwirlA.z * (0.6 + 1.8 * spark) * mix(0.25, 1.0, visible) * mix(uClumpC.z, 1.0, clumped)
+                * (1.0 - uTrail.z * rank / max(uTrail.y, 1.0));   // хвост к концу тускнеет
             dpSizeMul = mix(1.0, uSwirlA.x * mix(uSwirlA.y, 1.0, h1 * h1), w);
             if (extra > 0.5) vDpFade *= outRole ? 1.0 - smoothstep(0.3, 0.5, s) : smoothstep(0.5, 0.7, s);
 
@@ -429,15 +445,18 @@
 
     // Случайная точка сечения кольца (равномерно по площади). Сечение — «крыло»:
     // толщина u^a (1-u)^b, максимум в ringPeak, в степени ringSharp — острые концы.
-    function sampleRing(c, k) {
+    function ringProfile(c, u) {
         const a = 2 * c.ringPeak, b = 2 * (1 - c.ringPeak);
         const fmax = Math.pow(c.ringPeak, a) * Math.pow(1 - c.ringPeak, b);
+        return Math.pow(Math.pow(u, a) * Math.pow(1 - u, b) / fmax, c.ringSharp);
+    }
+
+    function sampleRing(c, k) {
         let u = 0.5, v = 0;
         for (let i = 0; i < 24; i++) {
             u = U.seededRandom(k * 2.113 + 9.7 + i * 13.1);
             v = U.seededRandom(k * 0.917 + 2.9 + i * 7.3) * 2 - 1;
-            const f = Math.pow(Math.pow(u, a) * Math.pow(1 - u, b) / fmax, c.ringSharp);
-            if (Math.abs(v) <= f) break;
+            if (Math.abs(v) <= ringProfile(c, u)) break;
             v = 0;
         }
         return {
@@ -451,36 +470,110 @@
     // ------------------------------------------
     // Записывает расписание в aMorphOut фигуры A и aMorphIn фигуры B.
     // Возвращает длительность морфинга (сек).
+    // Границы фигуры (2% и 98% по радиусу и высоте) — для непрерывного перевода цветка в кольцо.
+    function bounds(layouts) {
+        const rs = [], ys = [];
+        layouts.forEach(L => L.parts.forEach(p => {
+            for (let i = 0; i < p.count; i += 97) {
+                rs.push(Math.hypot(p.rest[i * 3], p.rest[i * 3 + 2]));
+                ys.push(p.rest[i * 3 + 1]);
+            }
+        }));
+        const q = (a, f) => { a.sort((x, y) => x - y); return a[Math.floor(f * (a.length - 1))] || 0; };
+        return { r0: q(rs, 0.02), r1: q(rs, 0.98), y0: q(ys, 0.02), y1: q(ys, 0.98) };
+    }
+
+    // Записывает расписание в aMorphOut фигуры A и aMorphIn фигуры B.
+    // Возвращает длительность морфинга (сек).
     function plan(A, B) {
         const c = DP.config.morph;
         syncConfig();
         const NA = A.total, NB = B.total, N = Math.max(NA, NB);
         const insideOut = c.assemble !== 'outside-in';
         const usedA = new Uint8Array(NA), usedB = new Uint8Array(NB);
+        const bb = bounds([A, B]);
         let end = 0;
 
-        for (let k = 0; k < N; k++) {
+        const pairOf = (k) => {
             const ia = A.sorted[Math.floor(k * NA / N)];
             const kb = Math.floor(k * NB / N);
             const ib = B.sorted[insideOut ? NB - 1 - kb : kb];
-            const firstA = !usedA[ia], firstB = !usedB[ib];
-            if (!firstA && !firstB) continue;
-            usedA[ia] = 1; usedB[ib] = 1;
-
             const pa = A.parts[A.partOf[ia]], la = ia - pa.start;
             const pb = B.parts[B.partOf[ib]], lb = ib - pb.start;
-            const ax = pa.rest[la * 3], ay = pa.rest[la * 3 + 1], az = pa.rest[la * 3 + 2];
-            const bx = pb.rest[lb * 3], by = pb.rest[lb * 3 + 1], bz = pb.rest[lb * 3 + 2];
+            return { ia, ib, pa, la, pb, lb };
+        };
 
+        // --- Лидеры и хвосты ---
+        // Соседние по порядку распада точки группируются по азимуту в «хвосты» по trailLength штук.
+        // Первая — лидер; остальные летят по его расписанию с задержкой rank * trailLag и видят
+        // поля с той же задержкой — поэтому в каждый момент стоят там, где лидер был чуть раньше.
+        const G = Math.max(1, Math.min(255, Math.round(c.trailLength)));
+        const leaderOf = new Int32Array(N), rankOf = new Uint8Array(N);
+        const W = G * 64;
+        for (let k0 = 0; k0 < N; k0 += W) {
+            const n = Math.min(W, N - k0);
+            const ks = new Array(n), az = new Float32Array(n);
+            for (let i = 0; i < n; i++) {
+                const P = pairOf(k0 + i), j = P.la * 3;
+                ks[i] = k0 + i;
+                az[i] = U.azimuth(P.pa.rest[j], P.pa.rest[j + 2]) * 8 + P.pa.rest[j + 1]; // азимут, затем высота
+            }
+            const idx = ks.map((_, i) => i).sort((x, y) => az[x] - az[y]);
+            for (let g = 0; g < n; g += G) {
+                const lead = ks[idx[g]];
+                for (let m = 0; m < G && g + m < n; m++) {
+                    leaderOf[ks[idx[g + m]]] = lead;
+                    rankOf[ks[idx[g + m]]] = m;
+                }
+            }
+        }
+
+        // Общие для хвоста данные лидера: время, середина пути, seed.
+        const leadInfo = (k) => {
+            const P = pairOf(k);
+            const ja = P.la * 3, jb = P.lb * 3;
+            const ax = P.pa.rest[ja], ay = P.pa.rest[ja + 1], az = P.pa.rest[ja + 2];
+            const bx = P.pb.rest[jb], by = P.pb.rest[jb + 1], bz = P.pb.rest[jb + 2];
             const seed = U.seededRandom(k * 0.618 + 0.37);
             const rnd = U.seededRandom(k * 1.319 + 5.1);
-
-            const orderA = U.clamp(pa.order[la], 0, 1);
-            const orderB = U.clamp(pb.order[lb], 0, 1);
+            const orderA = U.clamp(P.pa.order[P.la], 0, 1);
+            const orderB = U.clamp(P.pb.order[P.lb], 0, 1);
             const keyB = insideOut ? 1 - orderB : orderB;
             const L = c.leaveStart + c.leaveSpread * orderA;
             const target = c.arriveStart + c.arriveSpread * keyB + (rnd - 0.5) * c.travelJitter;
             const D = U.clamp(target - L, c.minTravel, c.maxTravel);
+
+            // Середина пути — НЕПРЕРЫВНОЕ отображение цветка в кольцо: соседи на цветке остаются
+            // соседями в вихре, поэтому лепесток на глазах вытягивается в ленту, а не тает в пыль.
+            // cloudMix подмешивает случайную точку кольца.
+            const rPair = 0.5 * (Math.hypot(ax, az) + Math.hypot(bx, bz));
+            const yPair = 0.5 * (ay + by);
+            const u = U.clamp((rPair - bb.r0) / Math.max(bb.r1 - bb.r0, 1e-3), 0, 1);
+            const v = U.clamp((yPair - bb.y0) / Math.max(bb.y1 - bb.y0, 1e-3), 0, 1) * 2 - 1;
+            const rMap = c.ringInner + (c.ringOuter - c.ringInner) * u;
+            const yMap = c.ringY + v * c.ringThickness * ringProfile(c, u);
+            const ring = sampleRing(c, k);
+            const rMid = U.clamp(rMap + (ring.r - rMap) * c.cloudMix, 0, 3.99);
+            const yMid = U.clamp(yMap + (ring.y - yMap) * c.cloudMix + c.lift * seed, -2, 5.99);
+            return { L, D, seed, rMid, yMid };
+        };
+
+        let cacheK = -1, cache = null;
+        for (let k = 0; k < N; k++) {
+            const P = pairOf(k);
+            const { ia, ib, pa, la, pb, lb } = P;
+            const firstA = !usedA[ia], firstB = !usedB[ib];
+            if (!firstA && !firstB) continue;
+            usedA[ia] = 1; usedB[ib] = 1;
+
+            const ax = pa.rest[la * 3], az = pa.rest[la * 3 + 2];
+            const bx = pb.rest[lb * 3], bz = pb.rest[lb * 3 + 2];
+
+            const lead = leaderOf[k], rank = rankOf[k];
+            if (lead !== cacheK) { cache = leadInfo(lead); cacheK = lead; }
+            const { seed, rMid, yMid } = cache;
+            const L = cache.L + rank * c.trailLag;
+            const D = cache.D;
 
             // Время упаковано в одно число: шаг 10 мс, до 20.47 с на каждое поле.
             const Lq = U.clamp(Math.round(L * 100), 0, 2047);
@@ -489,23 +582,19 @@
             end = Math.max(end, (Lq + Dq) * 0.01);
 
             const delta = TWO_PI * c.turns + U.wrapPi(U.azimuth(bx, bz) - U.azimuth(ax, az));
-
-            // Середина пути: не общий «бублик», а объём — смесь положений пары и случайной точки облака.
-            const ring = sampleRing(c, k);
-            const rPair = 0.5 * (Math.hypot(ax, az) + Math.hypot(bx, bz));
-            const rMid = U.clamp(rPair + (ring.r - rPair) * c.cloudMix, 0, 3.99);
-            const yCloud = ring.y;
-            const yMid = U.clamp(0.5 * (ay + by) + (yCloud - 0.5 * (ay + by)) * c.cloudMix + c.lift * seed, -2, 5.99);
             // Высота и радиус упакованы в одно число: шаг 1/256.
             const midPacked = Math.round((yMid + 2) * 256) * 1024 + Math.round(rMid * 256);
+            // seed (дробная часть) + 2 * «без пары» + 4 * номер в хвосте.
+            const zA = seed + (firstB ? 0 : 2) + rank * 4;
+            const zB = seed + (firstA ? 0 : 2) + rank * 4;
 
             if (firstA) {
                 const o = pa.outAttr.array, j = la * 4;
-                o[j] = packed; o[j + 1] = delta; o[j + 2] = seed + (firstB ? 0 : 2); o[j + 3] = midPacked;
+                o[j] = packed; o[j + 1] = delta; o[j + 2] = zA; o[j + 3] = midPacked;
             }
             if (firstB) {
                 const o = pb.inAttr.array, j = lb * 4;
-                o[j] = packed; o[j + 1] = delta; o[j + 2] = seed + (firstA ? 0 : 2); o[j + 3] = midPacked;
+                o[j] = packed; o[j + 1] = delta; o[j + 2] = zB; o[j + 3] = midPacked;
             }
         }
 
