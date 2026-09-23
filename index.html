@@ -239,7 +239,13 @@
 
         // Функция для вычисления железобетонного размера точек независимо от хостинга
         function getViewportScale() {
-            return Math.min(window.innerWidth, window.innerHeight) * 0.0012;
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            // Пока экран горизонтальный или квадратный (w >= h), берем меньшую сторону (h).
+            // Как только экран становится вертикальным (w < h), фиксируем размер по высоте (h), 
+            // чтобы при дальнейшем сужении ширины масштаб не уменьшался.
+            const effectiveDim = w >= h ? Math.min(w, h) : h;
+            return effectiveDim * 0.0012;
         }
 
         // ==========================================
