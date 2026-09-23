@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dark Peony Hub - Morphing Kinematics Assembly</title>
+    <title>Dark Peony Hub - Layout Assembly</title>
     <style>
         * { box-sizing: border-box; }
         body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000102; font-family: sans-serif; }
@@ -87,7 +87,7 @@
     <div id="ui">
         <button id="btnToggle" class="btn">POINTS MODE (M)</button>
     </div>
-    <div id="ui-overlay">Dark Peony Hub • 3s Morphic Kinematics Assembly</div>
+    <div id="ui-overlay">Dark Peony Hub • Layout Assembly</div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
 
@@ -298,7 +298,7 @@
         scene.add(new THREE.Points(galaxyGeo, galaxyMat));
 
         // ==========================================
-        // ЦВЕТОК & КИНЕМАТИКА МОРФИНГА (ТЗ 3с)
+        // ЦВЕТОК (ИСПРАВЛЕННАЯ АНИМАЦИЯ: ОРБИТА + ЛАГ)
         // ==========================================
         const FLOWER_SCALE = 0.72;
         meshGroup.scale.set(FLOWER_SCALE, FLOWER_SCALE, FLOWER_SCALE);
@@ -323,45 +323,7 @@
             attribute vec3 aVolumetricOffset;
         `;
 
-        // Единая математика 3-секундного цикла с послойным эффектом бархана и 360° орбитой
-        const morphKinematicsSnippet = `
-            // 3-секундный цикл: 0.0 - 1.2с распад, 1.2 - 1.8с орбитальный вихрь, 1.8 - 3.0с сборка
-            float cycle = mod(uTime, 3.0);
-            
-            // Иерархический сдвиг по слоям (tier и высота/удаление): периферия срывается первой, ядро позже
-            float tierDelay = (2.0 - uLayerTier) * 0.12 + vNorm * 0.15;
-            
-            // Функция фазы трансформации (0 = собрано, 1 = полностью в облаке/разборе)
-            float morphFactor = 0.0;
-            if (cycle < 1.3) {
-                float p = clamp((cycle - tierDelay) / 1.0, 0.0, 1.0);
-                morphFactor = smoothstep(0.0, 1.0, p);
-            } else if (cycle < 1.7) {
-                morphFactor = 1.0; // Пик вихря
-            } else {
-                // Обратная сборка: периферия садится на места первой (раньше по времени), ядро догоняет
-                float assembleDelay = (2.0 - uLayerTier) * 0.10 + (1.0 - vNorm) * 0.1;
-                float p = clamp((cycle - 1.7 - assembleDelay) / 0.9, 0.0, 1.0);
-                morphFactor = 1.0 - smoothstep(0.0, 1.0, p);
-            }
-
-            // Управляемое орбитальное смещение 360 градусов вокруг оси Y в пределах жестких лимитов
-            float angleOffset = morphFactor * (1.58 + uLayerTier * 0.4) + sin(uPhase + cycle * 2.0) * 0.2;
-            float cosA = cos(angleOffset);
-            float sinA = sin(angleOffset);
-            
-            // Вращение координат X и Z для орбитального вихря
-            float ox = pos.x * cosA - pos.z * sinA;
-            float oz = pos.x * sinA + pos.z * cosA;
-            pos.x = mix(pos.x, ox, morphFactor);
-            pos.z = mix(pos.z, oz, morphFactor);
-            
-            // Контролируемый вертикальный и радиальный разлет (без хаоса)
-            pos.y += morphFactor * (0.8 + vNorm * 0.6 + uLayerTier * 0.25);
-            pos.x += morphFactor * (aVolumetricOffset.x * 2.5);
-            pos.z += morphFactor * (aVolumetricOffset.z * 2.5);
-        `;
-
+        // ИСПРАВЛЕННЫЙ ВЕРШИННЫЙ СЕГМЕНТ: Инерционный срыв + Круговое орбитальное движение
         const petalVertexDisplacement = `
             vUv = uv;
             vTier = uLayerTier;
@@ -371,25 +333,27 @@
             float vNorm = vUv.y; 
             float uNorm = (vUv.x - 0.5) * 2.0;
 
+            // Задержка (lag): внешние и верхние края срываются первыми, центр отстает
+            float delayFactor = length(pos.xz) * 0.12 + (1.0 - vNorm) * 0.25;
+            float activeTime = max(0.0, uTime - delayFactor);
+
+            // Полноценное круговое орбитальное движение частиц вокруг центра вместо маятника туда-сюда
+            float orbitAngle = activeTime * 0.7 + uPhase + vNorm * 1.5;
+            float orbitRadius = 0.2 * pow(vNorm, 1.4) * uAmpFactor * uFlexFactor;
+            
+            vec3 orbitalOffset = vec3(
+                cos(orbitAngle) * orbitRadius,
+                sin(activeTime * 0.9 + uPhase) * 0.12 * vNorm * uAmpFactor,
+                sin(orbitAngle) * orbitRadius
+            );
+
             float cupDeep = sin(vNorm * 3.14159 * 0.75) * 0.48 * uSCurveStrength;
             float tipOut  = -pow(vNorm, 2.1) * 0.38 * uSCurveStrength;
             float baseSCurve = cupDeep + tipOut;
 
-            float ruffleMask = smoothstep(0.1, 1.0, vNorm) * (0.3 + 0.7 * abs(uNorm));
-            float transverseSine = sin(uNorm * 12.56 + uPhase * 1.5) * 0.08 * ruffleMask;
-
-            float effectiveAmp = uAmpFactor * uFlexFactor;
-            float whip = pow(vNorm, 1.25) * effectiveAmp;
-            float wave1 = sin(uTime * 0.85 - vNorm * 3.8 + uPhase) * 0.35 * whip;
-            float wave2 = cos(uTime * 0.62 - vNorm * 5.2 + uPhase * 1.7) * 0.18 * whip;
-            float edgeDist = abs(vUv.x - 0.5) * 2.0;
-            float edgeFlutter = sin(uTime * 1.1 + vUv.x * 6.28 + uPhase) * 0.10 * edgeDist * whip;
-
-            pos.z += baseSCurve + transverseSine + (wave1 + wave2 + edgeFlutter) * hMask;
+            pos.z += baseSCurve;
+            pos += orbitalOffset * hMask;
             pos += aVolumetricOffset * (0.005 + 0.012 * smoothstep(0.0, 0.3, vNorm));
-
-            // Применяем архитектуру морфинга и кинематики ТЗ
-            ${morphKinematicsSnippet}
         `;
 
         function createPetalMeshMat(pSeed, amp, flex, sStr, tier) {
@@ -466,6 +430,7 @@
                         if (tex.a < 0.01) discard;
 
                         vec3 color = mix(vec3(0.04, 0.1, 0.2), vec3(0.7, 0.88, 1.0), vFresnel * 1.1);
+                        
                         float edgeGlow = smoothstep(0.2, 0.9, vHeight) * 1.5;
                         float radialMultiplier = 1.0 + edgeGlow;
 
@@ -479,33 +444,25 @@
             allMaterials.push(mat); return mat;
         }
 
+        // ==========================================
+        // ЩУПАЛЬЦА (ОРБИТАЛЬНЫЙ РАСПАД)
+        // ==========================================
         const tentVertexPars = `uniform float uTime; attribute float aSeed; varying vec3 vNormal, vViewPosition; varying vec2 vUv;`;
         const tentVertexDisplacement = `
-            vUv = uv; vec3 pos = position; float whip = pow(vUv.y, 1.3);
-            float t1 = uTime * 1.2 - pos.y * 1.5 + aSeed * 9.1;
-            float t2 = uTime * 0.9 - pos.y * 2.1 + aSeed * 4.3;
-            pos.x += (sin(t1) * 0.25 + cos(t2) * 0.12) * whip;
-            pos.z += (cos(t1 * 0.85) * 0.25 + sin(t2 * 1.1) * 0.12) * whip;
+            vUv = uv; 
+            vec3 pos = position; 
+            float whip = pow(vUv.y, 1.3);
+            
+            float delay = vUv.y * 0.5 + aSeed * 0.2;
+            float actT = max(0.0, uTime - delay);
 
-            // Кинематика морфинга для щупалец
-            float cycle = mod(uTime, 3.0);
-            float vNorm = vUv.y;
-            float tierDelay = 0.1 + vNorm * 0.1;
-            float morphFactor = 0.0;
-            if (cycle < 1.3) {
-                morphFactor = smoothstep(0.0, 1.0, clamp((cycle - tierDelay)/1.0, 0.0, 1.0));
-            } else if (cycle < 1.7) {
-                morphFactor = 1.0;
-            } else {
-                morphFactor = 1.0 - smoothstep(0.0, 1.0, clamp((cycle - 1.7 - (1.0-vNorm)*0.1)/0.9, 0.0, 1.0));
-            }
-            float ang = morphFactor * 1.4;
-            float cA = cos(ang), sA = sin(ang);
-            float ox = pos.x * cA - pos.z * sA;
-            float oz = pos.x * sA + pos.z * cA;
-            pos.x = mix(pos.x, ox, morphFactor);
-            pos.z = mix(pos.z, oz, morphFactor);
-            pos.y += morphFactor * 0.7;
+            // Круговой распад и разлет щупалец вместо плоских колебаний
+            float orbitAngle = actT * 0.8 + aSeed * 3.0;
+            float orbitDist = 0.35 * whip;
+
+            pos.x += cos(orbitAngle) * orbitDist;
+            pos.z += sin(orbitAngle) * orbitDist;
+            pos.y += sin(actT * 1.2 + aSeed) * 0.1 * whip;
         `;
 
         const tentMeshMat = new THREE.ShaderMaterial({
@@ -517,12 +474,15 @@
                 void main(){ 
                     vec3 N = gl_FrontFacing ? normalize(vNormal) : -normalize(vNormal); 
                     float fresnel = pow(clamp(1.0 - abs(dot(N, normalize(vViewPosition))), 0.0, 1.0), 1.2); 
+                    
                     float baseFade = smoothstep(0.05, 0.3, vUv.y);
                     float edgeFade = 1.0 - smoothstep(0.85, 1.0, vUv.y);
                     float alpha = 0.5 * baseFade * edgeFade;
+                    
                     vec3 baseColor = mix(vec3(0.06, 0.14, 0.25), vec3(0.5, 0.7, 0.9), fresnel * 1.1);
                     vec3 tipColor = vec3(0.4, 0.7, 0.95);
                     vec3 finalColor = mix(baseColor, tipColor, smoothstep(0.4, 0.85, vUv.y));
+
                     gl_FragColor = vec4(finalColor, alpha); 
                 }
             `,
@@ -559,42 +519,42 @@
                 void main(){ 
                     vec4 tex = texture2D(uTexture, gl_PointCoord); 
                     if(tex.a < 0.02) discard; 
+
                     float baseFade = smoothstep(0.05, 0.3, vUv.y);
                     float edgeFade = 1.0 - smoothstep(0.85, 1.0, vUv.y);
                     float tipGlow = smoothstep(0.1, 0.85, vUv.y) * 1.4;
+                    
                     float a = tex.a * (0.12 + tipGlow * 0.2) * baseFade * edgeFade; 
                     a = a / (0.45 + a * 1.2); 
+
                     vec3 baseColor = mix(vec3(0.1, 0.22, 0.38), vec3(0.7, 0.85, 1.0), vFresnel * 1.1);
                     vec3 finalColor = mix(baseColor, vec3(0.4, 0.7, 0.95), smoothstep(0.4, 0.85, vUv.y));
+
                     gl_FragColor = vec4(finalColor, a); 
                 }
             `,
         });
         allMaterials.push(tentPointsMat);
 
+        // ==========================================
+        // ТЫЧИНКИ (РАСПАД И РАЗЛЕТ ВЕРШИН)
+        // ==========================================
         const stamenVertexPars = `uniform float uTime; attribute float aSeed; varying vec2 vUv; varying vec3 vFresnelColor;`;
         const stamenVertexDisplacement = `
-            vUv = uv; vec3 pos = position; float whip = pow(vUv.y, 1.2);
-            float t = uTime * 1.4 - pos.y * 1.8 + aSeed * 6.5;
-            pos.x += sin(t) * 0.12 * whip; pos.z += cos(t * 1.1) * 0.12 * whip;
+            vUv = uv; 
+            vec3 pos = position; 
+            float whip = pow(vUv.y, 1.2);
+            
+            float delay = vUv.y * 0.4 + aSeed * 0.15;
+            float actT = max(0.0, uTime - delay);
 
-            float cycle = mod(uTime, 3.0);
-            float vNorm = vUv.y;
-            float morphFactor = 0.0;
-            if (cycle < 1.3) {
-                morphFactor = smoothstep(0.0, 1.0, clamp((cycle - 0.05)/1.0, 0.0, 1.0));
-            } else if (cycle < 1.7) {
-                morphFactor = 1.0;
-            } else {
-                morphFactor = 1.0 - smoothstep(0.0, 1.0, clamp((cycle - 1.7)/0.9, 0.0, 1.0));
-            }
-            float ang = morphFactor * 1.2;
-            float cA = cos(ang), sA = sin(ang);
-            float ox = pos.x * cA - pos.z * sA;
-            float oz = pos.x * sA + pos.z * cA;
-            pos.x = mix(pos.x, ox, morphFactor);
-            pos.z = mix(pos.z, oz, morphFactor);
-            pos.y += morphFactor * 0.5;
+            // Орбитальное расхождение тычинок
+            float orbitAngle = actT * 1.1 + aSeed * 2.0;
+            float orbitDist = 0.22 * whip;
+
+            pos.x += cos(orbitAngle) * orbitDist;
+            pos.z += sin(orbitAngle) * orbitDist;
+            pos.y += sin(actT * 1.5) * 0.08 * whip;
         `;
 
         const stamenMeshMat = new THREE.ShaderMaterial({
@@ -646,35 +606,34 @@
                 void main(){ 
                     vec4 tex = texture2D(uTexture, gl_PointCoord); 
                     if(tex.a < 0.02) discard; 
+
                     float baseFade = smoothstep(0.02, 0.2, vUv.y);
                     float edgeFade = 1.0 - smoothstep(0.85, 1.0, vUv.y);
                     float tipGlow = smoothstep(0.5, 0.98, vUv.y) * 2.0; 
+                    
                     float a = tex.a * (0.06 + tipGlow * 0.15) * baseFade * edgeFade; 
                     a = a / (0.5 + a * 1.5); 
+
                     vec3 finalColor = mix(vFresnelColor, vec3(0.9, 0.96, 1.0), smoothstep(0.6, 1.0, vUv.y));
+
                     gl_FragColor = vec4(finalColor, a); 
                 }
             `,
         });
         allMaterials.push(stamenPointsMat);
 
+        // ==========================================
+        // ЦВЕТОЛОЖЕ (ЭКСПАНСИЯ И РАСПАД)
+        // ==========================================
         const recepVertexPars = `uniform float uTime; varying vec3 vNormal, vViewPosition;`;
         const recepVertexDisplacement = `
             vec3 norm = normalize(position);
-            float wave = (sin(norm.x*2.5+uTime*0.9)*cos(norm.y*2.0+uTime*0.7) + cos(norm.z*2.8-uTime*0.8)*sin(norm.y*3.1+uTime*0.5)) * 0.06;
-            vec3 pos = position + norm * wave; pos.y *= 0.55;
-
-            // Цветоложе замыкает сборку последним
-            float cycle = mod(uTime, 3.0);
-            float morphFactor = 0.0;
-            if (cycle < 1.3) {
-                morphFactor = smoothstep(0.0, 1.0, clamp((cycle - 0.2)/1.0, 0.0, 1.0));
-            } else if (cycle < 1.7) {
-                morphFactor = 1.0;
-            } else {
-                morphFactor = 1.0 - smoothstep(0.0, 1.0, clamp((cycle - 1.7)/0.8, 0.0, 1.0));
-            }
-            pos.y += morphFactor * 0.3;
+            // Плавное увеличение объема и расхождение частиц цветоложа по орбите
+            float expand = 1.0 + sin(uTime * 0.5) * 0.15;
+            vec3 pos = position * expand;
+            float wave = (sin(pos.x*2.5+uTime*0.9)*cos(pos.y*2.0+uTime*0.7)) * 0.08;
+            pos += norm * wave; 
+            pos.y *= 0.55;
         `;
 
         const recepMeshMat = new THREE.ShaderMaterial({
@@ -986,7 +945,6 @@
                 if (mat.uniforms.uTime) mat.uniforms.uTime.value = t;
             });
 
-            // Непрерывное фоновое вращение объекта по оси Y по ТЗ
             meshGroup.rotation.y = t * 0.03;
             pointsGroup.rotation.y = t * 0.03;
 
