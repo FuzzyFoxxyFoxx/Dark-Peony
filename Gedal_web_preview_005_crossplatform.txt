@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dark Peony Hub - Layout Assembly</title>
+    <style>
+        * { box-sizing: border-box; }
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000102; font-family: sans-serif; }
+        
+        canvas { 
+            display: block; 
+            width: 100%; 
+            height: 100%; 
+            position: absolute; 
+            top: 0; 
+            left: 0; 
+        }
+
+        #hudCanvas {
+            pointer-events: none;
+            z-index: 5;
+        }
+
+        #webglCanvas {
+            z-index: 1;
+        }
+
+        #ui {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 10;
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn {
+            background: rgba(10, 20, 35, 0.75);
+            border: 1px solid rgba(140, 180, 220, 0.4);
+            color: #d0e5ff;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            letter-spacing: 1px;
+            backdrop-filter: blur(5px);
+            transition: all 0.2s ease;
+        }
+
+        .btn:hover {
+            background: rgba(20, 40, 70, 0.9);
+            border-color: #8cc0ff;
+            box-shadow: 0 0 10px rgba(100, 180, 255, 0.3);
+        }
+
+        .btn.active {
+            background: #255588;
+            color: #ffffff;
+            border-color: #aed5ff;
+        }
+
+        #ui-overlay {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(220, 235, 255, 0.7);
+            font-size: 12px;
+            letter-spacing: 1px;
+            pointer-events: none;
+            text-transform: uppercase;
+            text-align: center;
+            background: rgba(5, 10, 20, 0.6);
+            padding: 8px 18px;
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(6px);
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="hudCanvas"></canvas>
+
+    <div id="ui">
+        <button id="btnToggle" class="btn">POINTS MODE (M)</button>
+    </div>
+    <div id="ui-overlay">Dark Peony Hub • Layout Assembly</div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+
+    <script>
+        // ==========================================
+        // UTILS & NOISE
+        // ==========================================
+        function seededRandom(seed) {
+            let x = Math.sin(seed++) * 10000;
+            return x - Math.floor(x);
+        }
+
+        function noise(u, seed = 0) {
+            return Math.sin(u * 7.3 + seed) * 0.4 + Math.sin(u * 17.1 + seed * 2.0) * 0.35 + Math.cos(u * 31.7 + seed * 0.5) * 0.25;
+        }
+
+        // ==========================================
+        // 2D HUD
+        // ==========================================
+        const hudCanvas = document.getElementById('hudCanvas');
+        const hudCtx = hudCanvas.getContext('2d');
+
+        function resizeHud() {
+            const dpr = Math.min(window.devicePixelRatio || 1, 2);
+            hudCanvas.width = window.innerWidth * dpr;
+            hudCanvas.height = window.innerHeight * dpr;
+            hudCtx.scale(dpr, dpr);
+            drawHud();
+        }
+
+        function drawHud() {
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            hudCtx.clearRect(0, 0, w, h);
+
+            const cx = w / 2;
+            const cy = h / 2;
+            const R = Math.min(w, h) * 0.38 * 1.25;
+
+            hudCtx.lineWidth = 1.5;
+
+            hudCtx.strokeStyle = 'rgba(100, 160, 220, 0.35)';
+            hudCtx.beginPath();
+            hudCtx.arc(cx, cy, R, 0, Math.PI * 2);
+            hudCtx.stroke();
+
+            hudCtx.strokeStyle = 'rgba(80, 140, 200, 0.22)';
+            hudCtx.beginPath();
+            hudCtx.arc(cx, cy - R, R, 0, Math.PI * 2);
+            hudCtx.stroke();
+
+            hudCtx.beginPath();
+            hudCtx.arc(cx, cy + R, R, 0, Math.PI * 2);
+            hudCtx.stroke();
+
+            const hGrad = hudCtx.createLinearGradient(0, cy, w, cy);
+            hGrad.addColorStop(0.0, 'rgba(100, 170, 240, 0.0)');
+            hGrad.addColorStop(0.2, 'rgba(100, 170, 240, 0.15)');
+            hGrad.addColorStop(0.8, 'rgba(100, 170, 240, 0.15)');
+            hGrad.addColorStop(1.0, 'rgba(100, 170, 240, 0.0)');
+            hudCtx.strokeStyle = hGrad;
+            hudCtx.beginPath();
+            hudCtx.moveTo(0, cy); hudCtx.lineTo(w, cy);
+            hudCtx.stroke();
+
+            const vGrad = hudCtx.createLinearGradient(cx, 0, cx, h);
+            vGrad.addColorStop(0.0, 'rgba(100, 170, 240, 0.0)');
+            vGrad.addColorStop(0.15, 'rgba(100, 170, 240, 0.15)');
+            vGrad.addColorStop(0.85, 'rgba(100, 170, 240, 0.15)');
+            vGrad.addColorStop(1.0, 'rgba(100, 170, 240, 0.0)');
+            hudCtx.strokeStyle = vGrad;
+            hudCtx.beginPath();
+            hudCtx.moveTo(cx, 0); hudCtx.lineTo(cx, h);
+            hudCtx.stroke();
+
+            const drawCross = (x, y, sz, col) => {
+                hudCtx.strokeStyle = col;
+                hudCtx.lineWidth = 2.5;
+                hudCtx.beginPath();
+                hudCtx.moveTo(x - sz, y); hudCtx.lineTo(x + sz, y);
+                hudCtx.moveTo(x, y - sz); hudCtx.lineTo(x, y + sz);
+                hudCtx.stroke();
+            };
+
+            const intersectOffsetX = R * Math.sin(Math.PI / 3);
+            drawCross(cx - intersectOffsetX, cy - R * 0.5, 12, 'rgba(180, 220, 255, 0.85)');
+            drawCross(cx + intersectOffsetX, cy - R * 0.5, 12, 'rgba(180, 220, 255, 0.85)');
+            drawCross(cx - intersectOffsetX, cy + R * 0.5, 12, 'rgba(180, 220, 255, 0.85)');
+            drawCross(cx + intersectOffsetX, cy + R * 0.5, 12, 'rgba(180, 220, 255, 0.85)');
+        }
+
+        // ==========================================
+        // SCENE SETUP
+        // ==========================================
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 100);
+        
+        camera.position.set(0, 5.6, 5.4);
+        camera.lookAt(0, -0.48, 0);
+
+        const oldCanvas = document.getElementById('webglCanvas');
+        if (oldCanvas) oldCanvas.remove();
+
+        const renderer = new THREE.WebGLRenderer({ 
+            antialias: true, 
+            alpha: false, 
+            powerPreference: "high-performance",
+            canvas: document.createElement('canvas') 
+        });
+        
+        renderer.setClearColor(0x000102, 1.0);
+        renderer.domElement.id = 'webglCanvas';
+        document.body.appendChild(renderer.domElement);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        
+        // Стабильный DPR без сюрпризов
+        const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+        renderer.setPixelRatio(pixelRatio);
+
+        let isPointsMode = true;
+
+        function createParticleTexture() {
+            const size = 128; 
+            const canvas = document.createElement('canvas');
+            canvas.width = size; canvas.height = size;
+            const ctx = canvas.getContext('2d');
+            const gradient = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+            gradient.addColorStop(0, 'rgba(255,255,255,1.0)');
+            gradient.addColorStop(0.25, 'rgba(200,230,255,0.7)');
+            gradient.addColorStop(0.5, 'rgba(100,170,255,0.2)');
+            gradient.addColorStop(1, 'rgba(255,255,255,0.0)');
+            ctx.fillStyle = gradient; ctx.fillRect(0, 0, size, size);
+            return new THREE.CanvasTexture(canvas);
+        }
+        const particleTexture = createParticleTexture();
+
+        const pointsMaterialConfig = {
+            transparent: true,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+            depthTest: true
+        };
+
+        const meshGroup = new THREE.Group();
+        const pointsGroup = new THREE.Group();
+        scene.add(meshGroup, pointsGroup);
+
+        const allMaterials = [];
+
+        // Функция для вычисления железобетонного размера точек независимо от хостинга
+        function getViewportScale() {
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            // Пока экран горизонтальный или квадратный (w >= h), берем меньшую сторону (h).
+            // Как только экран становится вертикальным (w < h), фиксируем размер по высоте (h), 
+            // чтобы при дальнейшем сужении ширины масштаб не уменьшался.
+            const effectiveDim = w >= h ? Math.min(w, h) : h;
+            return effectiveDim * 0.0012;
+        }
+
+        // ==========================================
+        // ФОНОВЫЕ ЧАСТИЦЫ
+        // ==========================================
+        const galaxyParticleCount = 900;
+        const galaxyGeo = new THREE.BufferGeometry();
+        const galaxyPositions = new Float32Array(galaxyParticleCount * 3);
+        const galaxyScales = new Float32Array(galaxyParticleCount);
+
+        for (let i = 0; i < galaxyParticleCount; i++) {
+            const u = seededRandom(i * 1.5) * Math.PI * 2;
+            const r = Math.pow(seededRandom(i * 2.3), 0.6) * 4.2;
+            galaxyPositions[i * 3 + 0] = Math.cos(u) * r * 2.4;
+            galaxyPositions[i * 3 + 1] = (seededRandom(i * 3.7) - 0.5) * 1.2 - 0.1;
+            galaxyPositions[i * 3 + 2] = (seededRandom(i * 4.9) - 0.5) * 0.8 - 1.5;
+            galaxyScales[i] = seededRandom(i * 4.1);
+        }
+
+        galaxyGeo.setAttribute('position', new THREE.BufferAttribute(galaxyPositions, 3));
+        galaxyGeo.setAttribute('aSizeScale', new THREE.BufferAttribute(galaxyScales, 1));
+
+        const galaxyMat = new THREE.ShaderMaterial({
+            ...pointsMaterialConfig,
+            uniforms: {
+                uTexture: { value: particleTexture },
+                uViewportScale: { value: getViewportScale() },
+                uSize: { value: 3.5 },
+                uTime: { value: 0 }
+            },
+            vertexShader: `
+                uniform float uViewportScale, uSize, uTime;
+                attribute float aSizeScale;
+                varying float vAlpha;
+                void main() {
+                    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                    gl_Position = projectionMatrix * mvPosition;
+                    float dist = max(-mvPosition.z, 0.1);
+                    gl_PointSize = uSize * uViewportScale * (0.8 + aSizeScale * 0.7) / (0.4 + 0.08 * dist);
+                    vAlpha = 0.3 + 0.4 * aSizeScale;
+                }
+            `,
+            fragmentShader: `
+                uniform sampler2D uTexture;
+                varying float vAlpha;
+                void main() {
+                    vec4 tex = texture2D(uTexture, gl_PointCoord);
+                    if (tex.a < 0.01) discard;
+                    vec3 col = mix(vec3(0.1, 0.35, 0.7), vec3(0.7, 0.9, 1.0), tex.a);
+                    gl_FragColor = vec4(col, tex.a * vAlpha * 0.25);
+                }
+            `
+        });
+        allMaterials.push(galaxyMat);
+        scene.add(new THREE.Points(galaxyGeo, galaxyMat));
+
+        // ==========================================
+        // ЦВЕТОК
+        // ==========================================
+        const FLOWER_SCALE = 0.72;
+        meshGroup.scale.set(FLOWER_SCALE, FLOWER_SCALE, FLOWER_SCALE);
+        pointsGroup.scale.set(FLOWER_SCALE, FLOWER_SCALE, FLOWER_SCALE);
+
+        const FLOWER_Y_OFFSET = -0.55;
+        meshGroup.position.y = FLOWER_Y_OFFSET;
+        pointsGroup.position.y = FLOWER_Y_OFFSET;
+
+        const petalVertexPars = `
+            uniform float uTime;
+            uniform float uPhase;
+            uniform float uAmpFactor;
+            uniform float uFlexFactor;
+            uniform float uSCurveStrength;
+            uniform float uLayerTier;
+            varying vec3 vNormal;
+            varying vec3 vViewPosition;
+            varying vec2 vUv;
+            varying float vTier;
+            attribute float aSizeScale;
+            attribute vec3 aVolumetricOffset;
+        `;
+
+        const petalVertexDisplacement = `
+            vUv = uv;
+            vTier = uLayerTier;
+            vec3 pos = position;
+
+            float hMask = smoothstep(0.01, 1.0, vUv.y);
+            float vNorm = vUv.y; 
+            float uNorm = (vUv.x - 0.5) * 2.0;
+
+            float cupDeep = sin(vNorm * 3.14159 * 0.75) * 0.48 * uSCurveStrength;
+            float tipOut  = -pow(vNorm, 2.1) * 0.38 * uSCurveStrength;
+            float baseSCurve = cupDeep + tipOut;
+
+            float ruffleMask = smoothstep(0.1, 1.0, vNorm) * (0.3 + 0.7 * abs(uNorm));
+            float transverseSine = sin(uNorm * 12.56 + uPhase * 1.5) * 0.08 * ruffleMask;
+
+            float effectiveAmp = uAmpFactor * uFlexFactor;
+            float whip = pow(vNorm, 1.25) * effectiveAmp;
+            float wave1 = sin(uTime * 0.85 - vNorm * 3.8 + uPhase) * 0.35 * whip;
+            float wave2 = cos(uTime * 0.62 - vNorm * 5.2 + uPhase * 1.7) * 0.18 * whip;
+            float edgeDist = abs(vUv.x - 0.5) * 2.0;
+            float edgeFlutter = sin(uTime * 1.1 + vUv.x * 6.28 + uPhase) * 0.10 * edgeDist * whip;
+
+            pos.z += baseSCurve + transverseSine + (wave1 + wave2 + edgeFlutter) * hMask;
+            pos += aVolumetricOffset * (0.005 + 0.012 * smoothstep(0.0, 0.3, vNorm));
+        `;
+
+        function createPetalMeshMat(pSeed, amp, flex, sStr, tier) {
+            const mat = new THREE.ShaderMaterial({
+                uniforms: { 
+                    uTime: {value:0}, uPhase: {value:pSeed}, uAmpFactor: {value:amp}, 
+                    uFlexFactor: {value:flex}, uSCurveStrength: {value:sStr}, uLayerTier: {value:tier} 
+                },
+                vertexShader: `
+                    ${petalVertexPars}
+                    void main() {
+                        ${petalVertexDisplacement}
+                        vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+                        vViewPosition = -mvPosition.xyz;
+                        vNormal = normalize(normalMatrix * normal);
+                        gl_Position = projectionMatrix * mvPosition;
+                    }
+                `,
+                fragmentShader: `
+                    varying vec3 vNormal, vViewPosition;
+                    varying vec2 vUv;
+                    varying float vTier;
+                    void main() {
+                        vec3 N = gl_FrontFacing ? normalize(vNormal) : -normalize(vNormal);
+                        vec3 V = normalize(vViewPosition);
+                        float fresnel = pow(clamp(1.0 - abs(dot(N, V)), 0.0, 1.0), 1.5);
+                        float rimBoost = 1.0 + vTier * 0.6;
+                        vec3 color = mix(vec3(0.02, 0.05, 0.1), vec3(0.75, 0.9, 1.0), fresnel * 1.2 * rimBoost);
+                        gl_FragColor = vec4(color, 1.0);
+                    }
+                `,
+                side: THREE.DoubleSide, depthWrite: true, depthTest: true
+            });
+            allMaterials.push(mat); return mat;
+        }
+
+        function createPetalPointsMat(pSeed, amp, flex, sStr, tier) {
+            const mat = new THREE.ShaderMaterial({
+                ...pointsMaterialConfig,
+                uniforms: { 
+                    uTime: {value:0}, uPhase: {value:pSeed}, uAmpFactor: {value:amp}, 
+                    uFlexFactor: {value:flex}, uSCurveStrength: {value:sStr}, uLayerTier: {value:tier},
+                    uTexture: {value:particleTexture}, uViewportScale: {value:getViewportScale()}, uSize: {value: 2.2} 
+                },
+                vertexShader: `
+                    ${petalVertexPars}
+                    uniform float uViewportScale, uSize;
+                    varying float vAlpha, vFresnel, vHeight;
+                    void main() {
+                        ${petalVertexDisplacement}
+                        vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+                        gl_Position = projectionMatrix * mvPosition;
+                        float dist = max(-mvPosition.z, 0.1);
+
+                        vec3 N = normalize(normalMatrix * normal);
+                        vec3 V = normalize(-mvPosition.xyz);
+                        vFresnel = pow(clamp(1.0 - abs(dot(N, V)), 0.0, 1.0), 1.3);
+                        vHeight = vUv.y;
+
+                        float depthCompensation = 1.0 / (0.35 + 0.06 * dist);
+                        float tierScaleBonus = 1.0 + vTier * 0.2; 
+                        float sScale = (0.7 + aSizeScale * 0.5) * depthCompensation * tierScaleBonus; 
+                        gl_PointSize = uSize * uViewportScale * sScale;
+
+                        vAlpha = (0.2 + 0.5 * vFresnel) * (0.3 + 0.7 * smoothstep(0.0, 0.35, vUv.y));
+                    }
+                `,
+                fragmentShader: `
+                    uniform sampler2D uTexture;
+                    varying float vAlpha, vFresnel, vHeight;
+                    varying float vTier;
+                    void main() {
+                        vec4 tex = texture2D(uTexture, gl_PointCoord);
+                        if (tex.a < 0.01) discard;
+
+                        vec3 color = mix(vec3(0.04, 0.1, 0.2), vec3(0.7, 0.88, 1.0), vFresnel * 1.1);
+                        
+                        // Усиливаем видимость на периферии по vHeight (центр чистый, края ярче)
+                        float edgeGlow = smoothstep(0.2, 0.9, vHeight) * 1.5;
+                        float radialMultiplier = 1.0 + edgeGlow;
+
+                        float finalAlpha = tex.a * vAlpha * 0.20 * radialMultiplier;
+                        finalAlpha = finalAlpha / (0.45 + finalAlpha * 2.2);
+
+                        gl_FragColor = vec4(color, finalAlpha);
+                    }
+                `
+            });
+            allMaterials.push(mat); return mat;
+        }
+
+        const tentVertexPars = `uniform float uTime; attribute float aSeed; varying vec3 vNormal, vViewPosition; varying vec2 vUv;`;
+        const tentVertexDisplacement = `
+            vUv = uv; vec3 pos = position; float whip = pow(vUv.y, 1.3);
+            float t1 = uTime * 1.2 - pos.y * 1.5 + aSeed * 9.1;
+            float t2 = uTime * 0.9 - pos.y * 2.1 + aSeed * 4.3;
+            pos.x += (sin(t1) * 0.25 + cos(t2) * 0.12) * whip;
+            pos.z += (cos(t1 * 0.85) * 0.25 + sin(t2 * 1.1) * 0.12) * whip;
+        `;
+
+        const tentMeshMat = new THREE.ShaderMaterial({
+            uniforms: { uTime: {value:0} },
+            vertexShader: `${tentVertexPars} void main(){ ${tentVertexDisplacement} vec4 mv=modelViewMatrix*vec4(pos,1.); vViewPosition=-mv.xyz; vNormal=normalize(normalMatrix*normal); gl_Position=projectionMatrix*mv; }`,
+            fragmentShader: `
+                varying vec3 vNormal, vViewPosition;
+                varying vec2 vUv;
+                void main(){ 
+                    vec3 N = gl_FrontFacing ? normalize(vNormal) : -normalize(vNormal); 
+                    float fresnel = pow(clamp(1.0 - abs(dot(N, normalize(vViewPosition))), 0.0, 1.0), 1.2); 
+                    
+                    float baseFade = smoothstep(0.05, 0.3, vUv.y);
+                    float edgeFade = 1.0 - smoothstep(0.85, 1.0, vUv.y);
+                    float alpha = 0.5 * baseFade * edgeFade;
+                    
+                    vec3 baseColor = mix(vec3(0.06, 0.14, 0.25), vec3(0.5, 0.7, 0.9), fresnel * 1.1);
+                    vec3 tipColor = vec3(0.4, 0.7, 0.95);
+                    vec3 finalColor = mix(baseColor, tipColor, smoothstep(0.4, 0.85, vUv.y));
+
+                    gl_FragColor = vec4(finalColor, alpha); 
+                }
+            `,
+            side: THREE.DoubleSide, depthWrite: false, transparent: true
+        });
+        allMaterials.push(tentMeshMat);
+
+        const tentPointsMat = new THREE.ShaderMaterial({
+            ...pointsMaterialConfig,
+            depthTest: false,
+            uniforms: { 
+                uTime: { value: 0 }, 
+                uTexture: { value: particleTexture }, 
+                uViewportScale: { value: getViewportScale() }, 
+                uSize: { value: 2.0 } 
+            },
+            vertexShader: `
+                ${tentVertexPars} 
+                uniform float uViewportScale, uSize; 
+                varying float vFresnel;
+                void main(){ 
+                    ${tentVertexDisplacement} 
+                    vec4 mv = modelViewMatrix * vec4(pos, 1.0);
+                    float dist = max(-mv.z, 0.1); 
+                    gl_PointSize = uSize * uViewportScale * (0.85 / (0.4 + 0.06 * dist));
+                    vFresnel = pow(clamp(1.0 - abs(dot(normalize(normalMatrix * normal), normalize(-mv.xyz))), 0.0, 1.0), 1.2); 
+                    gl_Position = projectionMatrix * mv; 
+                }
+            `,
+            fragmentShader: `
+                uniform sampler2D uTexture; 
+                varying float vFresnel; 
+                varying vec2 vUv;
+                void main(){ 
+                    vec4 tex = texture2D(uTexture, gl_PointCoord); 
+                    if(tex.a < 0.02) discard; 
+
+                    float baseFade = smoothstep(0.05, 0.3, vUv.y);
+                    float edgeFade = 1.0 - smoothstep(0.85, 1.0, vUv.y);
+                    float tipGlow = smoothstep(0.1, 0.85, vUv.y) * 1.4;
+                    
+                    float a = tex.a * (0.12 + tipGlow * 0.2) * baseFade * edgeFade; 
+                    a = a / (0.45 + a * 1.2); 
+
+                    vec3 baseColor = mix(vec3(0.1, 0.22, 0.38), vec3(0.7, 0.85, 1.0), vFresnel * 1.1);
+                    vec3 finalColor = mix(baseColor, vec3(0.4, 0.7, 0.95), smoothstep(0.4, 0.85, vUv.y));
+
+                    gl_FragColor = vec4(finalColor, a); 
+                }
+            `,
+        });
+        allMaterials.push(tentPointsMat);
+
+        const stamenVertexPars = `uniform float uTime; attribute float aSeed; varying vec2 vUv; varying vec3 vFresnelColor;`;
+        const stamenVertexDisplacement = `
+            vUv = uv; vec3 pos = position; float whip = pow(vUv.y, 1.2);
+            float t = uTime * 1.4 - pos.y * 1.8 + aSeed * 6.5;
+            pos.x += sin(t) * 0.12 * whip; pos.z += cos(t * 1.1) * 0.12 * whip;
+        `;
+
+        const stamenMeshMat = new THREE.ShaderMaterial({
+            uniforms: { uTime: {value:0} },
+            vertexShader: `${stamenVertexPars} void main(){ ${stamenVertexDisplacement} vec4 mv=modelViewMatrix*vec4(pos,1.); 
+            float fresnel=pow(clamp(1.-abs(dot(normalize(normalMatrix*normal),normalize(-mv.xyz))),0.,1.),1.3);
+            vFresnelColor=mix(vec3(0.08, 0.18, 0.3), vec3(0.7, 0.85, 1.0), fresnel*1.2); gl_Position=projectionMatrix*mv; }`,
+            fragmentShader: `
+                varying vec2 vUv; 
+                varying vec3 vFresnelColor; 
+                void main(){ 
+                    float baseFade = smoothstep(0.02, 0.2, vUv.y);
+                    float edgeFade = 1.0 - smoothstep(0.85, 1.0, vUv.y);
+                    float alpha = 0.48 * baseFade * edgeFade;
+                    vec3 finalCol = mix(vFresnelColor, vec3(0.75, 0.92, 1.0), smoothstep(0.7, 1.0, vUv.y));
+                    gl_FragColor = vec4(finalCol, alpha); 
+                }
+            `,
+            side: THREE.DoubleSide, transparent: true, depthWrite: false
+        });
+        allMaterials.push(stamenMeshMat);
+
+        const stamenPointsMat = new THREE.ShaderMaterial({
+            ...pointsMaterialConfig,
+            depthTest: false,
+            uniforms: { 
+                uTime: { value: 0 }, 
+                uTexture: { value: particleTexture }, 
+                uViewportScale: { value: getViewportScale() }, 
+                uSize: { value: 3.8 } 
+            },
+            vertexShader: `
+                ${stamenVertexPars} 
+                uniform float uViewportScale, uSize; 
+                void main(){ 
+                    ${stamenVertexDisplacement} 
+                    vec4 mv = modelViewMatrix * vec4(pos, 1.0); 
+                    float fresnel = pow(clamp(1.0 - abs(dot(normalize(normalMatrix * normal), normalize(-mv.xyz))), 0.0, 1.0), 1.3);
+                    vFresnelColor = mix(vec3(0.09, 0.22, 0.36), vec3(0.75, 0.9, 1.0), fresnel * 1.2); 
+                    float dist = max(-mv.z, 0.1); 
+                    gl_PointSize = uSize * uViewportScale * (0.85 / (0.4 + 0.06 * dist)); 
+                    gl_Position = projectionMatrix * mv; 
+                }
+            `,
+            fragmentShader: `
+                uniform sampler2D uTexture; 
+                varying vec2 vUv; 
+                varying vec3 vFresnelColor; 
+                void main(){ 
+                    vec4 tex = texture2D(uTexture, gl_PointCoord); 
+                    if(tex.a < 0.02) discard; 
+
+                    float baseFade = smoothstep(0.02, 0.2, vUv.y);
+                    float edgeFade = 1.0 - smoothstep(0.85, 1.0, vUv.y);
+                    float tipGlow = smoothstep(0.5, 0.98, vUv.y) * 2.0; 
+                    
+                    float a = tex.a * (0.06 + tipGlow * 0.15) * baseFade * edgeFade; 
+                    a = a / (0.5 + a * 1.5); 
+
+                    vec3 finalColor = mix(vFresnelColor, vec3(0.9, 0.96, 1.0), smoothstep(0.6, 1.0, vUv.y));
+
+                    gl_FragColor = vec4(finalColor, a); 
+                }
+            `,
+        });
+        allMaterials.push(stamenPointsMat);
+
+        const recepVertexPars = `uniform float uTime; varying vec3 vNormal, vViewPosition;`;
+        const recepVertexDisplacement = `
+            vec3 norm = normalize(position);
+            float wave = (sin(norm.x*2.5+uTime*0.9)*cos(norm.y*2.0+uTime*0.7) + cos(norm.z*2.8-uTime*0.8)*sin(norm.y*3.1+uTime*0.5)) * 0.06;
+            vec3 pos = position + norm * wave; pos.y *= 0.55;
+        `;
+
+        const recepMeshMat = new THREE.ShaderMaterial({
+            uniforms: { uTime: {value:0} },
+            vertexShader: `${recepVertexPars} void main(){ ${recepVertexDisplacement} vec4 mv=modelViewMatrix*vec4(pos,1.); vViewPosition=-mv.xyz;
+            vec3 tN=normal; tN.y/=0.55; vNormal=normalize(normalMatrix*tN); gl_Position=projectionMatrix*mv; }`,
+            fragmentShader: `varying vec3 vNormal, vViewPosition; void main(){ vec3 N = normalize(vNormal); float fresnel = pow(clamp(1.-abs(dot(N, normalize(vViewPosition))),0.,1.), 2.0); gl_FragColor = vec4(mix(vec3(0.02, 0.05, 0.1), vec3(0.6, 0.75, 0.95), fresnel), 0.8); }`,
+            transparent: true
+        });
+        allMaterials.push(recepMeshMat);
+
+        const recepPointsMat = new THREE.ShaderMaterial({
+            ...pointsMaterialConfig,
+            uniforms: { uTime: {value:0}, uTexture: {value:particleTexture}, uViewportScale: {value:getViewportScale()}, uSize: {value: 2.0} },
+            vertexShader: `
+                ${recepVertexPars} uniform float uViewportScale, uSize; void main(){ ${recepVertexDisplacement} vec4 mv=modelViewMatrix*vec4(pos,1.); gl_Position=projectionMatrix*mv;
+                float dist=max(-mv.z, 0.1); gl_PointSize=uSize*uViewportScale*(0.85 / (0.35 + 0.06 * dist));
+                vec3 tN=normal; tN.y/=0.55; vNormal=normalize(normalMatrix*tN); vViewPosition=-mv.xyz; }`,
+            fragmentShader: `uniform sampler2D uTexture; varying vec3 vNormal, vViewPosition; void main(){ vec4 tex=texture2D(uTexture,gl_PointCoord); if(tex.a<0.02)discard; vec3 N = normalize(vNormal); float fresnel = pow(clamp(1.-abs(dot(N, normalize(vViewPosition))),0.,1.), 2.0); float a = tex.a * 0.18; a = a / (0.5 + a * 2.0); gl_FragColor = vec4(mix(vec3(0.03, 0.08, 0.16), vec3(0.6, 0.75, 0.95), fresnel), a); }`
+        });
+        allMaterials.push(recepPointsMat);
+
+        function createPetalGeometries(length, maxWidth, seed) {
+            const segX = 100, segY = 100;
+            const baseGeo = new THREE.PlaneGeometry(maxWidth, length, segX, segY);
+            baseGeo.translate(0, length / 2, 0);
+            const posAttr = baseGeo.attributes.position;
+            const baseCount = posAttr.count;
+
+            for (let i = 0; i < baseCount; i++) {
+                let x = posAttr.getX(i), y = posAttr.getY(i);
+                let u = x / (maxWidth / 2);
+                let arch = Math.sqrt(Math.max(0.0, 1.0 - Math.pow(u * 0.95, 2)));
+                let organicEdge = noise(u, seed) * 0.12 * Math.pow(Math.abs(u), 0.3);
+                let maxAllowedHeight = length * (0.35 + 0.65 * arch) + organicEdge;
+                if (y > maxAllowedHeight || isNaN(y)) y = maxAllowedHeight;
+                let realV = y / length;
+                x *= (0.22 + 0.78 * Math.pow(Math.max(0.0, realV), 0.42) * (1.0 + Math.sin(u * 3.5 + seed) * 0.05));
+                let cupCross = Math.cos(u * Math.PI * 0.5) * 0.14 * Math.sin(realV * Math.PI * 0.85);
+                if (isNaN(x)) x = 0;
+                if (isNaN(y)) y = 0;
+                if (isNaN(cupCross)) cupCross = 0;
+                posAttr.setXYZ(i, x, y, cupCross);
+            }
+            baseGeo.computeVertexNormals();
+
+            const meshGeo = baseGeo.clone();
+            const normAttr = baseGeo.attributes.normal;
+            const uvAttr = baseGeo.attributes.uv;
+            
+            const multiplier = 3; 
+            const totalPoints = baseCount * multiplier;
+
+            const pPositions = new Float32Array(totalPoints * 3);
+            const pNormals = new Float32Array(totalPoints * 3);
+            const pUvs = new Float32Array(totalPoints * 2);
+            const pSizeScales = new Float32Array(totalPoints);
+            const pVolOffsets = new Float32Array(totalPoints * 3);
+
+            for (let i = 0; i < baseCount; i++) {
+                const bx = posAttr.getX(i), by = posAttr.getY(i), bz = posAttr.getZ(i);
+                const nx = normAttr.getX(i), ny = normAttr.getY(i), nz = normAttr.getZ(i);
+                const uvU = uvAttr.getX(i), uvV = uvAttr.getY(i);
+
+                for (let m = 0; m < multiplier; m++) {
+                    const pIdx = i * multiplier + m;
+                    const subSeed = seed + pIdx * 0.137;
+                    const offsetX = (seededRandom(subSeed) - 0.5) * (maxWidth / segX) * 0.8;
+                    const offsetY = (seededRandom(subSeed + 1.0) - 0.5) * (length / segY) * 0.8;
+
+                    pPositions[pIdx * 3 + 0] = isNaN(bx + offsetX) ? bx : bx + offsetX;
+                    pPositions[pIdx * 3 + 1] = isNaN(by + offsetY) ? by : by + offsetY;
+                    pPositions[pIdx * 3 + 2] = isNaN(bz) ? 0 : bz;
+                    pNormals[pIdx * 3 + 0] = isNaN(nx) ? 0 : nx;
+                    pNormals[pIdx * 3 + 1] = isNaN(ny) ? 1 : ny;
+                    pNormals[pIdx * 3 + 2] = isNaN(nz) ? 0 : nz;
+                    pUvs[pIdx * 2 + 0] = isNaN(uvU) ? 0 : uvU;
+                    pUvs[pIdx * 2 + 1] = isNaN(uvV) ? 0 : uvV;
+                    pSizeScales[pIdx] = Math.max(0.0, seededRandom(subSeed + 2.0));
+                    pVolOffsets[pIdx * 3 + 0] = (seededRandom(subSeed + 3.0) - 0.5) * 0.015;
+                    pVolOffsets[pIdx * 3 + 1] = (seededRandom(subSeed + 4.0) - 0.5) * 0.015;
+                    pVolOffsets[pIdx * 3 + 2] = (seededRandom(subSeed + 5.0) - 0.5) * 0.025;
+                }
+            }
+
+            const pointsGeo = new THREE.BufferGeometry();
+            pointsGeo.setAttribute('position', new THREE.BufferAttribute(pPositions, 3));
+            pointsGeo.setAttribute('normal', new THREE.BufferAttribute(pNormals, 3));
+            pointsGeo.setAttribute('uv', new THREE.BufferAttribute(pUvs, 2));
+            pointsGeo.setAttribute('aSizeScale', new THREE.BufferAttribute(pSizeScales, 1));
+            pointsGeo.setAttribute('aVolumetricOffset', new THREE.BufferAttribute(pVolOffsets, 3));
+
+            const dummyScales = new Float32Array(baseCount).fill(1.0);
+            const dummyOffsets = new Float32Array(baseCount * 3).fill(0.0);
+            meshGeo.setAttribute('aSizeScale', new THREE.BufferAttribute(dummyScales, 1));
+            meshGeo.setAttribute('aVolumetricOffset', new THREE.BufferAttribute(dummyOffsets, 3));
+
+            return { meshGeo, pointsGeo };
+        }
+
+        function addPetalRing(config = {}) {
+            const count = config.count || 8;
+            const radius = config.radius || 0.5;
+            const baseAmp = config.ampFactor !== undefined ? config.ampFactor : 1.0;
+            const baseLen = config.length || 2.6;
+            const baseWidth = config.maxWidth || 2.2;
+            const tier = config.tier || 0.0;
+
+            for (let i = 0; i < count; i++) {
+                const seed = (config.layerSeed || 1.0) * 137.5 + i * 7.93;
+                const isFeatured = seededRandom(seed * 1.1) > 0.62;
+                const scaleBoost = isFeatured ? (1.22 + seededRandom(seed * 2.3) * 0.15) : (0.95 + seededRandom(seed * 3.1) * 0.16);
+                const finalLength = baseLen * scaleBoost;
+                const finalWidth = baseWidth * scaleBoost;
+                const flexFactor = isFeatured ? (1.25 + seededRandom(seed * 4.2) * 0.20) : (0.90 + seededRandom(seed * 5.1) * 0.20);
+                const sCurveProfile = 0.85 + seededRandom(seed * 6.3) * 0.45;
+
+                const { meshGeo, pointsGeo } = createPetalGeometries(finalLength, finalWidth, seed);
+                const angleOffset = (seededRandom(seed * 7.4) - 0.5) * (Math.PI / count) * 0.55;
+                const angle = (i / count) * Math.PI * 2 + (config.phaseOffset || 0) + angleOffset;
+                const baseTilt = (config.baseTilt || 0.6) + (seededRandom(seed * 8.2) - 0.5) * 0.14;
+                const rollVar = (seededRandom(seed * 9.1) - 0.5) * 0.12;
+                const finalRadius = radius + (seededRandom(seed * 10.3) - 0.5) * 0.08;
+
+                const meshMat = createPetalMeshMat(seed * 0.5, baseAmp, flexFactor, sCurveProfile, tier);
+                const pointsMat = createPetalPointsMat(seed * 0.5, baseAmp, flexFactor, sCurveProfile, tier);
+
+                const createInstance = (group, mat, geo, isPoints) => {
+                    const obj = isPoints ? new THREE.Points(geo, mat) : new THREE.Mesh(geo, mat);
+                    const pivot = new THREE.Object3D();
+                    pivot.rotation.y = angle;
+                    pivot.position.y = config.yOffset || 0;
+                    obj.position.z = finalRadius;
+                    obj.rotation.x = baseTilt;
+                    obj.rotation.z = rollVar;
+                    pivot.add(obj);
+                    group.add(pivot);
+                };
+
+                createInstance(meshGroup, meshMat, meshGeo, false);
+                createInstance(pointsGroup, pointsMat, pointsGeo, true);
+            }
+        }
+
+        const RECEPTACLE_RADIUS = 0.48;
+        addPetalRing({ count: 8, radius: RECEPTACLE_RADIUS * 0.82, yOffset: -0.22, baseTilt: 0.20, length: 2.1, maxWidth: 1.6, layerSeed: 1, ampFactor: 0.40, tier: 0.0 });
+        addPetalRing({ count: 12, radius: RECEPTACLE_RADIUS * 1.05, yOffset: -0.28, baseTilt: 0.55, length: 2.5, maxWidth: 2.0, phaseOffset: Math.PI / 12, layerSeed: 2, ampFactor: 0.75, tier: 1.0 });
+        addPetalRing({ count: 16, radius: RECEPTACLE_RADIUS * 1.32, yOffset: -0.36, baseTilt: 0.92, length: 3.0, maxWidth: 2.5, phaseOffset: Math.PI / 16, layerSeed: 3, ampFactor: 1.20, tier: 2.0 });
+
+        function createSymmetricTentacleGeo(height, baseRadius, seed, flareAmount) {
+            const points = [];
+            const segments = 90;
+            for (let s = 0; s <= segments; s++) {
+                const t = s / segments;
+                points.push(new THREE.Vector3(Math.pow(t, 0.7)*flareAmount, t*height, Math.sin(t*Math.PI*1.6+seed)*0.15*t));
+            }
+            const path = new THREE.CatmullRomCurve3(points);
+            const radialSegments = 16;
+            const geo = new THREE.BufferGeometry();
+            const posArray = [], normArray = [], uvArray = [], seedArray = [];
+
+            for (let i = 0; i <= segments; i++) {
+                const v = i / segments;
+                const point = path.getPointAt(v);
+                const radius = baseRadius * Math.max(0.08, Math.pow(1.0 - v * 0.88, 1.1));
+                for (let j = 0; j <= radialSegments; j++) {
+                    const u = j / radialSegments;
+                    const theta = u * Math.PI * 2;
+                    const nx = Math.cos(theta), nz = Math.sin(theta);
+                    posArray.push(point.x + nx * radius, point.y, point.z + nz * radius);
+                    normArray.push(nx, 0, nz);
+                    uvArray.push(u, v);
+                    seedArray.push(seed);
+                }
+            }
+
+            const indices = [];
+            for (let i = 0; i < segments; i++) {
+                for (let j = 0; j < radialSegments; j++) {
+                    const a = i * (radialSegments + 1) + j;
+                    const b = (i + 1) * (radialSegments + 1) + j;
+                    const c = (i + 1) * (radialSegments + 1) + (j + 1);
+                    const d = i * (radialSegments + 1) + (j + 1);
+                    indices.push(a, b, d, b, c, d);
+                }
+            }
+            geo.setIndex(indices);
+            geo.setAttribute('position', new THREE.Float32BufferAttribute(posArray, 3));
+            geo.setAttribute('normal', new THREE.Float32BufferAttribute(normArray, 3));
+            geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvArray, 2));
+            geo.setAttribute('aSeed', new THREE.Float32BufferAttribute(seedArray, 1));
+            return geo;
+        }
+
+        const outerTentacleCount = 8;
+        const outerRadius = 0.42;
+        const baseHeight = 5.2;
+
+        for (let i = 0; i < outerTentacleCount; i++) {
+            const seed = i * 2.71 + 1.2;
+            const height = baseHeight + Math.sin(seed) * 0.4;
+            const geo = createSymmetricTentacleGeo(height, 0.07, seed, 0.95);
+            const angle = (i / outerTentacleCount) * Math.PI * 2;
+
+            const createT = (gr, mat, isP) => {
+                const m = isP ? new THREE.Points(geo, mat) : new THREE.Mesh(geo, mat);
+                m.position.set(Math.sin(angle)*outerRadius, -0.25, Math.cos(angle)*outerRadius);
+                m.rotation.y = angle; gr.add(m);
+            };
+            createT(meshGroup, tentMeshMat, false);
+            createT(pointsGroup, tentPointsMat, true);
+        }
+
+        const coreHeights = [baseHeight * 1.34, baseHeight * 1.27, baseHeight * 1.39];
+        for (let i = 0; i < 3; i++) {
+            const seed = i * 5.13 + 8.4;
+            const height = coreHeights[i];
+            const geo = createSymmetricTentacleGeo(height, 0.075, seed, 0.45);
+            const angle = (i / 3) * Math.PI * 2 + 0.5;
+            const coreRadius = 0.12;
+
+            const createT = (gr, mat, isP) => {
+                const m = isP ? new THREE.Points(geo, mat) : new THREE.Mesh(geo, mat);
+                m.position.set(Math.sin(angle)*coreRadius, -0.25, Math.cos(angle)*coreRadius);
+                m.rotation.y = angle; gr.add(m);
+            };
+            createT(meshGroup, tentMeshMat, false);
+            createT(pointsGroup, tentPointsMat, true);
+        }
+
+        const stamenCount = 24;
+        for (let i = 0; i < stamenCount; i++) {
+            const seed = i * 3.82 + 1.1;
+            const height = 3.0 + (Math.sin(seed * 2.2) * 0.5 + 0.5) * 1.10;
+            const filamentGeo = new THREE.CylinderGeometry(0.01, 0.026, height, 16, 40, true);
+            filamentGeo.translate(0, height / 2, 0);
+
+            const antherGeo = new THREE.SphereGeometry(0.06, 16, 16);
+            antherGeo.scale(1.0, 1.5, 0.85);
+            antherGeo.translate(0, height, 0);
+
+            const posCount1 = filamentGeo.attributes.position.count;
+            const posCount2 = antherGeo.attributes.position.count;
+            const mergedPos = new Float32Array((posCount1 + posCount2) * 3);
+            mergedPos.set(filamentGeo.attributes.position.array, 0);
+            mergedPos.set(antherGeo.attributes.position.array, posCount1 * 3);
+
+            const mergedNorm = new Float32Array((posCount1 + posCount2) * 3);
+            mergedNorm.set(filamentGeo.attributes.normal.array, 0);
+            mergedNorm.set(antherGeo.attributes.normal.array, posCount1 * 3);
+
+            const mergedUv = new Float32Array((posCount1 + posCount2) * 2);
+            mergedUv.set(filamentGeo.attributes.uv.array, 0);
+            mergedUv.set(antherGeo.attributes.uv.array, posCount1 * 2);
+
+            const mergedGeo = new THREE.BufferGeometry();
+            mergedGeo.setAttribute('position', new THREE.BufferAttribute(mergedPos, 3));
+            mergedGeo.setAttribute('normal', new THREE.BufferAttribute(mergedNorm, 3));
+            mergedGeo.setAttribute('uv', new THREE.BufferAttribute(mergedUv, 2));
+            mergedGeo.setAttribute('aSeed', new THREE.BufferAttribute(new Float32Array(posCount1 + posCount2).fill(seed), 1));
+
+            const angle = (i / stamenCount) * Math.PI * 2 + (Math.sin(seed) * 0.15);
+            const r = 0.28 + (Math.sin(seed * 1.9) * 0.5 + 0.5) * 0.25;
+
+            const createS = (gr, mat, isP) => {
+                const m = isP ? new THREE.Points(mergedGeo, mat) : new THREE.Mesh(mergedGeo, mat);
+                m.position.set(Math.sin(angle)*r, -0.25, Math.cos(angle)*r);
+                m.rotation.z = Math.sin(seed * 1.4) * 0.30;
+                m.rotation.x = Math.cos(seed * 1.8) * 0.30;
+                m.rotation.y = angle;
+                gr.add(m);
+            };
+            createS(meshGroup, stamenMeshMat, false);
+            createS(pointsGroup, stamenPointsMat, true);
+        }
+
+        const receptacleGeo = new THREE.SphereGeometry(RECEPTACLE_RADIUS, 48, 48);
+        const recepMeshObj = new THREE.Mesh(receptacleGeo, recepMeshMat);
+        recepMeshObj.position.y = -0.25;
+        meshGroup.add(recepMeshObj);
+
+        const recepPointsObj = new THREE.Points(receptacleGeo, recepPointsMat);
+        recepPointsObj.position.y = -0.25;
+        pointsGroup.add(recepPointsObj);
+
+        // ==========================================
+        // UI & TOGGLE LOGIC
+        // ==========================================
+        const btnToggle = document.getElementById('btnToggle');
+        function updateMode() {
+            meshGroup.visible = !isPointsMode; 
+            pointsGroup.visible = isPointsMode;
+            btnToggle.classList.toggle('active', isPointsMode);
+            btnToggle.innerText = isPointsMode ? 'POINTS MODE (M)' : 'MESH MODE (M)';
+        }
+        btnToggle.addEventListener('click', () => { isPointsMode = !isPointsMode; updateMode(); });
+        window.addEventListener('keydown', (e) => { if (e.key.toLowerCase() === 'm' || e.key === 'ь') { isPointsMode = !isPointsMode; updateMode(); } });
+        updateMode();
+
+        // ==========================================
+        // ANIMATION LOOP
+        // ==========================================
+        const clock = new THREE.Clock();
+        function animate() {
+            requestAnimationFrame(animate);
+            const t = clock.getElapsedTime();
+
+            allMaterials.forEach(mat => {
+                if (mat.uniforms.uTime) mat.uniforms.uTime.value = t;
+            });
+
+            meshGroup.rotation.y = t * 0.03;
+            pointsGroup.rotation.y = t * 0.03;
+
+            renderer.render(scene, camera);
+        }
+
+        window.onload = animate;
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight; 
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            
+            const pr = Math.min(window.devicePixelRatio || 1, 2);
+            renderer.setPixelRatio(pr);
+            
+            const newViewportScale = getViewportScale();
+            allMaterials.forEach(mat => { 
+                if(mat.uniforms.uViewportScale) mat.uniforms.uViewportScale.value = newViewportScale; 
+            });
+            resizeHud();
+        });
+
+        resizeHud();
+    </script>
+</body>
+</html>
