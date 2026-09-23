@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dark Peony Hub - Layout Assembly</title>
+    <title>Dark Peony Hub - Layout Assembly with Morphing</title>
     <style>
         * { box-sizing: border-box; }
         body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000102; font-family: sans-serif; }
@@ -87,7 +87,7 @@
     <div id="ui">
         <button id="btnToggle" class="btn">POINTS MODE (M)</button>
     </div>
-    <div id="ui-overlay">Dark Peony Hub • Layout Assembly</div>
+    <div id="ui-overlay">Dark Peony Hub • Morphing Assembly</div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
 
@@ -203,7 +203,6 @@
         document.body.appendChild(renderer.domElement);
         renderer.setSize(window.innerWidth, window.innerHeight);
         
-        // Стабильный DPR без сюрпризов
         const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
         renderer.setPixelRatio(pixelRatio);
 
@@ -237,13 +236,10 @@
 
         const allMaterials = [];
 
-        // Функция для вычисления железобетонного размера точек независимо от хостинга
+        // Стабильный размер точек с защитой вертикального режима из версии 005[cite: 6]
         function getViewportScale() {
             const w = window.innerWidth;
             const h = window.innerHeight;
-            // Пока экран горизонтальный или квадратный (w >= h), берем меньшую сторону (h).
-            // Как только экран становится вертикальным (w < h), фиксируем размер по высоте (h), 
-            // чтобы при дальнейшем сужении ширины масштаб не уменьшался.
             const effectiveDim = w >= h ? Math.min(w, h) : h;
             return effectiveDim * 0.0012;
         }
@@ -274,14 +270,17 @@
                 uTexture: { value: particleTexture },
                 uViewportScale: { value: getViewportScale() },
                 uSize: { value: 3.5 },
-                uTime: { value: 0 }
+                uTime: { value: 0 },
+                uProgress: { value: 0.0 }
             },
             vertexShader: `
-                uniform float uViewportScale, uSize, uTime;
+                uniform float uViewportScale, uSize, uTime, uProgress;
                 attribute float aSizeScale;
                 varying float vAlpha;
                 void main() {
-                    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                    vec3 pos = position;
+                    pos.y += sin(uTime * 0.5 + pos.x) * 0.1 * uProgress;
+                    vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
                     gl_Position = projectionMatrix * mvPosition;
                     float dist = max(-mvPosition.z, 0.1);
                     gl_PointSize = uSize * uViewportScale * (0.8 + aSizeScale * 0.7) / (0.4 + 0.08 * dist);
@@ -303,7 +302,7 @@
         scene.add(new THREE.Points(galaxyGeo, galaxyMat));
 
         // ==========================================
-        // ЦВЕТОК
+        // ЦВЕТОК (С ИНТЕГРИРОВАННЫМ uProgress МОРФИНГОМ)
         // ==========================================
         const FLOWER_SCALE = 0.72;
         meshGroup.scale.set(FLOWER_SCALE, FLOWER_SCALE, FLOWER_SCALE);
@@ -320,6 +319,7 @@
             uniform float uFlexFactor;
             uniform float uSCurveStrength;
             uniform float uLayerTier;
+            uniform float uProgress;
             varying vec3 vNormal;
             varying vec3 vViewPosition;
             varying vec2 vUv;
@@ -342,24 +342,26 @@
             float baseSCurve = cupDeep + tipOut;
 
             float ruffleMask = smoothstep(0.1, 1.0, vNorm) * (0.3 + 0.7 * abs(uNorm));
-            float transverseSine = sin(uNorm * 12.56 + uPhase * 1.5) * 0.08 * ruffleMask;
+            float transverseSine = sin(uNorm * 12.56 + uPhase * 1.5 + uProgress * 2.0) * 0.08 * ruffleMask;
 
-            float effectiveAmp = uAmpFactor * uFlexFactor;
+            float effectiveAmp = uAmpFactor * uFlexFactor * (0.8 + 0.2 * uProgress);
             float whip = pow(vNorm, 1.25) * effectiveAmp;
             float wave1 = sin(uTime * 0.85 - vNorm * 3.8 + uPhase) * 0.35 * whip;
             float wave2 = cos(uTime * 0.62 - vNorm * 5.2 + uPhase * 1.7) * 0.18 * whip;
             float edgeDist = abs(vUv.x - 0.5) * 2.0;
             float edgeFlutter = sin(uTime * 1.1 + vUv.x * 6.28 + uPhase) * 0.10 * edgeDist * whip;
 
-            pos.z += baseSCurve + transverseSine + (wave1 + wave2 + edgeFlutter) * hMask;
-            pos += aVolumetricOffset * (0.005 + 0.012 * smoothstep(0.0, 0.3, vNorm));
+            // Морфинг позиции по uProgress
+            pos.z += (baseSCurve + transverseSine + (wave1 + wave2 + edgeFlutter) * hMask) * (0.5 + 0.5 * uProgress);
+            pos += aVolumetricOffset * (0.005 + 0.012 * smoothstep(0.0, 0.3, vNorm)) * uProgress;
         `;
 
         function createPetalMeshMat(pSeed, amp, flex, sStr, tier) {
             const mat = new THREE.ShaderMaterial({
                 uniforms: { 
                     uTime: {value:0}, uPhase: {value:pSeed}, uAmpFactor: {value:amp}, 
-                    uFlexFactor: {value:flex}, uSCurveStrength: {value:sStr}, uLayerTier: {value:tier} 
+                    uFlexFactor: {value:flex}, uSCurveStrength: {value:sStr}, uLayerTier: {value:tier},
+                    uProgress: {value: 0.0} 
                 },
                 vertexShader: `
                     ${petalVertexPars}
@@ -395,7 +397,8 @@
                 uniforms: { 
                     uTime: {value:0}, uPhase: {value:pSeed}, uAmpFactor: {value:amp}, 
                     uFlexFactor: {value:flex}, uSCurveStrength: {value:sStr}, uLayerTier: {value:tier},
-                    uTexture: {value:particleTexture}, uViewportScale: {value:getViewportScale()}, uSize: {value: 2.2} 
+                    uTexture: {value:particleTexture}, uViewportScale: {value:getViewportScale()}, uSize: {value: 2.2},
+                    uProgress: {value: 0.0} 
                 },
                 vertexShader: `
                     ${petalVertexPars}
@@ -429,8 +432,6 @@
                         if (tex.a < 0.01) discard;
 
                         vec3 color = mix(vec3(0.04, 0.1, 0.2), vec3(0.7, 0.88, 1.0), vFresnel * 1.1);
-                        
-                        // Усиливаем видимость на периферии по vHeight (центр чистый, края ярче)
                         float edgeGlow = smoothstep(0.2, 0.9, vHeight) * 1.5;
                         float radialMultiplier = 1.0 + edgeGlow;
 
@@ -444,17 +445,17 @@
             allMaterials.push(mat); return mat;
         }
 
-        const tentVertexPars = `uniform float uTime; attribute float aSeed; varying vec3 vNormal, vViewPosition; varying vec2 vUv;`;
+        const tentVertexPars = `uniform float uTime; uniform float uProgress; attribute float aSeed; varying vec3 vNormal, vViewPosition; varying vec2 vUv;`;
         const tentVertexDisplacement = `
             vUv = uv; vec3 pos = position; float whip = pow(vUv.y, 1.3);
             float t1 = uTime * 1.2 - pos.y * 1.5 + aSeed * 9.1;
             float t2 = uTime * 0.9 - pos.y * 2.1 + aSeed * 4.3;
-            pos.x += (sin(t1) * 0.25 + cos(t2) * 0.12) * whip;
-            pos.z += (cos(t1 * 0.85) * 0.25 + sin(t2 * 1.1) * 0.12) * whip;
+            pos.x += (sin(t1) * 0.25 + cos(t2) * 0.12) * whip * uProgress;
+            pos.z += (cos(t1 * 0.85) * 0.25 + sin(t2 * 1.1) * 0.12) * whip * uProgress;
         `;
 
         const tentMeshMat = new THREE.ShaderMaterial({
-            uniforms: { uTime: {value:0} },
+            uniforms: { uTime: {value:0}, uProgress: {value:0.0} },
             vertexShader: `${tentVertexPars} void main(){ ${tentVertexDisplacement} vec4 mv=modelViewMatrix*vec4(pos,1.); vViewPosition=-mv.xyz; vNormal=normalize(normalMatrix*normal); gl_Position=projectionMatrix*mv; }`,
             fragmentShader: `
                 varying vec3 vNormal, vViewPosition;
@@ -462,15 +463,12 @@
                 void main(){ 
                     vec3 N = gl_FrontFacing ? normalize(vNormal) : -normalize(vNormal); 
                     float fresnel = pow(clamp(1.0 - abs(dot(N, normalize(vViewPosition))), 0.0, 1.0), 1.2); 
-                    
                     float baseFade = smoothstep(0.05, 0.3, vUv.y);
                     float edgeFade = 1.0 - smoothstep(0.85, 1.0, vUv.y);
                     float alpha = 0.5 * baseFade * edgeFade;
-                    
                     vec3 baseColor = mix(vec3(0.06, 0.14, 0.25), vec3(0.5, 0.7, 0.9), fresnel * 1.1);
                     vec3 tipColor = vec3(0.4, 0.7, 0.95);
                     vec3 finalColor = mix(baseColor, tipColor, smoothstep(0.4, 0.85, vUv.y));
-
                     gl_FragColor = vec4(finalColor, alpha); 
                 }
             `,
@@ -483,6 +481,7 @@
             depthTest: false,
             uniforms: { 
                 uTime: { value: 0 }, 
+                uProgress: { value: 0.0 },
                 uTexture: { value: particleTexture }, 
                 uViewportScale: { value: getViewportScale() }, 
                 uSize: { value: 2.0 } 
@@ -507,32 +506,29 @@
                 void main(){ 
                     vec4 tex = texture2D(uTexture, gl_PointCoord); 
                     if(tex.a < 0.02) discard; 
-
                     float baseFade = smoothstep(0.05, 0.3, vUv.y);
                     float edgeFade = 1.0 - smoothstep(0.85, 1.0, vUv.y);
                     float tipGlow = smoothstep(0.1, 0.85, vUv.y) * 1.4;
-                    
                     float a = tex.a * (0.12 + tipGlow * 0.2) * baseFade * edgeFade; 
                     a = a / (0.45 + a * 1.2); 
-
                     vec3 baseColor = mix(vec3(0.1, 0.22, 0.38), vec3(0.7, 0.85, 1.0), vFresnel * 1.1);
                     vec3 finalColor = mix(baseColor, vec3(0.4, 0.7, 0.95), smoothstep(0.4, 0.85, vUv.y));
-
                     gl_FragColor = vec4(finalColor, a); 
                 }
             `,
         });
         allMaterials.push(tentPointsMat);
 
-        const stamenVertexPars = `uniform float uTime; attribute float aSeed; varying vec2 vUv; varying vec3 vFresnelColor;`;
+        const stamenVertexPars = `uniform float uTime; uniform float uProgress; attribute float aSeed; varying vec2 vUv; varying vec3 vFresnelColor;`;
         const stamenVertexDisplacement = `
             vUv = uv; vec3 pos = position; float whip = pow(vUv.y, 1.2);
             float t = uTime * 1.4 - pos.y * 1.8 + aSeed * 6.5;
-            pos.x += sin(t) * 0.12 * whip; pos.z += cos(t * 1.1) * 0.12 * whip;
+            pos.x += sin(t) * 0.12 * whip * uProgress; 
+            pos.z += cos(t * 1.1) * 0.12 * whip * uProgress;
         `;
 
         const stamenMeshMat = new THREE.ShaderMaterial({
-            uniforms: { uTime: {value:0} },
+            uniforms: { uTime: {value:0}, uProgress: {value:0.0} },
             vertexShader: `${stamenVertexPars} void main(){ ${stamenVertexDisplacement} vec4 mv=modelViewMatrix*vec4(pos,1.); 
             float fresnel=pow(clamp(1.-abs(dot(normalize(normalMatrix*normal),normalize(-mv.xyz))),0.,1.),1.3);
             vFresnelColor=mix(vec3(0.08, 0.18, 0.3), vec3(0.7, 0.85, 1.0), fresnel*1.2); gl_Position=projectionMatrix*mv; }`,
@@ -556,6 +552,7 @@
             depthTest: false,
             uniforms: { 
                 uTime: { value: 0 }, 
+                uProgress: { value: 0.0 },
                 uTexture: { value: particleTexture }, 
                 uViewportScale: { value: getViewportScale() }, 
                 uSize: { value: 3.8 } 
@@ -580,31 +577,27 @@
                 void main(){ 
                     vec4 tex = texture2D(uTexture, gl_PointCoord); 
                     if(tex.a < 0.02) discard; 
-
                     float baseFade = smoothstep(0.02, 0.2, vUv.y);
                     float edgeFade = 1.0 - smoothstep(0.85, 1.0, vUv.y);
                     float tipGlow = smoothstep(0.5, 0.98, vUv.y) * 2.0; 
-                    
                     float a = tex.a * (0.06 + tipGlow * 0.15) * baseFade * edgeFade; 
                     a = a / (0.5 + a * 1.5); 
-
                     vec3 finalColor = mix(vFresnelColor, vec3(0.9, 0.96, 1.0), smoothstep(0.6, 1.0, vUv.y));
-
                     gl_FragColor = vec4(finalColor, a); 
                 }
             `,
         });
         allMaterials.push(stamenPointsMat);
 
-        const recepVertexPars = `uniform float uTime; varying vec3 vNormal, vViewPosition;`;
+        const recepVertexPars = `uniform float uTime; uniform float uProgress; varying vec3 vNormal, vViewPosition;`;
         const recepVertexDisplacement = `
             vec3 norm = normalize(position);
-            float wave = (sin(norm.x*2.5+uTime*0.9)*cos(norm.y*2.0+uTime*0.7) + cos(norm.z*2.8-uTime*0.8)*sin(norm.y*3.1+uTime*0.5)) * 0.06;
+            float wave = (sin(norm.x*2.5+uTime*0.9)*cos(norm.y*2.0+uTime*0.7) + cos(norm.z*2.8-uTime*0.8)*sin(norm.y*3.1+uTime*0.5)) * 0.06 * uProgress;
             vec3 pos = position + norm * wave; pos.y *= 0.55;
         `;
 
         const recepMeshMat = new THREE.ShaderMaterial({
-            uniforms: { uTime: {value:0} },
+            uniforms: { uTime: {value:0}, uProgress: {value:0.0} },
             vertexShader: `${recepVertexPars} void main(){ ${recepVertexDisplacement} vec4 mv=modelViewMatrix*vec4(pos,1.); vViewPosition=-mv.xyz;
             vec3 tN=normal; tN.y/=0.55; vNormal=normalize(normalMatrix*tN); gl_Position=projectionMatrix*mv; }`,
             fragmentShader: `varying vec3 vNormal, vViewPosition; void main(){ vec3 N = normalize(vNormal); float fresnel = pow(clamp(1.-abs(dot(N, normalize(vViewPosition))),0.,1.), 2.0); gl_FragColor = vec4(mix(vec3(0.02, 0.05, 0.1), vec3(0.6, 0.75, 0.95), fresnel), 0.8); }`,
@@ -614,7 +607,7 @@
 
         const recepPointsMat = new THREE.ShaderMaterial({
             ...pointsMaterialConfig,
-            uniforms: { uTime: {value:0}, uTexture: {value:particleTexture}, uViewportScale: {value:getViewportScale()}, uSize: {value: 2.0} },
+            uniforms: { uTime: {value:0}, uProgress: {value:0.0}, uTexture: {value:particleTexture}, uViewportScale: {value:getViewportScale()}, uSize: {value: 2.0} },
             vertexShader: `
                 ${recepVertexPars} uniform float uViewportScale, uSize; void main(){ ${recepVertexDisplacement} vec4 mv=modelViewMatrix*vec4(pos,1.); gl_Position=projectionMatrix*mv;
                 float dist=max(-mv.z, 0.1); gl_PointSize=uSize*uViewportScale*(0.85 / (0.35 + 0.06 * dist));
@@ -901,15 +894,19 @@
         updateMode();
 
         // ==========================================
-        // ANIMATION LOOP
+        // ANIMATION LOOP WITH MORPHING PROGRESS
         // ==========================================
         const clock = new THREE.Clock();
         function animate() {
             requestAnimationFrame(animate);
             const t = clock.getElapsedTime();
 
+            // Плавное вычисление uProgress (например, цикличный морфинг от 0 до 1 и обратно)
+            const morphProgress = Math.sin(t * 0.5) * 0.5 + 0.5;
+
             allMaterials.forEach(mat => {
                 if (mat.uniforms.uTime) mat.uniforms.uTime.value = t;
+                if (mat.uniforms.uProgress) mat.uniforms.uProgress.value = morphProgress;
             });
 
             meshGroup.rotation.y = t * 0.03;
