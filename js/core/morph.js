@@ -31,8 +31,10 @@
         uMeshMode: { value: 0 },
         uMorphSched: { value: new THREE.Vector4() },  // leaveStart, leaveSpread, arriveStart, arriveSpread
         uMorphSched2: { value: new THREE.Vector4() }, // assembleInvert, meshRevealLag, meshFade, -
-        uFlowA: { value: new THREE.Vector4() },       // flowAmp, flowFreq, detailAmp, flowSpeed
-        uFlowB: { value: new THREE.Vector4() },       // warp, jitter, precession, shiver
+        uFlowA: { value: new THREE.Vector4() },       // flowAmp, flowFreq, -, flowSpeed
+        uFlowB: { value: new THREE.Vector4() },       // -, jitter, precession, shiver
+        uClumpA: { value: new THREE.Vector4() },      // strength, freq, filaments, maxDist
+        uClumpB: { value: new THREE.Vector4() },      // fraction, speed, -, -
         uSwirlA: { value: new THREE.Vector4() },      // size, sizeMin, alpha, visibleFraction
         uSwirlColor: { value: new THREE.Vector3() }
     };
@@ -41,8 +43,10 @@
         const c = DP.config.morph;
         shared.uMorphSched.value.set(c.leaveStart, c.leaveSpread, c.arriveStart, c.arriveSpread);
         shared.uMorphSched2.value.set(c.assemble === 'outside-in' ? 0 : 1, c.meshRevealLag, c.meshFade, 0);
-        shared.uFlowA.value.set(c.flowAmp, c.flowFreq, c.detailAmp, c.flowSpeed);
-        shared.uFlowB.value.set(c.flowWarp, c.jitter, c.precession, c.shiver);
+        shared.uFlowA.value.set(c.flowAmp, c.flowFreq, 0, c.flowSpeed);
+        shared.uFlowB.value.set(0, c.jitter, c.precession, c.shiver);
+        shared.uClumpA.value.set(c.clumpStrength, c.clumpFreq, c.clumpFilaments, c.clumpMaxDist);
+        shared.uClumpB.value.set(c.clumpFraction, c.clumpSpeed, 0, 0);
         shared.uSwirlA.value.set(c.swirlSize, c.swirlSizeMin, c.swirlAlpha, c.swirlVisible);
         shared.uSwirlColor.value.fromArray(c.swirlColor);
     }
@@ -121,6 +125,61 @@
             m = m * m;
             return 42.0 * dot(m * m, vec4(dot(p0, x0), dot(p1, x1), dot(p2, x2), dot(p3, x3)));
         }
+        // Та же сетка, но возвращает градиент (xyz) и значение (w) — для стягивания к поверхностям.
+        vec4 dpSnoiseGrad(vec3 v) {
+            const vec2 C = vec2(1.0 / 6.0, 1.0 / 3.0);
+            const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+            vec3 i = floor(v + dot(v, C.yyy));
+            vec3 x0 = v - i + dot(i, C.xxx);
+            vec3 g = step(x0.yzx, x0.xyz);
+            vec3 l = 1.0 - g;
+            vec3 i1 = min(g.xyz, l.zxy);
+            vec3 i2 = max(g.xyz, l.zxy);
+            vec3 x1 = x0 - i1 + C.xxx;
+            vec3 x2 = x0 - i2 + C.yyy;
+            vec3 x3 = x0 - D.yyy;
+            i = dpMod289(i);
+            vec4 p = dpPermute(dpPermute(dpPermute(
+                i.z + vec4(0.0, i1.z, i2.z, 1.0)) +
+                i.y + vec4(0.0, i1.y, i2.y, 1.0)) +
+                i.x + vec4(0.0, i1.x, i2.x, 1.0));
+            float n_ = 0.142857142857;
+            vec3 ns = n_ * D.wyz - D.xzx;
+            vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+            vec4 x_ = floor(j * ns.z);
+            vec4 y_ = floor(j - 7.0 * x_);
+            vec4 x = x_ * ns.x + ns.yyyy;
+            vec4 y = y_ * ns.x + ns.yyyy;
+            vec4 h = 1.0 - abs(x) - abs(y);
+            vec4 b0 = vec4(x.xy, y.xy);
+            vec4 b1 = vec4(x.zw, y.zw);
+            vec4 s0 = floor(b0) * 2.0 + 1.0;
+            vec4 s1 = floor(b1) * 2.0 + 1.0;
+            vec4 sh = -step(h, vec4(0.0));
+            vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy;
+            vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww;
+            vec3 p0 = vec3(a0.xy, h.x);
+            vec3 p1 = vec3(a0.zw, h.y);
+            vec3 p2 = vec3(a1.xy, h.z);
+            vec3 p3 = vec3(a1.zw, h.w);
+            vec4 norm = dpTaylorInvSqrt(vec4(dot(p0, p0), dot(p1, p1), dot(p2, p2), dot(p3, p3)));
+            p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
+            vec4 m = max(0.5 - vec4(dot(x0, x0), dot(x1, x1), dot(x2, x2), dot(x3, x3)), 0.0);
+            vec4 m2 = m * m;
+            vec4 m4 = m2 * m2;
+            vec4 pdotx = vec4(dot(p0, x0), dot(p1, x1), dot(p2, x2), dot(p3, x3));
+            vec4 temp = m2 * m * pdotx;
+            vec3 grad = -8.0 * (temp.x * x0 + temp.y * x1 + temp.z * x2 + temp.w * x3);
+            grad += m4.x * p0 + m4.y * p1 + m4.z * p2 + m4.w * p3;
+            return vec4(grad * 105.0, 105.0 * dot(m4, pdotx));
+        }
+        // Шаг к ближайшей нулевой поверхности поля (ньютоновский), ограниченный maxd.
+        vec3 dpSnapToSurface(vec3 q, float maxd) {
+            vec4 n = dpSnoiseGrad(q);
+            vec3 d = -n.w * n.xyz / (dot(n.xyz, n.xyz) + 1e-3);
+            float len = length(d);
+            return len > maxd ? d * (maxd / len) : d;
+        }
         vec3 dpNoise3(vec3 q) {
             return vec3(dpSnoise(q), dpSnoise(q + vec3(31.4, 7.1, 5.3)), dpSnoise(q + vec3(-11.7, 23.9, -3.1)));
         }
@@ -132,6 +191,8 @@
         uniform mat4 uStageMatrixInv;
         uniform vec4 uFlowA;
         uniform vec4 uFlowB;
+        uniform vec4 uClumpA;
+        uniform vec4 uClumpB;
         uniform vec4 uSwirlA;
         uniform vec3 uSwirlColor;
         attribute vec4 aMorphOut;
@@ -211,15 +272,26 @@
             p += vec3(sin(t * 37.0 + ph * 11.0), sin(t * 41.0 + ph * 7.0), cos(t * 33.0 + ph * 13.0)) * uFlowB.w * shiver;
 
             if (w > 0.0005) {
-                // Поле течения (как Turbulence/Flow в Particular): считается в точке «идеального пути»,
-                // одинаковой у соседей — поэтому частицы собираются в ленты и складки, а не в туман.
+                // Всё считается в точке «идеального пути», одинаковой у соседей и у обеих фигур пары.
                 vec3 np = vec3(sin(thPath) * rMid, yMid, cos(thPath) * rMid);
+
+                // 1) Поле течения — крупные изгибы вихря.
                 vec3 q = np * uFlowA.y + vec3(0.0, -t * uFlowA.w, t * uFlowA.w * 0.37);
-                vec3 d1 = dpNoise3(q);
-                vec3 q2 = q * 2.3 + d1 * uFlowB.x + vec3(12.0, 3.0, -7.0);   // искажение координат — складки
-                vec3 d2 = dpNoise3(q2);
+                vec3 flow = dpNoise3(q) * uFlowA.x;
+
+                // 2) Стягивание: частицы притягиваются к нулевой поверхности поля шума (перепонки),
+                //    а второе поле стягивает их к линиям пересечения (жгуты). Плотность растёт —
+                //    в режиме Add частицы светятся за счёт скучивания.
+                vec3 base = np + flow;
+                vec3 qc = base * uClumpA.y + vec3(0.0, -t * uClumpB.y, 0.0);
+                vec3 s1 = dpSnapToSurface(qc, uClumpA.w);
+                vec3 s2 = dpSnapToSurface(qc + s1 + vec3(19.1, -7.3, 4.7), uClumpA.w) * uClumpA.z;
+                float clumped = step(h3, uClumpB.x);  // остальные — свободная пыль вокруг
+                vec3 snap = (s1 + s2) / uClumpA.y * uClumpA.x * clumped;
+
                 vec3 grain = vec3(sin(t * 1.7 + ph * 3.0), sin(t * 1.3 + ph * 5.0), cos(t * 1.9 + ph * 4.0));
-                p += (d1 * uFlowA.x + d2 * uFlowA.z + grain * uFlowB.y) * w;
+                float wc = smoothstep(0.0, 0.6, w);   // стягивание набирает силу раньше середины пути
+                p += flow * w + snap * wc + grain * uFlowB.y * w;
                 p.xz += vec2(sin(t * 0.63), cos(t * 0.47)) * uFlowB.z * w;
             }
 
@@ -228,7 +300,7 @@
             float visible = step(h3, uSwirlA.w);
             vDpW = w;
             vDpSwirlColor = mix(uSwirlColor * (0.7 + 0.5 * h1), vec3(0.9, 0.97, 1.0), spark * 0.7);
-            vDpSwirlAlpha = uSwirlA.z * (0.35 + 2.2 * spark) * mix(0.12, 1.0, visible);
+            vDpSwirlAlpha = uSwirlA.z * (0.6 + 1.8 * spark) * mix(0.25, 1.0, visible);
             dpSizeMul = mix(1.0, uSwirlA.x * mix(uSwirlA.y, 1.0, h1 * h1), w);
             if (extra > 0.5) vDpFade *= outRole ? 1.0 - smoothstep(0.3, 0.5, s) : smoothstep(0.5, 0.7, s);
 
