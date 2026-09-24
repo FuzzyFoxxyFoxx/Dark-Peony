@@ -97,7 +97,7 @@
             float env = 0.45 + 0.55 * (0.6 * sin(u * (5.0 + 3.0 * rC) - uTime * (1.1 + 0.6 * rA) + aSeed * 3.0)
                                      + 0.4 * sin(u * (9.0 + 4.0 * rA) - uTime * (1.7 + 0.5 * rC) + aSeed * 1.3)) ;
             env *= 0.8 + 0.5 * rC;
-            float amp = aRuf.x * env;
+            float amp = aRuf.x * env * (0.15 + 0.85 * smoothstep(0.03, 0.45, u));   // у крепления рюши слабые
             float acr = pow(uv.x, 2.0) * amp * 0.3 * sin(ph);
             float zz = pow(uv.x, 1.8) * amp * sin(ph + 0.5);
             float ca = cos(aRuf.z), sa = sin(aRuf.z);
@@ -294,7 +294,7 @@
     // ruffle = false — плоская лента без рюшей (рюши рисует шейдер и гонит их волной по кромке).
     function ribbonPoint(u, v, p, ruffle = true) {
         const W = p.width * Math.sin(Math.PI * (0.2 + 0.8 * u));
-        const ph = u * p.len * p.ruffleK + p.seed;
+        const ph = ruffleWarp(u) * p.len * p.ruffleK + p.seed;
         const rA = ruffle ? p.ruffleAmp * (W / p.width) : 0;
         // Волнистый край длиннее прямого: волна в плоскости ленты + рюши из плоскости в той же фазе
         // (без сдвига фаз край не закручивается штопором, а складывается гармошкой).
@@ -310,10 +310,13 @@
         ];
     }
 
+    // У основания волна рюшей длиннее (вдвое), к середине — обычная: фаза растёт медленнее у крепления.
+    function ruffleWarp(u) { return u - 0.5 * u * (1 - u) * (1 - u); }
+
     // Параметры оборки в точке ленты для шейдера: амплитуда, фаза, угол скручивания.
     function ribbonRuffle(u, p) {
         const W = p.width * Math.sin(Math.PI * (0.2 + 0.8 * u));
-        return [p.ruffleAmp * (W / p.width), u * p.len * p.ruffleK + p.seed, p.twist * u];
+        return [p.ruffleAmp * (W / p.width), ruffleWarp(u) * p.len * p.ruffleK + p.seed, p.twist * u];
     }
 
     // Точки ленты — как у лепестков пиона: ровная сетка, у каждого узла несколько точек
@@ -537,7 +540,7 @@
             const angle = (i / RIBBON_COUNT) * Math.PI * 2;
             const matrix = matrixOf((pivot, obj) => {
                 pivot.rotation.y = angle;
-                obj.position.set(0, innerY + 0.3, innerR * 0.28);
+                obj.position.set(0, innerY + 0.16, innerR * 0.28);   // ниже: не просвечивает сквозь голову
                 obj.rotation.y = -Math.PI / 2;       // прямой край к оси, волнистый — наружу
             });
             ribbons.push({ pointsGeo, meshGeo, matrix });
@@ -746,7 +749,7 @@
         })));
 
         // ---------- ЛЕНТЫ ----------
-        const ribbonAlpha = 'smoothstep(0.04, 0.2, vUv.y) * (1.0 - 0.6 * smoothstep(0.85, 1.0, vUv.y))';
+        const ribbonAlpha = 'smoothstep(0.03, 0.3, vUv.y) * (1.0 - 0.6 * smoothstep(0.85, 1.0, vUv.y))';   // выходит из «тени» под куполом
         const ribbonMesh = add(new THREE.ShaderMaterial({
             uniforms: Object.assign({ uTime: S.uTime }, morphUniforms),
             vertexShader: `${ribbonPars} ${G.meshVertex} void main(){ ${ribbonDisplacement} vDpOrder = aOrder;
@@ -774,7 +777,12 @@
                     vec3 N = normalize(normalMatrix * normal);
                     vFresnel = pow(clamp(1.0 - abs(dot(N, normalize(-mv.xyz))), 0.0, 1.0), 1.3);
                     gl_PointSize = uSize * uViewportScale * (0.7 + aSizeScale * 0.5) * (1.0 + 0.35 * smoothstep(0.7, 1.0, uv.x)) / (0.35 + 0.06 * dist);
-                    vAlpha = (0.2 + 0.5 * vFresnel) * ${ribbonAlpha};
+                    // Выравнивание видимости: лента, повёрнутая к камере ребром, иначе складывает все точки
+                    // в одну яркую линию (add) и «выпрыгивает» вперёд. Плотность точек на экране растёт как
+                    // 1/|cos| угла к взгляду — гасим прозрачность обратно; лицевые ленты чуть ярче прежнего.
+                    float facing = abs(dot(N, normalize(-mv.xyz)));
+                    float comp = mix(0.18, 1.0, smoothstep(0.04, 0.55, facing));
+                    vAlpha = (0.34 + 0.2 * vFresnel) * comp * ${ribbonAlpha};
                     dpMorphFinish();
                 }
             `,
@@ -786,10 +794,10 @@
                 void main() {
                     vec4 tex = texture2D(uTexture, gl_PointCoord);
                     if (tex.a < 0.01) discard;
-                    vec3 color = mix(vec3(0.04, 0.1, 0.2), vec3(0.7, 0.88, 1.0), vFresnel * 1.1);
+                    vec3 color = mix(vec3(0.04, 0.1, 0.2), vec3(0.7, 0.88, 1.0), 0.45 + 0.6 * vFresnel);
                     // Края светятся сильнее, чем у лепестков пиона: волнистая кромка и немного — прямой край.
-                    float edgeGlow = smoothstep(0.55, 1.0, vUv.x) * 3.0 + (1.0 - smoothstep(0.0, 0.08, vUv.x)) * 1.0;
-                    float a = tex.a * vAlpha * 0.7 * (1.0 + edgeGlow);
+                    float edgeGlow = smoothstep(0.55, 1.0, vUv.x) * 3.0 + (1.0 - smoothstep(0.0, 0.12, vUv.x)) * 1.8;
+                    float a = tex.a * vAlpha * 1.2 * (1.0 + edgeGlow);
                     a = a / (0.45 + a * 2.2) * vDepthK;
                     gl_FragColor = dpMorphColor(color, a, tex.a);
                 }
