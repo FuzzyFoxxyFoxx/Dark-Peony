@@ -38,7 +38,7 @@
         uClumpC: { value: new THREE.Vector4() },      // levels, fibers, dustAlpha, ramp
         uTrail: { value: new THREE.Vector4() },       // lag (с), длина хвоста - 1, затухание, ширина разгона w
         uSwirlA: { value: new THREE.Vector4() },      // size, sizeMin, alpha, visibleFraction
-        uSwirlB: { value: new THREE.Vector4() },      // leaveGlow, swirlBlend, swirlTint, -
+        uSwirlB: { value: new THREE.Vector4() },      // leaveGlow, swirlBlend, swirlTint, swirlLook
         uTwist: { value: new THREE.Vector4() },       // перекрутов за оборот, скорость проворота, центр сечения r, y
         uTwist2: { value: new THREE.Vector4() },      // сжатие по высоте, режим нитей (0/1), -, -
         uSwirlColor: { value: new THREE.Vector3() }
@@ -53,7 +53,7 @@
         const rc = c.ringInner + (c.ringOuter - c.ringInner) * c.ringPeak;
         shared.uTwist.value.set(c.twistPerTurn, c.twistSpeed, rc, c.ringY);
         shared.uTwist2.value.set(c.twistSquash, c.threadCell > 0 ? 1 : 0, 0, 0);
-        shared.uSwirlB.value.set(c.leaveGlow, c.swirlBlend, c.swirlTint, 0);
+        shared.uSwirlB.value.set(c.leaveGlow, c.swirlBlend, c.swirlTint, c.swirlLook);
         shared.uClumpA.value.set(c.clumpStrength, c.clumpFreq, c.clumpFilaments, c.clumpMaxDist);
         // Поля вращаются вместе с вихрем: fieldSpin — доля пиковой угловой скорости частиц.
         const meanTravel = 0.5 * (c.minTravel + c.maxTravel);
@@ -356,7 +356,7 @@
             vDpW = w;
             // Яркость и цвет вихря частица набирает только глубоко в вихре: пока лепесток
             // срывается, частица остаётся такой же, какой была на цветке (без «проявления сверху»).
-            vDpWA = pow(w, uSwirlB.y);
+            vDpWA = pow(w, uSwirlB.y) * uSwirlB.w;   // swirlLook: насколько частица в полёте меняет свой вид
             vDpSwirlColor = mix(uSwirlColor * (0.7 + 0.5 * h1), vec3(0.9, 0.97, 1.0), spark * 0.7);
             vDpSwirlAlpha = uSwirlA.z * (0.6 + 1.8 * spark) * mix(0.25, 1.0, visible) * mix(uClumpC.z, 1.0, clumped)
                 * (1.0 - uTrail.z * rank / max(uTrail.y, 1.0));   // хвост к концу тускнеет
@@ -552,12 +552,14 @@
             const ax = P.pa.rest[ja], ay = P.pa.rest[ja + 1], az = P.pa.rest[ja + 2];
             const bx = P.pb.rest[jb], by = P.pb.rest[jb + 1], bz = P.pb.rest[jb + 2];
             const seed = U.seededRandom(k * 0.618 + 0.37);
-            const rnd = U.seededRandom(k * 1.319 + 5.1);
             const orderA = U.clamp(P.pa.order[P.la], 0, 1);
             const orderB = U.clamp(P.pb.order[P.lb], 0, 1);
             const keyB = insideOut ? 1 - orderB : orderB;
             const L = c.leaveStart + c.leaveSpread * orderA;
-            const target = c.arriveStart + c.arriveSpread * keyB + (rnd - 0.5) * c.travelJitter;
+            // Разброс времени прилёта — плавная функция места, а не случайность каждой частицы:
+            // соседи летят синхронно, и поверхность сохраняет рисунок (иначе смаз вдоль пути).
+            const smooth = 0.5 * Math.sin(bx * 2.3 + by * 1.1) * Math.sin(bz * 1.9 - by * 1.7);
+            const target = c.arriveStart + c.arriveSpread * keyB + smooth * c.travelJitter;
             const D = U.clamp(target - L, c.minTravel, c.maxTravel);
 
             // Середина пути — НЕПРЕРЫВНОЕ отображение цветка в кольцо: соседи на цветке остаются
