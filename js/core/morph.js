@@ -32,7 +32,7 @@
         uMorphSched: { value: new THREE.Vector4() },  // leaveStart, leaveSpread, arriveStart, arriveSpread
         uMorphSched2: { value: new THREE.Vector4() }, // assembleInvert, meshRevealLag, meshFade, -
         uFlowA: { value: new THREE.Vector4() },       // flowAmp, flowFreq, flowDetailAmp, flowSpeed
-        uFlowB: { value: new THREE.Vector4() },       // flowDetailFreq, jitter, precession, shiver
+        uFlowB: { value: new THREE.Vector4() },       // flowDetailFreq, fieldDelay, poseBlend, precession
         uClumpA: { value: new THREE.Vector4() },      // strength, freq, filaments, maxDist
         uClumpB: { value: new THREE.Vector4() },      // fraction, speed, spin (рад/с), shear
         uClumpC: { value: new THREE.Vector4() },      // levels, fibers, dustAlpha, ramp
@@ -49,7 +49,7 @@
         shared.uMorphSched.value.set(c.leaveStart, c.leaveSpread, c.arriveStart, c.arriveSpread);
         shared.uMorphSched2.value.set(c.assemble === 'outside-in' ? 0 : 1, c.meshRevealLag, c.meshFade, 0);
         shared.uFlowA.value.set(c.flowAmp, c.flowFreq, c.flowDetailAmp, c.flowSpeed);
-        shared.uFlowB.value.set(c.flowDetailFreq, c.jitter, c.precession, c.shiver);
+        shared.uFlowB.value.set(c.flowDetailFreq, c.fieldDelay, c.poseBlend, c.precession);
         const rc = c.ringInner + (c.ringOuter - c.ringInner) * c.ringPeak;
         shared.uTwist.value.set(c.twistPerTurn, c.twistSpeed, rc, c.ringY);
         shared.uTwist2.value.set(c.twistSquash, c.threadCell > 0 ? 1 : 0, 0, 0);
@@ -269,6 +269,13 @@
             float w = smoothstep(0.0, uTrail.w, s) * smoothstep(0.0, uTrail.w, 1.0 - s);
             float g = s * s * (3.0 - 2.0 * s);            // плавный разгон и торможение по углу
 
+            // Прогресс поворота от ближайшего конца пути: 0 — на месте, 1 — в середине вихря.
+            // Сначала частица плавно уходит по кругу, и лишь по мере поворота среда «сопротивляется»:
+            // поле нарастает с задержкой (fieldDelay) и так же раньше гаснет перед посадкой.
+            float gp = 2.0 * min(g, 1.0 - g);
+            float wf = smoothstep(uFlowB.y, 1.0, gp);         // сила поля
+            float wp = smoothstep(0.0, uFlowB.z, gp);         // переход с видимой позы на траекторию
+
             // Фигура может изгибать точки своим шейдером (щупальца, лепестки), и видимое положение
             // отличается от сырой геометрии, по которой планировщик посчитал середину пути.
             // Переносим эту разницу на середину пути — иначе частица летит к «неизогнутому» месту
@@ -280,7 +287,7 @@
             float dTh = dpAzimuth(cur) - thRest;
             dTh -= 6.2831853 * floor((dTh + 3.14159265) / 6.2831853);
             float thPath = outRole ? thRest + delta * g : thRest - delta * (1.0 - g);
-            float th = thPath + dTh * (1.0 - w);
+            float th = thPath + dTh * (1.0 - wp);
 
             // Перекрут ленты: сечение кольца поворачивается вокруг своей средней линии по ходу
             // вращения (uTwist.x раз за оборот) и медленно проворачивается во времени — плоская
@@ -293,18 +300,13 @@
                 rMid = max(uTwist.z + off.x, 0.15);
                 yMid = uTwist.w + off.y;
             }
-            float r = mix(length(cur.xz), rMid, w);
-            float y = mix(cur.y, yMid, w);
+            float r = mix(length(cur.xz), rMid, wp);
+            float y = mix(cur.y, yMid, wp);
             vec3 p = vec3(sin(th) * r, y, cos(th) * r);
 
             float h1 = dpHash(seed * 91.7);
             float h2 = dpHash(seed * 53.3 + 1.7);
             float h3 = dpHash(seed * 17.9 + 4.1);
-            float ph = seed * 6.2831853;
-
-            // Дрожь перед отрывом — «песок» начинает шевелиться.
-            float shiver = outRole ? smoothstep(L - 0.9, L, t) * (1.0 - w) : 0.0;
-            p += vec3(sin(t * 37.0 + ph * 11.0), sin(t * 41.0 + ph * 7.0), cos(t * 33.0 + ph * 13.0)) * uFlowB.w * shiver;
 
             float clumped = step(h3, uClumpB.x);  // остальные — свободная пыль вокруг
             if (w > 0.0005) {
@@ -318,10 +320,8 @@
                 //    и перекрещиваются, а не сливаются в сплошную пелену.
                 float tid = dpHash(rMid * 37.1 + yMid * 91.3) * uTwist2.y;  // только в режиме нитей
                 vec3 q2 = np * uFlowB.x + vec3(te * uFlowA.w * 0.6, 7.3, -te * uFlowA.w) + tid * 40.0;
-                p += (dpNoise3(q) * uFlowA.x + dpNoise3(q2) * uFlowA.z) * w;
-                vec3 grain = vec3(sin(te * 1.7 + ph * 3.0), sin(te * 1.3 + ph * 5.0), cos(te * 1.9 + ph * 4.0));
-                p += grain * uFlowB.y * w;
-                p.xz += vec2(sin(te * 0.63), cos(te * 0.47)) * uFlowB.z * w;
+                p += (dpNoise3(q) * uFlowA.x + dpNoise3(q2) * uFlowA.z) * wf;
+                p.xz += vec2(sin(te * 0.63), cos(te * 0.47)) * uFlowB.w * wf;
 
                 // 2) Стягивание в жгуты (сейчас выключено: clumpStrength = 0 — давало хаос).
                 if (uClumpA.x > 0.0) {
