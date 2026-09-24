@@ -22,6 +22,8 @@
     const RIBBON_COUNT = 6;       // ленты
     const TENTACLE_COUNT = 12;    // длинные щупальца
     const STAMENS_PER_GAP = 5;    // коротких «тычинок» между соседними лентами
+    // Какие части медузы показывать по умолчанию (доводим по частям; '' — все). ?parts= в адресе важнее.
+    const DEFAULT_PARTS = 'bell,skirt';
     const FRINGE_COUNT = 0;       // короткие реснички по краю купола (выкл.: давали хаос из точек у края)
 
     const ORDER_ANCHOR = new THREE.Vector3(0, 0.95, 0); // вершина купола: распадается последней
@@ -846,7 +848,7 @@
             const place = (group, obj, matrix) => { obj.matrixAutoUpdate = false; obj.matrix.copy(matrix); group.add(obj); };
 
             // ?parts=bell,skirt,ribbons,tentacles,stamens — показать только эти части (для доработки по частям).
-            const partsParam = DP.params.get('parts');
+            const partsParam = DP.params.get('parts') || DEFAULT_PARTS;
             const show = (k) => !partsParam || partsParam.split(',').indexOf(k) >= 0;
 
             if (show('bell')) data.bells.forEach(b => {
