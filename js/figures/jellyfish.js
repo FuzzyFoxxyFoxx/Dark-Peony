@@ -531,10 +531,10 @@
             const seed = i * 3.71 + 0.9;
             const p = {
                 seed,
-                len: 1.6 + seededRandom(seed * 2.1) * 0.35,
-                width: 0.42 + seededRandom(seed * 3.3) * 0.1,
-                ruffleK: 16 + seededRandom(seed * 4.7) * 4,
-                ruffleAmp: 0.12,
+                len: 1.92 + seededRandom(seed * 2.1) * 0.42,
+                width: 0.36 + seededRandom(seed * 3.3) * 0.085,
+                ruffleK: 18 + seededRandom(seed * 4.7) * 4,
+                ruffleAmp: 0.19,
                 twist: (seededRandom(seed * 5.9) - 0.5) * 0.5,
                 splay: 0.05 + seededRandom(seed * 6.7) * 0.08
             };
@@ -784,7 +784,7 @@
                     // 1/|cos| угла к взгляду — гасим прозрачность обратно; лицевые ленты чуть ярче прежнего.
                     float facing = abs(dot(N, normalize(-mv.xyz)));
                     float comp = mix(0.18, 1.0, smoothstep(0.04, 0.55, facing));
-                    vAlpha = (0.34 + 0.2 * vFresnel) * comp * ${ribbonAlpha};
+                    vAlpha = (0.14 + 0.75 * vFresnel) * comp * ${ribbonAlpha};   // френель как у лепестков
                     dpMorphFinish();
                 }
             `,
@@ -796,7 +796,7 @@
                 void main() {
                     vec4 tex = texture2D(uTexture, gl_PointCoord);
                     if (tex.a < 0.01) discard;
-                    vec3 color = mix(vec3(0.04, 0.1, 0.2), vec3(0.7, 0.88, 1.0), 0.45 + 0.6 * vFresnel);
+                    vec3 color = mix(vec3(0.04, 0.1, 0.2), vec3(0.7, 0.88, 1.0), 0.2 + 1.0 * vFresnel);
                     // Края светятся сильнее, чем у лепестков пиона: волнистая кромка и немного — прямой край.
                     float edgeGlow = smoothstep(0.55, 1.0, vUv.x) * 3.0 + (1.0 - smoothstep(0.0, 0.12, vUv.x)) * 1.8;
                     float a = tex.a * vAlpha * 0.9 * (1.0 + edgeGlow);
