@@ -22,8 +22,12 @@
         btnToggle.textContent = points ? 'POINTS MODE (M)' : 'MESH MODE (M)';
     }
     function toggleMode() { orchestrator.setPointsMode(!orchestrator.pointsMode); updateModeButton(); }
-    // Пока фигура одна — морфим пион в пион. Позже здесь будет выбор цели (ноды / меню).
-    function morph() { orchestrator.morphTo(orchestrator.current || 'peony'); }
+    // MORPH — следующая фигура по кругу (пион → медуза → пион). Позже — выбор цели (ноды / меню).
+    function morph() {
+        const list = DP.figures.list();
+        const i = list.indexOf(orchestrator.current);
+        orchestrator.morphTo(list[(i + 1) % list.length]);
+    }
 
     btnToggle.addEventListener('click', toggleMode);
     btnMorph.addEventListener('click', morph);

@@ -54,8 +54,12 @@
         });
         instance.root.traverse(o => { o.frustumCulled = false; }); // вихрь выходит за исходные границы
         DP.stage.figureStage.add(instance.root);
-        return { name, instance, uniforms };
+        return { name, instance, uniforms, tilt: def.stageTilt || 0 };
     }
+
+    // Наклон сцены под фигуру (stageTilt, рад): вращение вокруг оси X поверх вращения вокруг Y.
+    // Вихрь морфинга живёт в пространстве сцены, поэтому наклон можно плавно менять во время морфинга.
+    function setTilt(a) { DP.stage.figureStage.rotation.x = a; }
 
     function release(entry) {
         DP.stage.figureStage.remove(entry.instance.root);
@@ -80,6 +84,7 @@
         to.uniforms.uMorphActive.value = 1;   to.uniforms.uMorphRole.value = 1;   to.uniforms.uMorphTime.value = 0;
 
         morph = { from, to, time: 0, duration, resolve };
+        morph.tilt0 = DP.stage.figureStage.rotation.x;
         applyVisibility();
         events.emit('morphstart', { from: from.name, to: name, duration });
     }
@@ -89,6 +94,7 @@
         morph = null;
         if (DP.flowSim) DP.flowSim.stop();
         release(m.from);
+        setTilt(m.to.tilt);
         m.to.uniforms.uMorphActive.value = 0;
         current = m.to;
         applyVisibility();
@@ -109,6 +115,7 @@
             if (morph) finishMorph();
             if (current) release(current);
             current = instantiate(name);
+            setTilt(current.tilt);
             applyVisibility();
             events.emit('show', { figure: name });
         },
@@ -132,6 +139,8 @@
                 morph.from.uniforms.uMorphTime.value = morph.time;
                 morph.to.uniforms.uMorphTime.value = morph.time;
                 if (DP.flowSim) DP.flowSim.step(morph.time);
+                const k = DP.util.smoothstep(0.15, 0.75, morph.time / morph.duration);
+                setTilt(morph.tilt0 + (morph.to.tilt - morph.tilt0) * k);
                 events.emit('morphprogress', { time: morph.time, duration: morph.duration });
                 if (morph.time >= morph.duration) finishMorph();
             }

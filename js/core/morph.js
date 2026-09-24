@@ -375,8 +375,11 @@
             // Переносим эту разницу на середину пути — иначе частица летит к «неизогнутому» месту
             // (щупальца ныряют в центр, цветок схлопывается). Для одной и той же фигуры A и B
             // одинаковы, эстафета не рвётся.
-            rMid = max(rMid + length(cur.xz) - length(rest.xz), 0.0);
-            yMid += cur.y - rest.y;
+            // В середине вихря сдвиг убирается: у разных фигур он разный, а в точке эстафеты (s = 0.5)
+            // положение должно зависеть только от общих данных пары.
+            float dpKeep = 1.0 - smoothstep(0.5, 0.95, 2.0 * min(g, 1.0 - g));
+            rMid = max(rMid + (length(cur.xz) - length(rest.xz)) * dpKeep, 0.0);
+            yMid += (cur.y - rest.y) * dpKeep;
             float thRest = dpAzimuth(rest);
             float dTh = dpAzimuth(cur) - thRest;
             dTh -= 6.2831853 * floor((dTh + 3.14159265) / 6.2831853);
