@@ -78,11 +78,11 @@
         // (фаза искажена двумя медленными синусами), на коротких волнах размах меньше, на длинных —
         // больше, и по длинной волне бежит мелкая рябь. s — фаза, бегущая вниз; x — поперёк, y — из плоскости.
         vec2 dpRibbonWave(float s, float sd) {
-            float a1 = 0.31 * s + 1.3 * sd, a2 = 0.13 * s + 2.9 * sd;
-            float P = s + 1.5 * sin(a1) + 2.0 * sin(a2);
-            float k = 1.0 + 0.465 * cos(a1) + 0.26 * cos(a2);          // местная частота: 0.27..1.73
+            float a1 = 0.45 * s + 1.3 * sd, a2 = 0.21 * s + 2.9 * sd;
+            float P = s + 1.0 * sin(a1) + 1.4 * sin(a2);
+            float k = 1.0 + 0.45 * cos(a1) + 0.294 * cos(a2);          // местная частота: 0.26..1.74
             float f = clamp(pow(k, -1.3), 0.4, 1.6);
-            float sub = 0.3 * (1.0 - smoothstep(0.55, 0.95, k));
+            float sub = 0.18 * (1.0 - smoothstep(0.55, 0.95, k));
             return vec2(f * sin(P) + sub * sin(2.3 * P + 1.1 + sd),
                         f * sin(P + 0.5) + sub * sin(2.3 * P + 1.6 + sd));
         }
@@ -326,12 +326,12 @@
 
     // Рюши с разной длиной волны — та же формула, что dpRibbonWave в шейдере.
     function ribbonWaveJS(s, sd) {
-        const a1 = 0.31 * s + 1.3 * sd, a2 = 0.13 * s + 2.9 * sd;
-        const P = s + 1.5 * Math.sin(a1) + 2.0 * Math.sin(a2);
-        const k = 1 + 0.465 * Math.cos(a1) + 0.26 * Math.cos(a2);
+        const a1 = 0.45 * s + 1.3 * sd, a2 = 0.21 * s + 2.9 * sd;
+        const P = s + 1.0 * Math.sin(a1) + 1.4 * Math.sin(a2);
+        const k = 1 + 0.45 * Math.cos(a1) + 0.294 * Math.cos(a2);
         const f = Math.min(1.6, Math.max(0.4, Math.pow(k, -1.3)));
         const t = Math.min(1, Math.max(0, (k - 0.55) / 0.4));
-        const sub = 0.3 * (1 - t * t * (3 - 2 * t));
+        const sub = 0.18 * (1 - t * t * (3 - 2 * t));
         return [f * Math.sin(P) + sub * Math.sin(2.3 * P + 1.1 + sd),
                 f * Math.sin(P + 0.5) + sub * Math.sin(2.3 * P + 1.6 + sd)];
     }
@@ -558,8 +558,8 @@
                 seed,
                 len: 1.92 + seededRandom(seed * 2.1) * 0.42,
                 width: 0.36 + seededRandom(seed * 3.3) * 0.085,
-                ruffleK: 15 + seededRandom(seed * 4.7) * 4,
-                ruffleAmp: 0.17,
+                ruffleK: 10 + seededRandom(seed * 4.7) * 2.5,   // длинная волна: вершины скруглённые
+                ruffleAmp: 0.2,
                 twist: (seededRandom(seed * 5.9) - 0.5) * 0.5,
                 splay: 0.05 + seededRandom(seed * 6.7) * 0.08
             };
