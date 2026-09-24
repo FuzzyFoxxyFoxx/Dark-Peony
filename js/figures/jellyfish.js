@@ -173,32 +173,33 @@
             return { r: Math.max(0, p.x) + ribAmp * ribAt(theta) * outer, y: p.y };
         };
 
-        // Точки: равномерная плотность по площади + уплотнение вдоль каналов.
-        const h = 1 / Math.sqrt(density);
+        // Точки — как у лепестков пиона: ровная сетка (параллели по профилю × меридианы по кругу),
+        // у каждого узла MULT точек со сдвигом не больше ±0.4 ячейки — видны рядки.
+        // Ближе к вершине меридианов вдвое меньше (каждый второй), чтобы точки не слипались в пятно.
+        const MULT = 3;
+        const h = 1 / Math.sqrt(density / MULT);          // шаг сетки
         const nS = Math.ceil(lenP / h);
+        let rMax = 0;
+        for (let i = 0; i <= 200; i++) rMax = Math.max(rMax, curve.getPointAt(i / 200).x);
+        const nBase = Math.pow(2, Math.round(Math.log2(Math.PI * 2 * rMax / h)));
         const pos = [], nor = [], uvs = [], rib = [], size = [];
         let sd = 1.3;
-        const pushPoint = (s, theta, ribBoost) => {
-            const { r, y } = profR(s, theta);
-            const t = curve.getTangentAt(s);
-            const nr = -t.y, ny = t.x;                  // нормаль профиля
-            const jit = (seededRandom(sd += 1.7) - 0.5) * 0.02;
-            const x = (r + nr * jit) * Math.sin(theta), z = (r + nr * jit) * Math.cos(theta);
-            pos.push(x, y + ny * jit, z);
-            nor.push(nr * Math.sin(theta), ny, nr * Math.cos(theta));
-            uvs.push(theta / (Math.PI * 2), s);
-            const outer = s < sRim ? 1 : 0.55;
-            rib.push(Math.min(1, ribAt(theta) * outer + ribBoost));
-            size.push(seededRandom(sd += 0.9));
-        };
-        for (let i = 0; i < nS; i++) {
-            const s = Math.min(1, (i + seededRandom(i * 3.1 + 0.4)) / nS);
-            const r = Math.max(0.01, curve.getPointAt(s).x);
-            const nT = Math.max(3, Math.round(Math.PI * 2 * r / h));
-            for (let j = 0; j < nT; j++) pushPoint(s, (j + seededRandom(i * 7.7 + j * 1.31)) / nT * Math.PI * 2, 0);
-            // Каналы: дополнительные точки по линиям от вершины к краю.
-            if (s > 0.02) for (let k = 0; k < RIB_COUNT; k++) {
-                if (seededRandom(i * 5.3 + k * 2.9) < 0.55) pushPoint(s, (k + (seededRandom(i + k * 9.1) - 0.5) * 0.04) / RIB_COUNT * Math.PI * 2, 0.6);
+        for (let i = 0; i <= nS; i++) {
+            const s0 = i / nS;
+            const r0 = Math.max(0.005, curve.getPointAt(Math.min(1, s0)).x);
+            let nT = nBase;
+            while (nT > 8 && Math.PI * 2 * r0 / nT < h * 0.7) nT /= 2;
+            for (let j = 0; j < nT; j++) for (let m = 0; m < MULT; m++) {
+                const s = Math.min(1, Math.max(0, (i + (seededRandom(sd += 1.1) - 0.5) * 0.8) / nS));
+                const theta = (j + (seededRandom(sd += 1.3) - 0.5) * 0.8) / nT * Math.PI * 2;
+                const { r, y } = profR(s, theta);
+                const t = curve.getTangentAt(s);
+                const nr = -t.y, ny = t.x;                  // нормаль профиля
+                pos.push(r * Math.sin(theta), y, r * Math.cos(theta));
+                nor.push(nr * Math.sin(theta), ny, nr * Math.cos(theta));
+                uvs.push(theta / (Math.PI * 2), s);
+                rib.push(Math.min(1, ribAt(theta) * (s < sRim ? 1 : 0.55)));
+                size.push(seededRandom(sd += 0.9));
             }
         }
         const pointsGeo = new THREE.BufferGeometry();
@@ -254,11 +255,13 @@
         return [p.ruffleAmp * (W / p.width), u * p.len * p.ruffleK + p.seed, p.twist * u];
     }
 
-    // Точки ленты — как у лепестков пиона: сетка по поверхности, у каждой вершины несколько точек
-    // со случайным сдвигом внутри ячейки и лёгким объёмным разбросом (без рядов и полосок).
+    // Точки ленты — как у лепестков пиона: ровная сетка, у каждого узла несколько точек
+    // со сдвигом не больше ±0.4 ячейки — видны рядки.
     function buildRibbon(p, tier) {
+        // Шаг сетки как у лепестков пиона на экране (≈0.019), иначе рядки сливаются.
         const qs = tier.petalSegments / 100;
-        const segU = Math.round(150 * qs * p.len / 1.75), segV = Math.round(46 * qs);
+        const step = 0.019 / FIG_SCALE / qs;
+        const segU = Math.round(p.len / step), segV = Math.max(4, Math.round(p.width / step));
         const mult = tier.petalMultiplier;
         const pos = [], nor = [], uvs = [], seeds = [], size = [], ruf = [];
         const e = 1e-3;
@@ -275,10 +278,7 @@
                 const nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
                 const nl = Math.hypot(nx, ny, nz) || 1;
                 ruf.push(...ribbonRuffle(u, p));
-                const vol = 0.006 + 0.01 * u;
-                pos.push(q[0] + (seededRandom(sd += 0.3) - 0.5) * vol,
-                         q[1] + (seededRandom(sd += 0.3) - 0.5) * vol,
-                         q[2] + (seededRandom(sd += 0.3) - 0.5) * vol * 1.6);
+                pos.push(q[0], q[1], q[2]);
                 nor.push(nx / nl, ny / nl, nz / nl);
                 uvs.push(v, u);
                 seeds.push(p.seed);
@@ -328,14 +328,15 @@
 
     function buildSkirt(p, tier) {
         const qs = tier.petalSegments / 100;
-        const segT = Math.round(420 * qs), segH = Math.round(40 * qs);
+        const step = 0.019 / FIG_SCALE / qs;
+        const segT = Math.round(Math.PI * 2 * (p.r0 + p.flare * 0.5) / step), segH = Math.max(4, Math.round(p.len * 1.2 / step));
         const mult = tier.petalMultiplier;
         const pos = [], nor = [], uvs = [], size = [];
         const e = 1e-3;
         let sd = 91.7;
         for (let i = 0; i < segT; i++) for (let j = 0; j <= segH; j++) {
             for (let m = 0; m < mult; m++) {
-                const t = (i + seededRandom(sd += 1.1) * 0.9) / segT;
+                const t = (i + (seededRandom(sd += 1.1) - 0.5) * 0.8) / segT;
                 const h = Math.min(1, Math.max(0, (j + (seededRandom(sd += 1.3) - 0.5) * 0.8) / segH));
                 const q = skirtPoint(t, h, p);
                 const dt = skirtPoint(t + e, h, p), dh = skirtPoint(t, Math.min(1, h + e), p);
@@ -343,8 +344,7 @@
                 const bx = dh[0] - q[0], by = dh[1] - q[1], bz = dh[2] - q[2];
                 const nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
                 const nl = Math.hypot(nx, ny, nz) || 1;
-                const vol = 0.006;
-                pos.push(q[0] + (seededRandom(sd += 0.3) - 0.5) * vol, q[1] + (seededRandom(sd += 0.3) - 0.5) * vol, q[2] + (seededRandom(sd += 0.3) - 0.5) * vol);
+                pos.push(q[0], q[1], q[2]);
                 nor.push(nx / nl, ny / nl, nz / nl);
                 uvs.push(t, h);
                 size.push(seededRandom(sd += 0.7));
@@ -465,7 +465,7 @@
                 pivot.rotation.y = angle;
                 obj.position.set(0, innerY + 0.3, r);
             });
-            tentacles.push({ geo, matrix });
+            tentacles.push({ geo, matrix, kind: 'tentacles' });
         }
         // «Тычинки» без шариков — короткие тонкие щупальца между лентами.
         for (let i = 0; i < RIBBON_COUNT; i++) for (let k = 0; k < STAMENS_PER_GAP; k++) {
@@ -479,7 +479,7 @@
                 obj.position.set(0, innerY + 0.08, r);
                 obj.rotation.x = 0.15;
             });
-            tentacles.push({ geo, matrix });
+            tentacles.push({ geo, matrix, kind: 'stamens' });
         }
         for (let i = 0; i < FRINGE_COUNT; i++) {
             const seed = i * 1.37 + 40.2;
@@ -491,7 +491,7 @@
                 obj.position.set(0, bell.rimY + 0.02, bell.rimR);
                 obj.rotation.x = 0.35;               // реснички чуть наружу
             });
-            tentacles.push({ geo, matrix });
+            tentacles.push({ geo, matrix, kind: 'fringe' });
         }
 
         const rootMatrix = new THREE.Matrix4().compose(
@@ -809,17 +809,24 @@
             root.add(meshRoot, pointsRoot);
             const place = (group, obj, matrix) => { obj.matrixAutoUpdate = false; obj.matrix.copy(matrix); group.add(obj); };
 
-            data.bells.forEach(b => {
+            // ?parts=bell,skirt,ribbons,tentacles,stamens — показать только эти части (для доработки по частям).
+            const partsParam = DP.params.get('parts');
+            const show = (k) => !partsParam || partsParam.split(',').indexOf(k) >= 0;
+
+            if (show('bell')) data.bells.forEach(b => {
                 place(meshRoot, new THREE.Mesh(b.meshGeo, mats.bellMesh), b.matrix);
                 place(pointsRoot, new THREE.Points(b.pointsGeo, mats.bellPoints), b.matrix);
             });
-            place(meshRoot, new THREE.Mesh(data.skirt.meshGeo, mats.skirtMesh), data.skirt.matrix);
-            place(pointsRoot, new THREE.Points(data.skirt.pointsGeo, mats.skirtPoints), data.skirt.matrix);
-            data.ribbons.forEach(r => {
+            if (show('skirt')) {
+                place(meshRoot, new THREE.Mesh(data.skirt.meshGeo, mats.skirtMesh), data.skirt.matrix);
+                place(pointsRoot, new THREE.Points(data.skirt.pointsGeo, mats.skirtPoints), data.skirt.matrix);
+            }
+            if (show('ribbons')) data.ribbons.forEach(r => {
                 place(meshRoot, new THREE.Mesh(r.meshGeo, mats.ribbonMesh), r.matrix);
                 place(pointsRoot, new THREE.Points(r.pointsGeo, mats.ribbonPoints), r.matrix);
             });
             data.tentacles.forEach(t => {
+                if (!show(t.kind)) return;
                 place(meshRoot, new THREE.Mesh(t.geo, mats.tentMesh), t.matrix);
                 place(pointsRoot, new THREE.Points(t.geo, mats.tentPoints), t.matrix);
             });
