@@ -257,6 +257,8 @@
             u.uRing.value.set(LAB_R, tc, f.spin, f.swirl);
             const tm0 = this.timing || {}, nk = tm0.noiseK != null ? tm0.noiseK : 1;
             u.uNoise.value.set(f.noiseAmp * nk, f.noiseScale, f.detailAmp * nk, f.detailScale);
+            // Свои водовороты режима: крупные гнут вихрь, мелкие рвут кромки на завитки.
+            if (tm0.eddy) { const e = tm0.eddy; u.uNoise.value.set(e[0], e[1], e[2], e[3]); u.uNoise2.value.x = e[4]; }
             u.uShape.value.set(tm0.shape || 0, tm0.roll || 0, tm0.respawn != null ? tm0.respawn : 1, tm0.twistRamp || 0);
             u.uExtra.value.set(tm0.spiral ? 1 : 0, 0, 0, 0);
             u.uNoise2.value.set(f.noiseSpeed, f.escape, f.lift, f.speed);

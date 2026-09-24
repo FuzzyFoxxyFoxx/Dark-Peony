@@ -1226,7 +1226,11 @@
         const sm = c.smoke;
         DP.smokeSim.prepare(side, dA, dB, dS, { center, R, w: f.rotate },
             { capture: f.capture, land: f.land, gravity: f.gravity, pull: f.pull, twist: f.twist, shape: 1, roll: f.roll, noiseK: f.noiseK,
-              respawn: f.respawn, twistRamp: f.twistRamp, spiral: f.spiral });
+              respawn: f.respawn, twistRamp: f.twistRamp, spiral: f.spiral,
+              eddy: [f.eddyBig, f.eddyBigScale, f.eddySmall, f.eddySmallScale, f.eddySpeed] });
+        // Вид частиц в полёте — свой у сферы: мельче и ярче, пряди читаются нитями, а не туманом.
+        shared.uSwirlA.value.set(f.flightSize, c.swirlSizeMin, f.flightAlpha, c.swirlVisible);
+        shared.uSwirlB.value.set(c.leaveGlow, c.swirlBlend, c.swirlTint, f.flightLook);
         shared.uSmokeA.value.set(1, side, sm.lifeMin, Math.max(sm.lifeMin + 0.01, sm.lifeMax));
         shared.uSmokeB.value.set(sm.fadeIn, sm.fadeOut, sm.grow, f.capture);
         shared.uSmokeC.value.set(f.land, 0, 0, 0);
