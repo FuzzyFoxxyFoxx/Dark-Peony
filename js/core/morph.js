@@ -1145,7 +1145,7 @@
             const jitA = (U.seededRandom(k * 1.319 + 5.1) - 0.5) * 2 * f.jitter;
             const L = Math.max(0, 0.05 + f.leaveSpread * oA + jit);
             const T = arriveStart + f.arriveSpread * oB + jitA;
-            const D = Math.max(f.capture + f.land + 0.2, T - L);
+            const D = Math.max(f.land + 0.4, T - L);   // подхват — лишь плавное включение, ему не нужно завершаться
             const Lq = U.clamp(Math.round(L * 100), 0, 2047), Dq = U.clamp(Math.round(D * 100), 5, 2047);
             end = Math.max(end, (Lq + Dq) * 0.01);
             const packed = Lq * 2048 + Dq;
@@ -1162,7 +1162,8 @@
         const R = f.sphereR * bb.r1;
         const center = new THREE.Vector3(0, bb.y0 + f.sphereY * (bb.y1 - bb.y0), 0);
         DP.smokeSim.prepare(side, dA, dB, dS, { center, R, w: f.rotate },
-            { capture: f.capture, land: f.land, gravity: f.gravity, pull: f.pull, twist: f.twist, shape: 1, roll: f.roll, noiseK: f.noiseK });
+            { capture: f.capture, land: f.land, gravity: f.gravity, pull: f.pull, twist: f.twist, shape: 1, roll: f.roll, noiseK: f.noiseK,
+              respawn: f.respawn, twistRamp: f.twistRamp, spiral: f.spiral });
         shared.uSmokeA.value.set(1, side, sm.lifeMin, Math.max(sm.lifeMin + 0.01, sm.lifeMax));
         shared.uSmokeB.value.set(sm.fadeIn, sm.fadeOut, sm.grow, f.capture);
         shared.uSmokeC.value.set(f.land, 0, 0, 0);

@@ -30,7 +30,8 @@
         uniform vec4 uNoise2;   // изменчивость, доля улетающих, подъём, скорость частиц
         uniform vec4 uLife;     // жизнь от, до, появление (доля), наклон кольца
         uniform vec4 uTimes;    // захват (с), посадка (с), ускорение осыпания, притяжение к сердцевине
-        uniform vec4 uShape;    // форма: 0 — кольцо, 1 — сфера; клубление сферы (вихрь Хилла), -, -
+        uniform vec4 uShape;    // форма: 0 — кольцо, 1 — сфера; клубление сферы (вихрь Хилла); перерождение частиц (0/1); разгон закрутки, с (0 — только до захвата)
+        uniform vec4 uExtra;    // посадка по спирали (0/1), -, -, -
         uniform vec4 uMove;     // движение кольца: скорость центра по высоте, скорость «дыхания» (dR/dt / R), закрутка до захвата, вращение кольца (рад/с)
         ${DP.morph.glsl.simplexNoise}
         float dpHash(float n) { return fract(sin(n * 127.1 + 311.7) * 43758.5453); }
@@ -108,7 +109,11 @@
             vec3 v = vec3(0.0, -uTimes.z * since, 0.0) * (1.0 - cap);
             // Закрутка: до захвата частица начинает кружить вокруг оси фигуры (как вихрь), всё быстрее.
             vec3 ew = normalize(vec3(p.x, 0.0, p.z) + vec3(1e-5, 0.0, 0.0));
-            v += cross(vec3(0.0, 1.0, 0.0), ew) * uMove.z * (1.0 - cap) * since;
+            // Закрутка как чай в стакане: скорость по кругу растёт со временем и одинакова на любом радиусе,
+            // поэтому внутри частицы делают больше оборотов — вихрь тянется в спиральные рукава.
+            // uShape.w > 0: закрутка продолжается и в середине (разгон за uShape.w с) и гаснет только при посадке.
+            float twistV = uShape.w > 0.0 ? min(since, uShape.w) * (1.0 - land) : (1.0 - cap) * since;
+            v += cross(vec3(0.0, 1.0, 0.0), ew) * uMove.z * twistV;
             // Кольцо едет и «дышит» — захваченные частицы едут вместе с ним.
             v += (vec3(0.0, uMove.x, 0.0) + vec3(p.x - uCenter.x, 0.0, p.z - uCenter.z) * uMove.y) * cap * (1.0 - land);
             // Вращение кольца вокруг оси (вихрь): всё кольцо крутится, быстрее всего на экваторе сферы.
@@ -122,10 +127,23 @@
             p += v * uDt;
 
             // Посадка: частица подходит к своему месту в фигуре B и садится точно к сроку.
-            if (land > 0.0) p = mix(p, B.xyz, clamp(uDt * 3.0 / max(left, uDt), 0.0, 1.0) * land);
+            if (land > 0.0) {
+                float fl = clamp(uDt * 3.0 / max(left, uDt), 0.0, 1.0) * land;
+                if (uExtra.x > 0.5) {
+                    // Сборка — зеркало распада: частица раскручивается из вихря по спирали в ту же сторону
+                    // (угол вокруг оси догоняет свой угол вперёд), замедляется и садится на своё место.
+                    vec2 c0 = uCenter.xz;
+                    vec2 d = p.xz - c0, db = B.xz - c0;
+                    float r = length(d), rb = length(db);
+                    float th = atan(d.x, d.y), thb = atan(db.x, db.y);
+                    float dth = mod(thb - th + 1.5707963, 6.2831853) - 1.5707963;
+                    th += dth * fl; r = mix(r, rb, fl);
+                    p = vec3(c0.x + sin(th) * r, mix(p.y, B.y, fl), c0.y + cos(th) * r);
+                } else p = mix(p, B.xyz, fl);
+            }
 
             // Жизнь в кольце: первая жизнь начинается уже видимой; умершая частица рождается в сердцевине.
-            if (age < 0.0 && cap > 0.99) age = life * uLife.z;
+            if (age < 0.0 && cap > 0.99 && uShape.z > 0.5) age = life * uLife.z;   // без перерождения — жизнь не идёт
             if (age >= 0.0) {
                 age += uDt;
                 if (age > life && ringW > 0.99 && left > uTimes.y + 0.3) {
@@ -198,7 +216,7 @@
                         uSide: { value: 1 }, uTime: { value: 0 }, uDt: { value: 0 }, uReset: { value: 1 },
                         uCenter: { value: new THREE.Vector4() }, uRing: { value: new THREE.Vector4() },
                         uNoise: { value: new THREE.Vector4() }, uNoise2: { value: new THREE.Vector4() },
-                        uLife: { value: new THREE.Vector4() }, uTimes: { value: new THREE.Vector4() }, uMove: { value: new THREE.Vector4() }, uShape: { value: new THREE.Vector4() }
+                        uLife: { value: new THREE.Vector4() }, uTimes: { value: new THREE.Vector4() }, uMove: { value: new THREE.Vector4() }, uShape: { value: new THREE.Vector4() }, uExtra: { value: new THREE.Vector4() }
                     },
                     vertexShader: 'void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }',
                     fragmentShader: simFragment,
@@ -239,7 +257,8 @@
             u.uRing.value.set(LAB_R, tc, f.spin, f.swirl);
             const tm0 = this.timing || {}, nk = tm0.noiseK != null ? tm0.noiseK : 1;
             u.uNoise.value.set(f.noiseAmp * nk, f.noiseScale, f.detailAmp * nk, f.detailScale);
-            u.uShape.value.set(tm0.shape || 0, tm0.roll || 0, 0, 0);
+            u.uShape.value.set(tm0.shape || 0, tm0.roll || 0, tm0.respawn != null ? tm0.respawn : 1, tm0.twistRamp || 0);
+            u.uExtra.value.set(tm0.spiral ? 1 : 0, 0, 0, 0);
             u.uNoise2.value.set(f.noiseSpeed, f.escape, f.lift, f.speed);
             u.uLife.value.set(f.lifeMin, Math.max(f.lifeMin + 0.01, f.lifeMax), f.fadeIn, f.tilt);
             const tm = this.timing || f;
