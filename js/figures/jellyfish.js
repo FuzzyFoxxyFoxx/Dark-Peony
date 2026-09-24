@@ -98,11 +98,17 @@
                                      + 0.4 * sin(u * (9.0 + 4.0 * rA) - uTime * (1.7 + 0.5 * rC) + aSeed * 1.3)) ;
             env *= 0.8 + 0.5 * rC;
             float amp = aRuf.x * env * (0.15 + 0.85 * smoothstep(0.03, 0.45, u));   // у крепления рюши слабые
-            float acr = pow(uv.x, 2.0) * amp * 0.3 * sin(ph);
-            float zz = pow(uv.x, 1.8) * amp * sin(ph + 0.5);
+            amp *= 0.75 + 0.25 * sin(ph * 0.37 + aSeed * 2.1) + 0.15 * sin(ph * 0.61 + aSeed);  // лопасти разного размера
+            // Округлые лопасти с «шейками»: выпирают наружу и нависают вдоль длины (эскиз автора).
+            float e2 = uv.x * uv.x * (3.0 - 2.0 * uv.x);            // выпирает широкая полоса у кромки
+            float b0 = 0.5 + 0.5 * sin(ph); float bump = b0 * (2.0 - b0);   // скруглённые лопасти, узкие «шейки»
+            float acr = e2 * amp * 1.0 * bump;
+            float alg = -e2 * amp * 0.3 * cos(ph) * bump;
+            float zz = pow(uv.x, 1.8) * amp * 0.45 * sin(ph + 0.5);
             float ca = cos(aRuf.z), sa = sin(aRuf.z);
             pos.x += acr * ca - zz * sa;
             pos.z += acr * sa + zz * ca;
+            pos.y += alg;
         }
     `;
 
@@ -298,14 +304,20 @@
         const rA = ruffle ? p.ruffleAmp * (W / p.width) : 0;
         // Волнистый край длиннее прямого: волна в плоскости ленты + рюши из плоскости в той же фазе
         // (без сдвига фаз край не закручивается штопором, а складывается гармошкой).
-        let across = v * W + Math.pow(v, 2.0) * rA * 0.3 * Math.sin(ph);
-        let z = Math.pow(v, 1.8) * rA * Math.sin(ph + 0.5);
+        // Рюши — округлые лопасти с «шейками» (эскиз автора): кромка выпирает наружу и заворачивается
+        // вдоль длины (нависает), размер лопастей плавно гуляет. Та же формула — в шейдере (ribbonDisplacement).
+        const lobe = rA * (0.75 + 0.25 * Math.sin(ph * 0.37 + p.seed * 2.1) + 0.15 * Math.sin(ph * 0.61 + p.seed));
+        const e2 = v * v * (3 - 2 * v);                     // выпирает широкая полоса у кромки, а не одна линия
+        const b0 = 0.5 + 0.5 * Math.sin(ph), bump = b0 * (2 - b0);   // широкие скруглённые лопасти, узкие «шейки»
+        let across = v * W + e2 * lobe * 1.0 * bump;
+        const along = -e2 * lobe * 0.3 * Math.cos(ph) * bump;
+        let z = Math.pow(v, 1.8) * lobe * 0.45 * Math.sin(ph + 0.5);
         const a = p.twist * u;                                             // лёгкое скручивание вдоль длины (у крепления лента строго радиальна)
         const x = across * Math.cos(a) - z * Math.sin(a);
         z = across * Math.sin(a) + z * Math.cos(a);
         return [
             x + p.splay * Math.pow(u, 0.8) + Math.sin(u * Math.PI * 1.2 + p.seed) * 0.14 * u,
-            -u * p.len,
+            -u * p.len + along,
             z + Math.cos(u * Math.PI * 0.9 + p.seed * 1.7) * 0.12 * u
         ];
     }
@@ -326,16 +338,15 @@
         const qs = tier.petalSegments / 100;
         const step = 0.019 / FIG_SCALE / qs;
         const segU = Math.round(p.len / step), segV = Math.max(4, Math.round(p.width / step));
-        // Меньше точек на узел и чуть меньший сдвиг (±0.275 ячейки), чем у лепестков: лента видна плашмя,
-        // и рядки должны читаться, но не идеально — с живым разбросом, как у пиона.
+        // Меньше точек на узел, чем у лепестков (лента видна плашмя, иначе тяжелее); сдвиг ±0.4 ячейки — как у пиона.
         const mult = Math.max(1, tier.petalMultiplier - 1);
         const pos = [], nor = [], uvs = [], seeds = [], size = [], ruf = [];
         const e = 1e-3;
         let sd = p.seed * 11.3;
         for (let i = 0; i <= segU; i++) for (let j = 0; j <= segV; j++) {
             for (let m = 0; m < mult; m++) {
-                const u = Math.min(1, Math.max(0, (i + (seededRandom(sd += 1.1) - 0.5) * 0.55) / segU));
-                const v = Math.min(1, Math.max(0, (j + (seededRandom(sd += 1.3) - 0.5) * 0.55) / segV));
+                const u = Math.min(1, Math.max(0, (i + (seededRandom(sd += 1.1) - 0.5) * 0.8) / segU));
+                const v = Math.min(1, Math.max(0, (j + (seededRandom(sd += 1.3) - 0.5) * 0.8) / segV));
                 const qr = ribbonPoint(u, v, p);                 // с рюшами — только для нормали (френель)
                 const q = ribbonPoint(u, v, p, false);          // позиция — плоская лента
                 const du = ribbonPoint(Math.min(1, u + e), v, p), dv = ribbonPoint(u, Math.min(1, v + e), p);
