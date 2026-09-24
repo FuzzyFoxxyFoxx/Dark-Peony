@@ -1,0 +1,227 @@
+// ==========================================
+// DARK PEONY — ДЫМНОЕ КОЛЬЦО ДЛЯ МОРФИНГА (симуляция на видеокарте)
+// ==========================================
+//
+// Каждая пара частиц морфинга — один пиксель текстуры: в нём положение частицы (xyz, пространство сцены)
+// и её возраст в кольце (w). Физика — как в лаборатории lab/smoke.html:
+//   • до отрыва частица стоит на фигуре A;
+//   • оторвавшись, осыпается вниз с ускорением (песок), и кольцо захватывает её: тянет к сердцевине тора;
+//   • в кольце её несёт течение вихревого кольца (кружение вокруг сердцевины + бег вдоль кольца)
+//     и водовороты двух размеров; частица живёт: к концу жизни гаснет и рождается заново в сердцевине;
+//   • в свой срок кольцо отпускает частицу, и она садится на своё место в фигуре B.
+// w: −1 — стоит на фигуре (до отрыва или после посадки), −0.5 — в полёте, но ещё не в кольце, ≥ 0 — возраст.
+(function (DP) {
+    'use strict';
+
+    const shared = DP.morph.shared;
+    const LAB_R = 1.46;   // радиус кольца в лаборатории: параметры течения заданы в её единицах
+    let support = null, side = 0, targets = null, cur = 0;
+    let texA = null, texB = null, texS = null;
+    let scene = null, camera = null, material = null;
+    let needReset = true, lastTime = 0;
+
+    const simFragment = `
+        precision highp float;
+        uniform sampler2D uState, uA, uB, uS;
+        uniform float uSide, uTime, uDt, uReset;
+        uniform vec4 uCenter;   // центр кольца (xyz), масштаб «сцена / лаборатория»
+        uniform vec4 uRing;     // R, сердцевина, кружение, бег вдоль кольца (единицы лаборатории)
+        uniform vec4 uNoise;    // крупные: сила, частота; мелкие: сила, частота
+        uniform vec4 uNoise2;   // изменчивость, доля улетающих, подъём, скорость частиц
+        uniform vec4 uLife;     // жизнь от, до, появление (доля), наклон кольца
+        uniform vec4 uTimes;    // захват (с), посадка (с), ускорение осыпания, притяжение к сердцевине
+        ${DP.morph.glsl.simplexNoise}
+        float dpHash(float n) { return fract(sin(n * 127.1 + 311.7) * 43758.5453); }
+        float h2(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+        vec3 eddy(vec3 q, float t) {
+            vec3 g1 = dpSnoiseGrad(q + vec3(0.0, -t, 0.0)).xyz;
+            vec3 g2 = dpSnoiseGrad(q + vec3(31.4, 7.1 + 0.5 * t, 5.3)).xyz;
+            return cross(g1, g2);
+        }
+        // Кольцо в своих координатах (лаборатория): ось — Y, наклон uLife.w вокруг X.
+        vec3 toRing(vec3 p) {
+            vec3 d = (p - uCenter.xyz) / uCenter.w;
+            float c = cos(uLife.w), s = sin(uLife.w);
+            return vec3(d.x, d.y * c + d.z * s, -d.y * s + d.z * c);
+        }
+        vec3 fromRingDir(vec3 v) {
+            float c = cos(uLife.w), s = sin(uLife.w);
+            return vec3(v.x, v.y * c - v.z * s, v.y * s + v.z * c) * uCenter.w;
+        }
+        vec3 fromRingPos(vec3 q) { return uCenter.xyz + fromRingDir(q); }
+        // Течение кольца в точке (координаты кольца), + притяжение к сердцевине с силой pull.
+        vec3 ringFlow(vec3 p, float t, float pull) {
+            float R = uRing.x, a = uRing.y;
+            vec3 e = normalize(vec3(p.x, 0.0, p.z) + vec3(1e-5, 0.0, 0.0));
+            vec2 q = vec2(length(p.xz) - R, p.y);
+            float rho = max(length(q), 1e-4);
+            float vt = uRing.z * a / rho * (1.0 - exp(-rho * rho / (a * a)));
+            vec2 tq = vec2(-q.y, q.x) / rho;
+            vec3 up = vec3(0.0, 1.0, 0.0);
+            vec3 v = (e * tq.x + up * tq.y) * vt;
+            v += cross(up, e) * uRing.w * exp(-rho * rho / (4.0 * a * a));
+            float ts = t * uNoise2.x;
+            v += uNoise.x * eddy(p * uNoise.y, ts);
+            v += uNoise.z * eddy(p * uNoise.w + vec3(17.0, 3.0, -9.0), ts * 1.7);
+            // Захват: частицу вдали от сердцевины тянет к ней (в сечении тора).
+            vec2 pq = -q / rho * pull * smoothstep(a, 3.0 * a, rho);
+            v += e * pq.x + up * pq.y;
+            return v;
+        }
+        void main() {
+            vec2 uv = gl_FragCoord.xy / uSide;
+            vec4 A = texture2D(uA, uv), B = texture2D(uB, uv);
+            if (B.w <= 0.0) { gl_FragColor = vec4(0.0); return; }
+            float L = A.w, T = A.w + B.w, t = uTime;
+            vec4 st = texture2D(uState, uv);
+            if (uReset > 0.5 || t <= L) { gl_FragColor = vec4(A.xyz, -1.0); return; }
+            if (t >= T) { gl_FragColor = vec4(B.xyz, -1.0); return; }
+            vec3 p = st.xyz; float age = st.w;
+            if (age < -0.75) { p = A.xyz; age = -0.5; }          // только что оторвалась
+            float seed = texture2D(uS, uv).x;
+            float life = mix(uLife.x, uLife.y, dpHash(seed * 13.7 + 2.9));
+            float since = t - L, left = T - t;
+            float cap = smoothstep(0.0, uTimes.x, since);         // кольцо захватывает частицу
+            float land = 1.0 - smoothstep(0.0, uTimes.y, left);   // кольцо отпускает, частица садится
+            float ringW = cap * (1.0 - land);
+
+            // Осыпание: пока кольцо не захватило частицу, она падает с ускорением.
+            vec3 v = vec3(0.0, -uTimes.z * since, 0.0) * (1.0 - cap);
+            vec3 q = toRing(p);
+            vec3 vr = ringFlow(q, t, uTimes.w) * uNoise2.w;
+            // Улетающие: часть частиц отрывается от кольца и уходит вверх, рассеиваясь.
+            float esc = step(dpHash(seed * 7.3 + 1.1), uNoise2.y) * uNoise2.z * (age > 0.0 ? smoothstep(0.2, 1.0, age / life) : 0.0);
+            vr.y += esc;
+            v += fromRingDir(vr) * cap * (1.0 - land);
+            p += v * uDt;
+
+            // Посадка: частица подходит к своему месту в фигуре B и садится точно к сроку.
+            if (land > 0.0) p = mix(p, B.xyz, clamp(uDt * 3.0 / max(left, uDt), 0.0, 1.0) * land);
+
+            // Жизнь в кольце: первая жизнь начинается уже видимой; умершая частица рождается в сердцевине.
+            if (age < 0.0 && cap > 0.99) age = life * uLife.z;
+            if (age >= 0.0) {
+                age += uDt;
+                if (age > life && ringW > 0.99 && left > uTimes.y + 0.3) {
+                    float r1 = h2(uv + fract(t * 0.137)), r2 = h2(uv * 1.7 + fract(t * 0.291) + 3.1), r3 = h2(uv * 2.3 + fract(t * 0.173) + 7.7);
+                    float ph = r1 * 6.2831853, th = r2 * 6.2831853, rr = uRing.y * 0.8 * sqrt(r3);
+                    vec3 e = vec3(cos(ph), 0.0, sin(ph));
+                    p = fromRingPos(e * (uRing.x + rr * cos(th)) + vec3(0.0, rr * sin(th), 0.0));
+                    age = 0.0;
+                }
+            }
+            gl_FragColor = vec4(p, age);
+        }
+    `;
+
+    function checkSupport(renderer) {
+        const caps = renderer.capabilities, ext = renderer.extensions;
+        if (!caps.floatVertexTextures) return false;
+        let type = null;
+        if (caps.isWebGL2) {
+            if (ext.has('EXT_color_buffer_float')) type = THREE.FloatType;
+        } else if (ext.has('OES_texture_float') && ext.has('WEBGL_color_buffer_float')) type = THREE.FloatType;
+        if (!type) return false;   // положению частицы нужна полная точность (half float «дрожит»)
+        const rt = new THREE.WebGLRenderTarget(4, 4, { type, format: THREE.RGBAFormat, depthBuffer: false, stencilBuffer: false });
+        const prev = renderer.getRenderTarget();
+        renderer.setRenderTarget(rt);
+        const gl = renderer.getContext();
+        const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+        renderer.setRenderTarget(prev);
+        rt.dispose();
+        return ok ? { type } : false;
+    }
+
+    const dataTex = (arr, n) => {
+        const t = new THREE.DataTexture(arr, n, n, THREE.RGBAFormat, THREE.FloatType);
+        t.minFilter = t.magFilter = THREE.NearestFilter; t.needsUpdate = true; return t;
+    };
+    const makeTarget = (n, type) => new THREE.WebGLRenderTarget(n, n, {
+        type, format: THREE.RGBAFormat, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+        depthBuffer: false, stencilBuffer: false, generateMipmaps: false });
+
+    DP.smokeSim = {
+        supported() {
+            if (!DP.stage) return false;
+            if (support === null) {
+                try { support = checkSupport(DP.stage.renderer); } catch (e) { console.warn('DP.smokeSim:', e); support = false; }
+                if (!support) console.info('DP.smokeSim: устройство не поддерживает дымный морфинг — используется фонтан');
+            }
+            return !!support;
+        },
+
+        // n — сторона текстуры; dA: xyz фигуры A + отрыв L; dB: xyz фигуры B + длительность D; dS: seed.
+        prepare(n, dA, dB, dS, ring) {
+            if (!this.supported()) return;
+            if (n !== side) {
+                if (targets) targets.forEach(t => t.dispose());
+                side = n;
+                targets = [makeTarget(n, support.type), makeTarget(n, support.type)];
+            }
+            [texA, texB, texS].forEach(t => t && t.dispose());
+            texA = dataTex(dA, n); texB = dataTex(dB, n); texS = dataTex(dS, n);
+            if (!material) {
+                material = new THREE.ShaderMaterial({
+                    uniforms: {
+                        uState: { value: null }, uA: { value: null }, uB: { value: null }, uS: { value: null },
+                        uSide: { value: 1 }, uTime: { value: 0 }, uDt: { value: 0 }, uReset: { value: 1 },
+                        uCenter: { value: new THREE.Vector4() }, uRing: { value: new THREE.Vector4() },
+                        uNoise: { value: new THREE.Vector4() }, uNoise2: { value: new THREE.Vector4() },
+                        uLife: { value: new THREE.Vector4() }, uTimes: { value: new THREE.Vector4() }
+                    },
+                    vertexShader: 'void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }',
+                    fragmentShader: simFragment,
+                    depthTest: false, depthWrite: false
+                });
+                scene = new THREE.Scene();
+                const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
+                quad.frustumCulled = false;
+                scene.add(quad);
+                camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+            }
+            const u = material.uniforms, f = DP.config.morph.smoke;
+            u.uA.value = texA; u.uB.value = texB; u.uS.value = texS; u.uSide.value = n;
+            u.uCenter.value.set(ring.center.x, ring.center.y, ring.center.z, ring.R / LAB_R);
+            this.sync();
+            needReset = true; lastTime = 0;
+            shared.uSmokeTex.value = targets[cur].texture;
+        },
+
+        // Параметры течения и жизни из DP.config.morph.smoke (можно менять на ходу).
+        sync() {
+            if (!material) return;
+            const u = material.uniforms, f = DP.config.morph.smoke;
+            u.uRing.value.set(LAB_R, f.core, f.spin, f.swirl);
+            u.uNoise.value.set(f.noiseAmp, f.noiseScale, f.detailAmp, f.detailScale);
+            u.uNoise2.value.set(f.noiseSpeed, f.escape, f.lift, f.speed);
+            u.uLife.value.set(f.lifeMin, Math.max(f.lifeMin + 0.01, f.lifeMax), f.fadeIn, f.tilt);
+            u.uTimes.value.set(f.capture, f.land, f.gravity, f.pull);
+        },
+
+        step(time) {
+            if (!targets || !material || shared.uSmokeA.value.x < 0.5) return;
+            const renderer = DP.stage.renderer, u = material.uniforms;
+            this.sync();
+            const total = Math.max(0, time - lastTime);
+            const n = needReset ? 1 : Math.min(6, Math.max(1, Math.ceil(total / (1 / 60))));
+            const prevTarget = renderer.getRenderTarget(), prevAutoClear = renderer.autoClear;
+            renderer.autoClear = false;
+            for (let i = 0; i < n; i++) {
+                u.uState.value = targets[cur].texture;
+                u.uTime.value = needReset ? 0 : lastTime + total * (i + 1) / n;
+                u.uDt.value = needReset ? 0 : total / n;
+                u.uReset.value = needReset ? 1 : 0;
+                renderer.setRenderTarget(targets[1 - cur]);
+                renderer.render(scene, camera);
+                cur = 1 - cur;
+                needReset = false;
+            }
+            renderer.setRenderTarget(prevTarget);
+            renderer.autoClear = prevAutoClear;
+            lastTime = time;
+            shared.uSmokeTex.value = targets[cur].texture;
+        },
+
+        stop() { shared.uSmokeA.value.x = 0; }
+    };
+})(window.DP);

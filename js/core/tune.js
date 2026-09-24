@@ -26,6 +26,37 @@
     });
 
     DP.tuneSpec = DP.tuneSpec || [
+        ['Дым: время'],
+        ['smoke.leaveSpread', 'обрушение сверху вниз, с', 0.1, 4, 0.05],
+        ['smoke.hold', 'кольцо целиком, с', 0, 5, 0.05],
+        ['smoke.arriveSpread', 'сборка сверху вниз, с', 0.1, 4, 0.05],
+        ['smoke.jitter', 'разброс частиц, с', 0, 0.6, 0.01],
+        ['smoke.capture', 'захват кольцом, с', 0.1, 3, 0.05],
+        ['smoke.land', 'посадка, с', 0.2, 3, 0.05],
+        ['smoke.gravity', 'ускорение осыпания', 0, 10, 0.1],
+        ['smoke.pull', 'притяжение к сердцевине', 0, 5, 0.05],
+        ['Дым: кольцо'],
+        ['smoke.ringR', 'радиус (от размера фигур)', 0.2, 2, 0.01],
+        ['smoke.ringY', 'высота (0 низ, 1 верх)', 0, 1, 0.01],
+        ['smoke.tilt', 'наклон кольца', -1.6, 1.6, 0.01],
+        ['smoke.core', 'толщина сердцевины', 0.05, 1, 0.01],
+        ['smoke.speed', 'скорость частиц', 0, 4, 0.01],
+        ['smoke.spin', 'кружение', 0, 5, 0.01],
+        ['smoke.swirl', 'бег вдоль кольца', -1, 1, 0.01],
+        ['Дым: водовороты'],
+        ['smoke.noiseAmp', 'крупные: сила', 0, 1.5, 0.01],
+        ['smoke.noiseScale', 'крупные: частота', 0.2, 4, 0.01],
+        ['smoke.detailAmp', 'мелкие: сила', 0, 1, 0.01],
+        ['smoke.detailScale', 'мелкие: частота', 1, 10, 0.05],
+        ['smoke.noiseSpeed', 'изменчивость', 0, 1.5, 0.01],
+        ['Дым: жизнь частицы'],
+        ['smoke.lifeMin', 'жизнь от, с', 0.3, 10, 0.1],
+        ['smoke.lifeMax', 'жизнь до, с', 0.3, 15, 0.1],
+        ['smoke.fadeIn', 'появление (доля)', 0.01, 0.8, 0.01],
+        ['smoke.fadeOut', 'угасание (доля)', 0.01, 0.95, 0.01],
+        ['smoke.grow', 'рост к концу', 0.2, 5, 0.05],
+        ['smoke.escape', 'доля улетающих', 0, 1, 0.01],
+        ['smoke.lift', 'подъём улетающих', 0, 2, 0.01],
         ['Фонтан: время'],
         ['fountain.fallSpread', 'обрушение сверху вниз, с', 0.1, 4, 0.05],
         ['fountain.travel', 'полёт частицы, с', 0.3, 5, 0.05],
@@ -88,7 +119,7 @@
     const loop = { on: DP.params.get('loop') !== '0', pause: parseFloat(DP.params.get('pause') || '1.5') };
     const bar = document.createElement('div');
     bar.innerHTML = '<button data-a="loop"></button><button data-a="now">морфинг сейчас</button>' +
-        '<select data-a="mode"><option value="fountain">фонтан</option><option value="vortex">вихрь</option></select>';
+        '<select data-a="mode"><option value="smoke">дымное кольцо</option><option value="fountain">фонтан</option><option value="vortex">вихрь</option></select>';
     rows.appendChild(bar);
     const bLoop = bar.querySelector('[data-a=loop]'), sMode = bar.querySelector('[data-a=mode]');
     const showLoop = () => { bLoop.textContent = loop.on ? 'цикл: вкл' : 'цикл: выкл'; };

@@ -53,7 +53,12 @@
         // полувысота петли, «квадратность», ускорение осыпания, вход в столб; вложенные петли (3 шт.) и их разброс.
         uFountA: { value: new THREE.Vector4() },
         uFountB: { value: new THREE.Vector4() },
-        uFountC: { value: new THREE.Vector4() }
+        uFountC: { value: new THREE.Vector4() },
+        // Режим «дым» (js/core/smokesim.js): положение каждой пары считает симуляция на видеокарте.
+        uSmokeTex: { value: null },
+        uSmokeA: { value: new THREE.Vector4() },      // включён, сторона текстуры, жизнь от, жизнь до
+        uSmokeB: { value: new THREE.Vector4() },      // появление (доля), угасание (доля), рост к концу, захват кольцом (с)
+        uSmokeC: { value: new THREE.Vector4() }       // посадка (с), -, -, -
     };
 
     // Путь частицы (в «исходном» времени) делится на уход [0, a], вихрь [a, 1-a] и посадку [1-a, 1],
@@ -304,6 +309,10 @@
         uniform vec4 uFountA;
         uniform vec4 uFountB;
         uniform vec4 uFountC;
+        uniform sampler2D uSmokeTex;
+        uniform vec4 uSmokeA;
+        uniform vec4 uSmokeB;
+        uniform vec4 uSmokeC;
         varying float vDpW;
         varying float vDpWA;
         varying float vDpGlow;
@@ -342,7 +351,7 @@
                 vec4 jit = texture2D(uSimJit, dpSimUV);
                 s = dpPathS(t, L, D, jit.x, jit.y, uSimJitInfo.x);
             }
-            if (uFountA.x > 0.5) s = clamp((t - L) / D, 0.0, 1.0);   // фонтан: без ускорений участков вихря
+            if (uFountA.x > 0.5 || uSmokeA.x > 0.5) s = clamp((t - L) / D, 0.0, 1.0);   // фонтан и дым: без ускорений участков вихря
 
             // Видимость: уходящая точка живёт до середины пути, прилетающая — после.
             if (outRole) {
@@ -374,7 +383,26 @@
             float clumped = step(h3, uClumpB.x);  // остальные — свободная пыль вокруг
 
             float w; vec3 p;
-            if (uFountA.x > 0.5) {
+            float smokeSize = 1.0;
+            if (uSmokeA.x > 0.5) {
+                // ДЫМ: положение пары считает симуляция (js/core/smokesim.js) — обе фигуры читают один пиксель,
+                // поэтому эстафета A → B не рвётся. Здесь — только переход с позы фигуры на симуляцию и обратно
+                // и «жизнь» частицы в кольце (появление, угасание, рост, как в Particular).
+                float kk = outRole ? aPairOut : aPairIn;
+                vec2 suv = (vec2(mod(kk, uSmokeA.y), floor(kk / uSmokeA.y)) + 0.5) / uSmokeA.y;
+                vec4 st = texture2D(uSmokeTex, suv);
+                float T = L + D;
+                float wA = smoothstep(0.0, 0.3, t - L);
+                float wB = smoothstep(0.0, 0.35, T - t);
+                p = mix(cur, st.xyz, outRole ? wA : wB);
+                w = smoothstep(0.0, 0.5, t - L) * smoothstep(0.0, 0.5, T - t);
+                float ringW = smoothstep(uSmokeB.w, uSmokeB.w + 0.3, t - L) * smoothstep(uSmokeC.x, uSmokeC.x + 0.3, T - t);
+                float life = mix(uSmokeA.z, uSmokeA.w, dpHash(seed * 13.7 + 2.9));
+                float k = clamp(st.w / life, 0.0, 1.0);
+                float fl = st.w < 0.0 ? 1.0 : smoothstep(0.0, uSmokeB.x, k) * (1.0 - smoothstep(1.0 - uSmokeB.y, 1.0, k));
+                vDpFade *= mix(1.0, fl, ringW);
+                smokeSize = mix(1.0, uSmokeB.z, k * k * ringW);
+            } else if (uFountA.x > 0.5) {
                 // ФОНТАН: частица осыпается вниз по центральному столбу, у дна уходит наружу, поднимается
                 // по стенке сферы, переходит через верх и падает сверху на своё место (петли, как силовые
                 // линии магнита). Всё — в вертикальной плоскости частицы; по пути частицы сходятся в струи.
@@ -501,7 +529,7 @@
             vDpSwirlColor = mix(uSwirlColor * (0.7 + 0.5 * h1), vec3(0.9, 0.97, 1.0), spark * 0.7);
             vDpSwirlAlpha = uSwirlA.z * (0.6 + 1.8 * spark) * mix(0.25, 1.0, visible) * mix(uClumpC.z, 1.0, clumped)
                 * (1.0 - uTrail.z * rank / max(uTrail.y, 1.0));   // хвост к концу тускнеет
-            dpSizeMul = mix(1.0, uSwirlA.x * mix(uSwirlA.y, 1.0, h1 * h1), w);
+            dpSizeMul = mix(1.0, uSwirlA.x * mix(uSwirlA.y, 1.0, h1 * h1), w) * smokeSize;
             if (extra > 0.5) vDpFade *= outRole ? 1.0 - smoothstep(0.3, 0.5, s) : smoothstep(0.5, 0.7, s);
 
             return uStageMatrix * vec4(p, 1.0);
@@ -649,7 +677,9 @@
     // Возвращает длительность морфинга (сек).
     function plan(A, B) {
         const c = DP.config.morph;
-        if (c.mode === 'fountain') return planFountain(A, B);
+        shared.uSmokeA.value.x = 0;
+        if (c.mode === 'smoke' && DP.smokeSim && DP.smokeSim.supported()) return planSmoke(A, B);
+        if (c.mode === 'fountain' || c.mode === 'smoke') return planFountain(A, B);
         shared.uFountA.value.x = 0;
         syncConfig();
         const NA = A.total, NB = B.total, N = Math.max(NA, NB);
@@ -816,7 +846,38 @@
         shared.uMorphSched.value.set(0.05, f.fallSpread, 0.05 + f.travel, f.fallSpread);
         shared.uMorphSched2.value.set(0, c.meshRevealLag, c.meshFade, 0);
 
-        const S = f.sectors, IDX = 4194304;
+        const dJet = TWO_PI / f.jets;
+        let end = 0;
+        sectorPairs(A, B, f.sectors, bA, bB, (P) => {
+            const { ia, ib, hA, hB, firstA, firstB, kk } = P;
+            const seed = U.seededRandom(kk * 0.618 + 0.37);
+            const jit = (U.seededRandom(kk * 0.7311 + 3.3) - 0.5) * 2 * f.jitter;
+            const jitA = (U.seededRandom(kk * 1.319 + 5.1) - 0.5) * 2 * f.jitter * 0.7;
+            const L = Math.max(0, 0.05 + f.fallSpread * (1 - hA) + jit);
+            const arrive = 0.05 + f.fallSpread * (1 - hB) + f.travel + jitA;
+            const D = Math.max(0.6, arrive - L);
+            const Lq = U.clamp(Math.round(L * 100), 0, 2047);
+            const Dq = U.clamp(Math.round(D * 100), 5, 2047);
+            const packed = Lq * 2048 + Dq;
+            end = Math.max(end, (Lq + Dq) * 0.01);
+            // Струя: азимут уходящей точки притягивается к ближайшей из f.jets струй.
+            const phJ = Math.round(P.phA / dJet) * dJet + (U.seededRandom(kk * 2.17 + 0.9) - 0.5) * dJet * f.jetWidth;
+            const hw = Math.round(hA * 4095) * 4096 + Math.round(hB * 4095);
+            writePair(A, B, P, [packed, phJ, seed + (firstB ? 0 : 2), hw], [packed, phJ, seed + (firstA ? 0 : 2), hw]);
+        });
+        A.parts.forEach(p => { p.outAttr.needsUpdate = true; p.pairOutAttr.needsUpdate = true; });
+        B.parts.forEach(p => { p.inAttr.needsUpdate = true; p.pairInAttr.needsUpdate = true; });
+        return end + c.meshRevealLag + c.meshFade + 0.1;
+    }
+
+    // ------------------------------------------
+    // ПАРЫ ПО СЕКТОРАМ (фонтан, дым)
+    // ------------------------------------------
+    // Обе фигуры режутся на S секторов по кругу; внутри сектора точки сортируются сверху вниз, и k-я
+    // уходящая становится k-й прилетающей: верх рушится первым и первым строит верх новой фигуры,
+    // частица остаётся почти в своей вертикальной плоскости. visit(P) вызывается для каждой пары.
+    function sectorPairs(A, B, S, bA, bB, visit) {
+        const IDX = 4194304;
         const prep = (Lay, b) => {
             const n = Lay.total, keys = new Float64Array(n), h = new Float32Array(n), ph = new Float32Array(n);
             const cnt = new Int32Array(S);
@@ -840,48 +901,92 @@
         const PA = prep(A, bA), PB = prep(B, bB);
         const nonEmpty = (P, sec) => { for (let d = 0; d < S; d++) { const q = (sec + d) % S; if (P.cnt[q] > 0) return q; } return -1; };
         const usedA = new Uint8Array(A.total), usedB = new Uint8Array(B.total);
-        const dJet = TWO_PI / f.jets;
-        let end = 0, kk = 0;
+        let total = 0;
+        for (let sec = 0; sec < S; sec++) total += Math.max(PA.cnt[sec], PB.cnt[sec]);
+        if (!visit) return total;
+        let kk = 0;
         for (let sec = 0; sec < S; sec++) {
             if (PA.cnt[sec] === 0 && PB.cnt[sec] === 0) continue;
             const sa = PA.cnt[sec] ? sec : nonEmpty(PA, sec), sb = PB.cnt[sec] ? sec : nonEmpty(PB, sec);
-            if (sa < 0 || sb < 0) continue;
-            const nA = PA.cnt[sa], nB = PB.cnt[sb], n = Math.max(PA.cnt[sec], PB.cnt[sec]);
+            const n = Math.max(PA.cnt[sec], PB.cnt[sec]);
+            if (sa < 0 || sb < 0) { kk += n; continue; }
+            const nA = PA.cnt[sa], nB = PB.cnt[sb];
             for (let k = 0; k < n; k++, kk++) {
                 const ia = PA.sorted[PA.start[sa] + Math.floor(k * nA / n)];
                 const ib = PB.sorted[PB.start[sb] + Math.floor(k * nB / n)];
                 const firstA = !usedA[ia], firstB = !usedB[ib];
                 if (!firstA && !firstB) continue;
                 usedA[ia] = 1; usedB[ib] = 1;
-                const hA = PA.h[ia], hB = PB.h[ib];
-                const seed = U.seededRandom(kk * 0.618 + 0.37);
-                const jit = (U.seededRandom(kk * 0.7311 + 3.3) - 0.5) * 2 * f.jitter;
-                const jitA = (U.seededRandom(kk * 1.319 + 5.1) - 0.5) * 2 * f.jitter * 0.7;
-                const L = Math.max(0, 0.05 + f.fallSpread * (1 - hA) + jit);
-                const arrive = 0.05 + f.fallSpread * (1 - hB) + f.travel + jitA;
-                const D = Math.max(0.6, arrive - L);
-                const Lq = U.clamp(Math.round(L * 100), 0, 2047);
-                const Dq = U.clamp(Math.round(D * 100), 5, 2047);
-                const packed = Lq * 2048 + Dq;
-                end = Math.max(end, (Lq + Dq) * 0.01);
-                // Струя: азимут уходящей точки притягивается к ближайшей из f.jets струй.
-                const phA = PA.ph[ia];
-                const phJ = Math.round(phA / dJet) * dJet + (U.seededRandom(kk * 2.17 + 0.9) - 0.5) * dJet * f.jetWidth;
-                const hw = Math.round(hA * 4095) * 4096 + Math.round(hB * 4095);
-                if (firstA) {
-                    const pa = A.parts[A.partOf[ia]], la = ia - pa.start, o = pa.outAttr.array, j = la * 4;
-                    o[j] = packed; o[j + 1] = phJ; o[j + 2] = seed + (firstB ? 0 : 2); o[j + 3] = hw;
-                    pa.pairOutAttr.array[la] = kk;
-                }
-                if (firstB) {
-                    const pb = B.parts[B.partOf[ib]], lb = ib - pb.start, o = pb.inAttr.array, j = lb * 4;
-                    o[j] = packed; o[j + 1] = phJ; o[j + 2] = seed + (firstA ? 0 : 2); o[j + 3] = hw;
-                    pb.pairInAttr.array[lb] = kk;
-                }
+                visit({ ia, ib, hA: PA.h[ia], hB: PB.h[ib], phA: PA.ph[ia], firstA, firstB, kk });
             }
         }
+        return total;
+    }
+
+    // Записать данные пары в атрибуты фигур (только тем точкам, у которых это первая пара).
+    function writePair(A, B, P, outV, inV) {
+        if (P.firstA) {
+            const pa = A.parts[A.partOf[P.ia]], la = P.ia - pa.start, o = pa.outAttr.array, j = la * 4;
+            o[j] = outV[0]; o[j + 1] = outV[1]; o[j + 2] = outV[2]; o[j + 3] = outV[3];
+            pa.pairOutAttr.array[la] = P.kk;
+        }
+        if (P.firstB) {
+            const pb = B.parts[B.partOf[P.ib]], lb = P.ib - pb.start, o = pb.inAttr.array, j = lb * 4;
+            o[j] = inV[0]; o[j + 1] = inV[1]; o[j + 2] = inV[2]; o[j + 3] = inV[3];
+            pb.pairInAttr.array[lb] = P.kk;
+        }
+    }
+    const restOf = (Lay, gi) => { const p = Lay.parts[Lay.partOf[gi]], j = (gi - p.start) * 3; return [p.rest[j], p.rest[j + 1], p.rest[j + 2]]; };
+
+    // ------------------------------------------
+    // ПЛАНИРОВЩИК «ДЫМА»
+    // ------------------------------------------
+    // Фигура A рушится сверху вниз (осыпается, как песок), частицы затягивает в дымное кольцо, где их несёт
+    // течение кольца и водовороты, и частицы живут: гаснут и рождаются заново в сердцевине. Когда подходит
+    // очередь, кольцо отпускает частицу, и она собирается в фигуру B — тоже сверху вниз.
+    function planSmoke(A, B) {
+        const c = DP.config.morph, f = c.smoke;
+        syncConfig();
+        shared.uFountA.value.x = 0;
+        shared.uSimInfo.value.set(0, 1, 0, 0);
+        const bA = bounds([A]), bB = bounds([B]), bb = bounds([A, B]);
+        DP.morph.lastBounds = bb;
+        shared.uMorphSched.value.set(0.05, f.leaveSpread, 0.05 + f.leaveSpread + f.hold, f.arriveSpread);
+        shared.uMorphSched2.value.set(0, c.meshRevealLag, c.meshFade, 0);
+        const total = sectorPairs(A, B, f.sectors, bA, bB, null);
+        const side = Math.max(1, Math.ceil(Math.sqrt(total)));
+        const dA = new Float32Array(side * side * 4), dB = new Float32Array(side * side * 4), dS = new Float32Array(side * side * 4);
+        const ringStart = 0.05 + f.leaveSpread + f.hold;
+        let end = 0;
+        sectorPairs(A, B, f.sectors, bA, bB, (P) => {
+            const { hA, hB, firstA, firstB, kk } = P;
+            const seed = U.seededRandom(kk * 0.618 + 0.37);
+            const jit = (U.seededRandom(kk * 0.7311 + 3.3) - 0.5) * 2 * f.jitter;
+            const jitA = (U.seededRandom(kk * 1.319 + 5.1) - 0.5) * 2 * f.jitter;
+            const L = Math.max(0, 0.05 + f.leaveSpread * (1 - hA) + jit);
+            const T = ringStart + f.arriveSpread * (1 - hB) + jitA;
+            const D = Math.max(f.capture + f.land + 0.2, T - L);
+            const Lq = U.clamp(Math.round(L * 100), 0, 2047);
+            const Dq = U.clamp(Math.round(D * 100), 5, 2047);
+            end = Math.max(end, (Lq + Dq) * 0.01);
+            const packed = Lq * 2048 + Dq;
+            writePair(A, B, P, [packed, 0, seed + (firstB ? 0 : 2), 0], [packed, 0, seed + (firstA ? 0 : 2), 0]);
+            const a = restOf(A, P.ia), b = restOf(B, P.ib), j = kk * 4;
+            dA[j] = a[0]; dA[j + 1] = a[1]; dA[j + 2] = a[2]; dA[j + 3] = Lq * 0.01;
+            dB[j] = b[0]; dB[j + 1] = b[1]; dB[j + 2] = b[2]; dB[j + 3] = Dq * 0.01;
+            dS[j] = seed;
+        });
         A.parts.forEach(p => { p.outAttr.needsUpdate = true; p.pairOutAttr.needsUpdate = true; });
         B.parts.forEach(p => { p.inAttr.needsUpdate = true; p.pairInAttr.needsUpdate = true; });
+
+        // Кольцо: центр на оси фигур, радиус — от габаритов; параметры течения — в единицах лаборатории
+        // (lab/smoke.html, радиус 1.46), всё масштабируется под размер кольца на сцене.
+        const R = f.ringR * bb.r1;
+        const center = new THREE.Vector3(0, bb.y0 + f.ringY * (bb.y1 - bb.y0), 0);
+        DP.smokeSim.prepare(side, dA, dB, dS, { R, center });
+        shared.uSmokeA.value.set(1, side, f.lifeMin, Math.max(f.lifeMin + 0.01, f.lifeMax));
+        shared.uSmokeB.value.set(f.fadeIn, f.fadeOut, f.grow, f.capture);
+        shared.uSmokeC.value.set(f.land, 0, 0, 0);
         return end + c.meshRevealLag + c.meshFade + 0.1;
     }
 
