@@ -199,13 +199,28 @@
         }
     `;
 
-    const tentPars = `uniform float uTime; attribute float aSeed; varying vec3 vNormal, vViewPosition; varying vec2 vUv;`;
+    // Щупальце — кольца, нанизанные на нить: плоскость кольца перпендикулярна нити.
+    // aRingC — центр кольца, aTan — касательная нити в покое (dC/dv). Шейдер качает нить и поворачивает
+    // каждое кольцо вслед за её текущим изгибом (кратчайший поворот от старой касательной к новой).
+    const tentPars = `uniform float uTime; attribute float aSeed; attribute vec3 aRingC; attribute vec3 aTan;
+        varying vec3 vNormal, vViewPosition; varying vec2 vUv;
+        vec3 dpTentSway(float v) {
+            float whip = pow(v, 1.3);
+            float t1 = uTime * 1.2 - v * 7.0 + aSeed * 9.1;
+            float t2 = uTime * 0.9 - v * 9.5 + aSeed * 4.3;
+            return vec3(sin(t1) * 0.22 + cos(t2) * 0.10, 0.0, cos(t1 * 0.85) * 0.22 + sin(t2 * 1.1) * 0.10) * whip;
+        }`;
     const tentDisplacement = `
-        vUv = uv; vec3 pos = position; vec3 dpRest = position; float whip = pow(uv.y, 1.3);
-        float t1 = uTime * 1.2 - uv.y * 7.0 + aSeed * 9.1;
-        float t2 = uTime * 0.9 - uv.y * 9.5 + aSeed * 4.3;
-        pos.x += (sin(t1) * 0.22 + cos(t2) * 0.10) * whip;
-        pos.z += (cos(t1 * 0.85) * 0.22 + sin(t2 * 1.1) * 0.10) * whip;
+        vUv = uv; vec3 dpRest = position;
+        vec3 sw = dpTentSway(uv.y);
+        vec3 swD = (dpTentSway(min(uv.y + 0.01, 1.0)) - dpTentSway(max(uv.y - 0.01, 0.0))) / 0.02;
+        vec3 ta = normalize(aTan), tb = normalize(aTan + swD);
+        vec3 ax = cross(ta, tb);
+        float cs = dot(ta, tb);
+        vec3 o = position - aRingC;
+        o = o * cs + cross(ax, o) + ax * (dot(ax, o) / (1.0 + cs));
+        vec3 nrm = normal * cs + cross(ax, normal) + ax * (dot(ax, normal) / (1.0 + cs));
+        vec3 pos = aRingC + sw + o;
     `;
 
     // ==========================================
@@ -498,7 +513,7 @@
     }
 
     // ---------- ТОНКОЕ ЩУПАЛЬЦЕ (трубка вниз) ----------
-    // Кольца лежат горизонтально (не разворачиваются к зрителю): овалами их делает наклон сцены, как у пиона.
+    // Кольца перпендикулярны нити (и поворачиваются вслед за её изгибом в шейдере — см. tentDisplacement).
     function buildTentacle(len, radius, seed, segments, radial, sway) {
         const pts = [];
         for (let s = 0; s <= 40; s++) {
@@ -509,18 +524,24 @@
                 Math.cos(t * Math.PI * 0.9 + seed * 1.3) * sway * 0.8 * t));
         }
         const path = new THREE.CatmullRomCurve3(pts);
-        const pos = [], nor = [], uvs = [], seeds = [], idx = [];
+        const pos = [], nor = [], uvs = [], seeds = [], idx = [], ringC = [], tan = [];
+        const frames = path.computeFrenetFrames(segments, false);   // параллельный перенос: кольца не перекручиваются
+        const L = path.getLength();
         for (let i = 0; i <= segments; i++) {
             const v = i / segments;
             const c = path.getPointAt(v);
+            const T = frames.tangents[i], N = frames.normals[i], B = frames.binormals[i];
             const r = radius * Math.max(0.08, Math.pow(1 - v * 0.88, 1.1));   // широкое кольцо у основания, к концу сужается (как у пиона)
             for (let j = 0; j <= radial; j++) {
                 const th = j / radial * Math.PI * 2;
-                const nx = Math.cos(th), nz = Math.sin(th);
-                pos.push(c.x + nx * r, c.y, c.z + nz * r);
-                nor.push(nx, 0, nz);
+                const cs = Math.cos(th), sn = Math.sin(th);
+                const nx = N.x * cs + B.x * sn, ny = N.y * cs + B.y * sn, nz = N.z * cs + B.z * sn;
+                pos.push(c.x + nx * r, c.y + ny * r, c.z + nz * r);
+                nor.push(nx, ny, nz);
                 uvs.push(j / radial, v);
                 seeds.push(seed);
+                ringC.push(c.x, c.y, c.z);
+                tan.push(T.x * L, T.y * L, T.z * L);
             }
         }
         for (let i = 0; i < segments; i++) for (let j = 0; j < radial; j++) {
@@ -533,6 +554,8 @@
         geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
         geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
         geo.setAttribute('aSeed', new THREE.Float32BufferAttribute(seeds, 1));
+        geo.setAttribute('aRingC', new THREE.Float32BufferAttribute(ringC, 3));
+        geo.setAttribute('aTan', new THREE.Float32BufferAttribute(tan, 3));
         return geo;
     }
 
@@ -896,7 +919,7 @@
         const tentMesh = add(new THREE.ShaderMaterial({
             uniforms: Object.assign({ uTime: S.uTime }, morphUniforms),
             vertexShader: `${tentPars} ${G.meshVertex} void main(){ ${tentDisplacement} vDpOrder = aOrder;
-                vec4 mv = modelViewMatrix * vec4(pos, 1.0); vViewPosition = -mv.xyz; vNormal = normalize(normalMatrix * normal); gl_Position = projectionMatrix * mv; }`,
+                vec4 mv = modelViewMatrix * vec4(pos, 1.0); vViewPosition = -mv.xyz; vNormal = normalize(normalMatrix * nrm); gl_Position = projectionMatrix * mv; }`,
             fragmentShader: meshFrag(`0.5 * ${tentAlpha}`),
             side: THREE.DoubleSide, transparent: true, depthWrite: false
         }));
@@ -916,7 +939,7 @@
                     float dist = max(-mv.z, 0.1);
                     ${depthVert}
                     gl_PointSize = uSize * uViewportScale * (0.85 / (0.4 + 0.06 * dist));
-                    vFresnel = pow(clamp(1.0 - abs(dot(normalize(normalMatrix * normal), normalize(-mv.xyz))), 0.0, 1.0), 1.2);
+                    vFresnel = pow(clamp(1.0 - abs(dot(normalize(normalMatrix * nrm), normalize(-mv.xyz))), 0.0, 1.0), 1.2);
                     gl_Position = projectionMatrix * mv;
                     dpMorphFinish();
                 }
