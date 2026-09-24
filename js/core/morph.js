@@ -301,66 +301,47 @@
 
             float clumped = step(h3, uClumpB.x);  // остальные — свободная пыль вокруг
             if (w > 0.0005) {
-                // Поля считаются в РЕАЛЬНОЙ позиции частицы: тогда стянутые частицы действительно
-                // лежат на одних и тех же поверхностях в пространстве и жгуты получаются резкими.
-                // В середине пути (s = 0.5) позиция зависит только от данных пары — эстафета сохраняется.
-
-                // 0) Поля живут в потоке: считаем их во вращающейся системе координат.
-                //    У оси она крутится быстрее, снаружи медленнее — сдвиг наматывает
-                //    структуры в спиральные ленты вдоль кольца.
-                //    Хвосты: плавную часть пути (поток, покачивание) брат повторяет за лидером
-                //    с задержкой — «время лидера» te; а к жгутам прилипает по текущему времени t,
-                //    поэтому весь хвост ложится вдоль текущего жгута, а не рассыпается облаком.
-                float spinK = uClumpB.z + uClumpB.w * log(1.4 / max(length(p.xz), 0.3));
-                float phiE = te * spinK;
-                float ce = cos(phiE), se = sin(phiE);
-                vec3 fe = vec3(p.x * ce - p.z * se, p.y, p.z * ce + p.x * se);
-
-                // 1) Поле течения — крупные изгибы вихря.
-                //    Крупная волна — подъёмы, спуски, уходы внутрь и наружу (частица идёт по синусоиде,
-                //    а не по кругу); мелкая — неоднородность среды.
-                vec3 q = fe * uFlowA.y + vec3(0.0, -te * uFlowA.w, te * uFlowA.w * 0.37);
-                vec3 q2 = fe * uFlowB.x + vec3(te * uFlowA.w * 0.6, 7.3, -te * uFlowA.w);
-                fe += (dpNoise3(q) * uFlowA.x + dpNoise3(q2) * uFlowA.z) * w;
-                p = vec3(fe.x * ce + fe.z * se, fe.y, fe.z * ce - fe.x * se);
+                // 1) Нити (как линии тока): планировщик сводит частицы в ячейки сечения кольца —
+                //    все частицы ячейки идут по одной нити, каждая со своего места и в своё время,
+                //    и растягиваются вдоль неё цепочкой. Форма нити — плавная волна (подъёмы, спуски,
+                //    уходы внутрь/наружу) + мелкие завитки; поле берётся в точке идеального пути,
+                //    одинаковой для всей нити, поэтому нить — линия, а не облако. Волны медленно ползут.
+                vec3 np = vec3(sin(thPath) * rMid, yMid, cos(thPath) * rMid);
+                vec3 q = np * uFlowA.y + vec3(0.0, -te * uFlowA.w, te * uFlowA.w * 0.37);
+                //    Завитки у каждой нити свои (сдвиг по номеру нити) — соседние нити расходятся
+                //    и перекрещиваются, а не сливаются в сплошную пелену.
+                float tid = dpHash(rMid * 37.1 + yMid * 91.3);
+                vec3 q2 = np * uFlowB.x + vec3(te * uFlowA.w * 0.6, 7.3, -te * uFlowA.w) + tid * 40.0;
+                p += (dpNoise3(q) * uFlowA.x + dpNoise3(q2) * uFlowA.z) * w;
                 vec3 grain = vec3(sin(te * 1.7 + ph * 3.0), sin(te * 1.3 + ph * 5.0), cos(te * 1.9 + ph * 4.0));
                 p += grain * uFlowB.y * w;
                 p.xz += vec2(sin(te * 0.63), cos(te * 0.47)) * uFlowB.z * w;
 
-                float phi = t * spinK;
-                float cphi = cos(phi), sphi = sin(phi);
-                vec3 fp = vec3(p.x * cphi - p.z * sphi, p.y, p.z * cphi + p.x * sphi);
-
-                // 2) Стягивание (частицы светятся за счёт скучивания в режиме Add):
-                //    а) к поверхности первого поля: часть частиц — на нулевую (яркие перепонки),
-                //       часть — на ближайший из параллельных уровней (тонкие волокна);
-                //    б) вдоль этой поверхности — к линии пересечения со вторым полем (жгуты).
-                //    Поля дрейфуют в разные стороны — жгуты ползут, рвутся и пересоединяются.
-                float wc = smoothstep(0.0, uClumpC.w, w) * uClumpA.x * clumped;
-                vec3 qc = fp * uClumpA.y;
-                vec3 o1 = vec3(0.3, -1.0, 0.2) * (t * uClumpB.y);
-                vec3 o2 = vec3(19.1, -7.3, 4.7) + vec3(-0.6, 0.5, 0.7) * (t * uClumpB.y);
-                float fiber = step(h1, uClumpC.y) * step(0.001, uClumpC.x);
-                vec3 d = vec3(0.0);
-                // Два шага: один шаг Ньютона сажает частицу на поверхность лишь примерно —
-                // второй делает жгуты тонкими и резкими.
-                for (int it = 0; it < 2; it++) {
-                    vec4 n1 = dpSnoiseGrad(qc + d + o1);
-                    float level = fiber * floor(n1.w / max(uClumpC.x, 0.001) + 0.5) * uClumpC.x;
-                    float g1 = dot(n1.xyz, n1.xyz) + 1e-3;
-                    vec3 d1 = -(n1.w - level) * n1.xyz / g1;
-                    vec4 n2 = dpSnoiseGrad(qc + d + d1 + o2);
-                    vec3 d2 = -n2.w * n2.xyz / (dot(n2.xyz, n2.xyz) + 1e-3);
-                    d2 -= n1.xyz * dot(d2, n1.xyz) / g1;   // двигаться вдоль первой поверхности
-                    d += d1 + d2 * uClumpA.z * (1.0 - 0.7 * fiber); // волокна остаются в основном плёнками
+                // 2) Стягивание в жгуты (сейчас выключено: clumpStrength = 0 — давало хаос).
+                if (uClumpA.x > 0.0) {
+                    float spinK = uClumpB.z + uClumpB.w * log(1.4 / max(length(p.xz), 0.3));
+                    float phi = t * spinK;
+                    float cphi = cos(phi), sphi = sin(phi);
+                    vec3 fp = vec3(p.x * cphi - p.z * sphi, p.y, p.z * cphi + p.x * sphi);
+                    float wc = smoothstep(0.0, uClumpC.w, w) * uClumpA.x * clumped;
+                    vec3 qc = fp * uClumpA.y;
+                    vec3 o1 = vec3(0.3, -1.0, 0.2) * (t * uClumpB.y);
+                    vec3 o2 = vec3(19.1, -7.3, 4.7) + vec3(-0.6, 0.5, 0.7) * (t * uClumpB.y);
+                    vec3 d = vec3(0.0);
+                    for (int it = 0; it < 2; it++) {
+                        vec4 n1 = dpSnoiseGrad(qc + d + o1);
+                        float g1 = dot(n1.xyz, n1.xyz) + 1e-3;
+                        vec3 d1 = -n1.w * n1.xyz / g1;
+                        vec4 n2 = dpSnoiseGrad(qc + d + d1 + o2);
+                        vec3 d2 = -n2.w * n2.xyz / (dot(n2.xyz, n2.xyz) + 1e-3);
+                        d2 -= n1.xyz * dot(d2, n1.xyz) / g1;   // двигаться вдоль первой поверхности
+                        d += d1 + d2 * uClumpA.z;
+                    }
+                    float ld = length(d);
+                    if (ld > uClumpA.w) d *= uClumpA.w / ld;
+                    fp += d / uClumpA.y * wc;
+                    p = vec3(fp.x * cphi + fp.z * sphi, fp.y, fp.z * cphi - fp.x * sphi);
                 }
-                float ld = length(d);
-                if (ld > uClumpA.w) d *= uClumpA.w / ld;
-
-                fp += d / uClumpA.y * wc;
-
-                // Обратно из вращающейся системы в систему сцены.
-                p = vec3(fp.x * cphi + fp.z * sphi, fp.y, fp.z * cphi - fp.x * sphi);
             }
 
             // Вид в полёте: большинство частиц мельче и тусклее, часть — яркие искры.
@@ -583,8 +564,15 @@
             const rMap = c.ringInner + (c.ringOuter - c.ringInner) * u;
             const yMap = c.ringY + v * c.ringThickness * ringProfile(c, u);
             const ring = sampleRing(c, k);
-            const rMid = U.clamp(rMap + (ring.r - rMap) * c.cloudMix, 0, 3.99);
-            const yMid = U.clamp(yMap + (ring.y - yMap) * c.cloudMix + c.lift * seed, -2, 5.99);
+            let rMid = rMap + (ring.r - rMap) * c.cloudMix;
+            let yMid = yMap + (ring.y - yMap) * c.cloudMix + c.lift * seed;
+            // Нити: все частицы одной ячейки сечения летят по одной линии.
+            if (c.threadCell > 0) {
+                rMid = (Math.floor(rMid / c.threadCell) + 0.5) * c.threadCell;
+                yMid = (Math.floor(yMid / c.threadCell) + 0.5) * c.threadCell;
+            }
+            rMid = U.clamp(rMid, 0, 3.99);
+            yMid = U.clamp(yMid, -2, 5.99);
             return { L, D, seed, rMid, yMid };
         };
 
