@@ -30,7 +30,7 @@
         uniform vec4 uNoise2;   // изменчивость, доля улетающих, подъём, скорость частиц
         uniform vec4 uLife;     // жизнь от, до, появление (доля), наклон кольца
         uniform vec4 uTimes;    // захват (с), посадка (с), ускорение осыпания, притяжение к сердцевине
-        uniform vec4 uMove;     // движение кольца: скорость центра по высоте, скорость «дыхания» (dR/dt / R), закрутка до захвата, -
+        uniform vec4 uMove;     // движение кольца: скорость центра по высоте, скорость «дыхания» (dR/dt / R), закрутка до захвата, вращение кольца (рад/с)
         ${DP.morph.glsl.simplexNoise}
         float dpHash(float n) { return fract(sin(n * 127.1 + 311.7) * 43758.5453); }
         float h2(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
@@ -93,6 +93,8 @@
             v += cross(vec3(0.0, 1.0, 0.0), ew) * uMove.z * (1.0 - cap) * since;
             // Кольцо едет и «дышит» — захваченные частицы едут вместе с ним.
             v += (vec3(0.0, uMove.x, 0.0) + vec3(p.x - uCenter.x, 0.0, p.z - uCenter.z) * uMove.y) * cap * (1.0 - land);
+            // Вращение кольца вокруг оси (вихрь): всё кольцо крутится, быстрее всего на экваторе сферы.
+            v += cross(vec3(0.0, 1.0, 0.0), vec3(p.x - uCenter.x, 0.0, p.z - uCenter.z)) * uMove.w * cap * (1.0 - land);
             vec3 q = toRing(p);
             vec3 vr = ringFlow(q, t, uTimes.w) * uNoise2.w;
             // Улетающие: часть частиц отрывается от кольца и уходит вверх, рассеиваясь.
@@ -202,17 +204,18 @@
             if (r.at) {
                 const q = r.at(t);
                 u.uCenter.value.set(0, q.y, 0, q.R / LAB_R);
-                u.uMove.value.x = q.dy; u.uMove.value.y = q.dR / Math.max(q.R, 1e-3);
+                u.uMove.value.x = q.dy; u.uMove.value.y = q.dR / Math.max(q.R, 1e-3); u.uMove.value.w = q.w || 0;
             } else {
                 u.uCenter.value.set(r.center.x, r.center.y, r.center.z, r.R / LAB_R);
-                u.uMove.value.x = 0; u.uMove.value.y = 0;
+                u.uMove.value.x = 0; u.uMove.value.y = 0; u.uMove.value.w = 0;
             }
         },
 
         sync() {
             if (!material) return;
             const u = material.uniforms, f = DP.config.morph.smoke;
-            u.uRing.value.set(LAB_R, f.core, f.spin, f.swirl);
+            const tc = this.timing && this.timing.core != null ? this.timing.core : f.core;
+            u.uRing.value.set(LAB_R, tc, f.spin, f.swirl);
             u.uNoise.value.set(f.noiseAmp, f.noiseScale, f.detailAmp, f.detailScale);
             u.uNoise2.value.set(f.noiseSpeed, f.escape, f.lift, f.speed);
             u.uLife.value.set(f.lifeMin, Math.max(f.lifeMin + 0.01, f.lifeMax), f.fadeIn, f.tilt);

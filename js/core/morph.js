@@ -1020,29 +1020,16 @@
             return 0.5 * (lo + hi);
         };
 
-        // Силуэт: радиус фигур по высоте (85-й процентиль в полосе), кольцо идёт по большему из двух.
-        const NP = 64;
-        const bandOfY = (y) => U.clamp(Math.floor((y - bb.y0) / H * NP), 0, NP - 1);
-        const profile = (Lay) => {
-            const bins = Array.from({ length: NP }, () => []);
-            Lay.parts.forEach(p => {
-                for (let i = 0; i < p.count; i += 5) bins[bandOfY(p.rest[i * 3 + 1])].push(Math.hypot(p.rest[i * 3], p.rest[i * 3 + 2]));
-            });
-            return bins.map(b => { if (!b.length) return 0; b.sort((x, y) => x - y); return b[Math.floor(0.85 * (b.length - 1))]; });
-        };
-        const RA = profile(A), RB = profile(B);
-        let Rp = RA.map((r, i) => Math.max(r, RB[i]));
-        Rp = Rp.map((r, i) => (Rp[Math.max(0, i - 2)] + Rp[Math.max(0, i - 1)] + r + Rp[Math.min(NP - 1, i + 1)] + Rp[Math.min(NP - 1, i + 2)]) / 5);
-        Rp = Rp.map(r => Math.max(r * f.ringK, f.ringMin * bb.r1));
-        const Ry = (y) => {
-            const x = U.clamp((y - bb.y0) / H * NP - 0.5, 0, NP - 1);
-            const i = Math.min(NP - 2, Math.floor(x)), k = x - i;
-            return Rp[i] + (Rp[i + 1] - Rp[i]) * k;
-        };
+        // Кольцо обволакивает сферу вокруг фигур: на полюсах нулевое, к экватору разрастается (и толщина
+        // сердцевины растёт вместе с ним), крутится всё быстрее; внизу снова сходит на нет. Без скачков.
+        const yc = 0.5 * (yTop + yBot), hh = 0.5 * (yTop - yBot), Req = f.sphereR * bb.r1;
+        const envAt = (y) => Math.sqrt(Math.max(0, 1 - Math.pow((y - yc) / hh, 2)));
+        const Ry = (y) => Math.max(Req * envAt(y), 0.04 * Req);
         const ring = {
             at(t) {
                 const e = 1 / 60, y = yAt(t), R = Ry(y);
-                return { y, R, dy: (yAt(t + e) - yAt(t - e)) / (2 * e), dR: (Ry(yAt(t + e)) - Ry(yAt(t - e))) / (2 * e) };
+                return { y, R, dy: (yAt(t + e) - yAt(t - e)) / (2 * e), dR: (Ry(yAt(t + e)) - Ry(yAt(t - e))) / (2 * e),
+                         w: f.rotate * envAt(y) };
             }
         };
 
@@ -1117,7 +1104,7 @@
         B.parts.forEach(p => { p.inAttr.needsUpdate = true; p.pairInAttr.needsUpdate = true; });
 
         const sm = c.smoke;
-        DP.smokeSim.prepare(side, dA, dB, dS, ring, { capture: f.capture, land: f.land, gravity: f.gravity, pull: f.pull, twist: f.twist });
+        DP.smokeSim.prepare(side, dA, dB, dS, ring, { capture: f.capture, land: f.land, gravity: f.gravity, pull: f.pull, twist: f.twist, core: f.core });
         shared.uSmokeA.value.set(1, side, sm.lifeMin, Math.max(sm.lifeMin + 0.01, sm.lifeMax));
         shared.uSmokeB.value.set(sm.fadeIn, sm.fadeOut, sm.grow, f.capture);
         shared.uSmokeC.value.set(f.land, 0, 0, 0);
