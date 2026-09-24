@@ -29,6 +29,8 @@
         orchestrator.morphTo(list[(i + 1) % list.length]);
     }
 
+    DP.morphNext = morph;
+
     btnToggle.addEventListener('click', toggleMode);
     btnMorph.addEventListener('click', morph);
     orchestrator.on('morphstart', () => btnMorph.classList.add('active'));
@@ -70,7 +72,7 @@
         if (manual) return;
         const dt = last === null ? 1 / 60 : Math.min(MAX_DT, Math.max(0, (now - last) / 1000));
         last = now;
-        tick(dt);
+        tick(dt * (DP.timeScale == null ? 1 : DP.timeScale));   // timeScale — замедление для настройки (?tune)
     }
     document.addEventListener('visibilitychange', () => { last = null; });
     requestAnimationFrame(frame);
