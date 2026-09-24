@@ -19,6 +19,7 @@
     let support = null;          // null — ещё не проверяли; false — нельзя; { type } — можно
     let side = 0;
     let pairsTex = null;
+    let jitTex = null;
     let targets = null;          // [WebGLRenderTarget, WebGLRenderTarget]
     let cur = 0;
     let scene = null, camera = null, material = null;
@@ -29,6 +30,7 @@
         precision highp float;
         uniform sampler2D uState;
         uniform sampler2D uPairs;
+        uniform sampler2D uJit;
         uniform float uSide;
         uniform float uTime;
         uniform float uDt;
@@ -44,7 +46,8 @@
             float u = (uTime - L) / D;
             if (uReset > 0.5 || pd.x <= 0.0 || u <= 0.0 || u >= 1.0) { gl_FragColor = vec4(0.0); return; }
 
-            float s = dpWarp(u);
+            vec4 jit = texture2D(uJit, uv);
+            float s = dpPathS(uTime, L, D, jit.x, jit.y, uSimJitInfo.x);
             float g = s * s * (3.0 - 2.0 * s);
             float gp = 2.0 * min(g, 1.0 - g);                 // 0 — на месте, 1 — середина вихря
 
@@ -98,15 +101,16 @@
 
     function disposeTextures() {
         if (pairsTex) pairsTex.dispose();
+        if (jitTex) jitTex.dispose();
         if (targets) targets.forEach(t => t.dispose());
-        pairsTex = null; targets = null; side = 0;
+        pairsTex = null; jitTex = null; targets = null; side = 0;
     }
 
     DP.flowSim = {
         get enabled() { return !!support && DP.config.morph.simEnabled; },
 
         // Вызывается планировщиком морфинга: n — сторона текстуры, data — RGBA на пару.
-        prepare(n, data) {
+        prepare(n, data, jit) {
             shared.uSimInfo.value.set(0, 1, 0, 0);
             if (!DP.config.morph.simEnabled || !DP.stage) return;
             const renderer = DP.stage.renderer;
@@ -125,6 +129,10 @@
             pairsTex = new THREE.DataTexture(data, n, n, THREE.RGBAFormat, THREE.FloatType);
             pairsTex.minFilter = pairsTex.magFilter = THREE.NearestFilter;
             pairsTex.needsUpdate = true;
+            if (jitTex) jitTex.dispose();
+            jitTex = new THREE.DataTexture(jit, n, n, THREE.RGBAFormat, THREE.FloatType);
+            jitTex.minFilter = jitTex.magFilter = THREE.NearestFilter;
+            jitTex.needsUpdate = true;
 
             if (!material) {
                 material = new THREE.ShaderMaterial({
@@ -132,7 +140,8 @@
                         uState: { value: null }, uPairs: { value: null }, uSide: { value: 1 },
                         uTime: { value: 0 }, uDt: { value: 0 }, uReset: { value: 1 },
                         uSpring: { value: new THREE.Vector4() },
-                        uWarp: shared.uWarp, uFlowA: shared.uFlowA, uFlowC: shared.uFlowC
+                        uJit: { value: null },
+                        uWarp: shared.uWarp, uFlowA: shared.uFlowA, uFlowC: shared.uFlowC, uSimJitInfo: shared.uSimJitInfo
                     },
                     vertexShader: 'void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }',
                     fragmentShader: simFragment,
@@ -145,6 +154,8 @@
                 camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
             }
             material.uniforms.uPairs.value = pairsTex;
+            material.uniforms.uJit.value = jitTex;
+            shared.uSimJit.value = jitTex;
             material.uniforms.uSide.value = n;
             needReset = true;
             lastTime = 0;

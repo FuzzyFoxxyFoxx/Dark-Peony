@@ -38,6 +38,8 @@
         uFlowC: { value: new THREE.Vector4() },       // -, -, скорость вращения поля (рад/с), -
         uSimTex: { value: null },                     // отклонения частиц от траектории (flowsim.js)
         uSimInfo: { value: new THREE.Vector4() },     // включено (0/1), сторона текстуры, -, -
+        uSimJit: { value: null },                     // свои сдвиги отрыва/посадки пар (flowsim.js)
+        uSimJitInfo: { value: new THREE.Vector4() },  // сплочённость в вихре (simCohesion)
         uClumpA: { value: new THREE.Vector4() },      // strength, freq, filaments, maxDist
         uClumpB: { value: new THREE.Vector4() },      // fraction, speed, spin (рад/с), shear
         uClumpC: { value: new THREE.Vector4() },      // levels, fibers, dustAlpha, ramp
@@ -79,9 +81,12 @@
         shared.uClumpA.value.set(c.clumpStrength, c.clumpFreq, c.clumpFilaments, c.clumpMaxDist);
         // Поля вращаются вместе с вихрем: fieldSpin — доля пиковой угловой скорости частиц.
         const meanTravel = 0.5 * (c.minTravel + c.maxTravel);
-        const spin = c.fieldSpin * 1.5 * TWO_PI * c.turns / meanTravel;
+        // fieldSpin = 1 — поле вращается со средней скоростью вихря (с учётом ускорения участков):
+        // водовороты несутся вместе со средой, частица долго живёт в одном водовороте.
+        const spin = c.fieldSpin * TWO_PI * c.turns / (meanTravel * warpOf(c).K);
         shared.uClumpB.value.set(c.clumpFraction, c.clumpSpeed, spin, c.fieldShear);
         shared.uFlowC.value.set(0, 0, spin, 0);
+        shared.uSimJitInfo.value.set(c.simCohesion, 0, 0, 0);
         shared.uClumpC.value.set(c.clumpLevels, c.clumpFibers, c.dustAlpha, c.clumpRamp);
         shared.uTrail.value.set(c.trailLag, Math.max(1, Math.round(c.trailLength) - 1), c.trailFade, Math.max(0.05, 0.5 - c.swirlHold));
         shared.uSwirlA.value.set(c.swirlSize, c.swirlSizeMin, c.swirlAlpha, c.swirlVisible);
@@ -222,6 +227,7 @@
         uniform vec4 uWarp;
         uniform vec4 uFlowA;
         uniform vec4 uFlowC;
+        uniform vec4 uSimJitInfo;   // сплочённость в вихре, -, -, -
         // Реальная доля времени полёта u → доля пути s. Три участка с разной скоростью,
         // сшитые кубическими кривыми Эрмита (скорость меняется плавно, без рывков на стыках).
         float dpHermite(float x, float x0, float x1, float y0, float y1, float m0, float m1) {
@@ -238,6 +244,18 @@
             if (u < u1) return dpHermite(u, 0.0, u1, 0.0, a, v0, m1);
             if (u < u2) return dpHermite(u, u1, u2, a, 1.0 - a, m1, m2);
             return dpHermite(u, u2, 1.0, 1.0 - a, 1.0, m2, v2);
+        }
+
+        // Доля пути с учётом «сплочённости»: у концов пути частица идёт по своему расписанию
+        // (распад и сборка по частицам), в вихре — догоняет общий поток соседей (jL, jA — её сдвиги).
+        float dpPathS(float t, float L, float D, float jL, float jA, float cohesion) {
+            float sOwn = dpWarp(clamp((t - L) / D, 0.0, 1.0));
+            float Lc = L - jL;
+            float Dc = max(0.05, D + jL - jA);
+            float sCom = dpWarp(clamp((t - Lc) / Dc, 0.0, 1.0));
+            float gOwn = sOwn * sOwn * (3.0 - 2.0 * sOwn);
+            float c = cohesion * smoothstep(0.0, 1.0, 2.0 * min(gOwn, 1.0 - gOwn));
+            return mix(sOwn, sCom, c);
         }
 
         // Скорость среды в точке x в момент tau: поле водоворотов (∇n1 × ∇n2 — без «ям и бугров»,
@@ -262,6 +280,7 @@
         uniform mat4 uStageMatrixInv;
         uniform vec4 uWave;
         uniform sampler2D uSimTex;
+        uniform sampler2D uSimJit;
         uniform vec4 uSimInfo;
         attribute float aPairOut;
         attribute float aPairIn;
@@ -308,6 +327,13 @@
             float arrive = L + D;
             float t = uMorphTime;
             float s = dpWarp(clamp((t - L) / D, 0.0, 1.0));
+            vec2 dpSimUV = vec2(0.0);
+            if (uSimInfo.x > 0.5) {
+                float kk = outRole ? aPairOut : aPairIn;
+                dpSimUV = (vec2(mod(kk, uSimInfo.y), floor(kk / uSimInfo.y)) + 0.5) / uSimInfo.y;
+                vec4 jit = texture2D(uSimJit, dpSimUV);
+                s = dpPathS(t, L, D, jit.x, jit.y, uSimJitInfo.x);
+            }
 
             // Видимость: уходящая точка живёт до середины пути, прилетающая — после.
             if (outRole) {
@@ -380,11 +406,7 @@
             if (w > 0.0005) {
                 // 1) Среда: отклонение от траектории считает симуляция на видеокарте (js/core/flowsim.js).
                 //    Каждая пара частиц — пиксель текстуры; A и B читают один пиксель, эстафета не рвётся.
-                if (uSimInfo.x > 0.5) {
-                    float kk = outRole ? aPairOut : aPairIn;
-                    vec2 suv = (vec2(mod(kk, uSimInfo.y), floor(kk / uSimInfo.y)) + 0.5) / uSimInfo.y;
-                    p += texture2D(uSimTex, suv).xyz * smoothstep(0.0, 0.1, gp);
-                }
+                if (uSimInfo.x > 0.5) p += texture2D(uSimTex, dpSimUV).xyz * smoothstep(0.0, 0.1, gp);
                 p.xz += vec2(sin(te * 0.63), cos(te * 0.47)) * uFlowB.w * wf;
 
                 // 2) Морская волна по вертикали: радиус не меняется, частица поднимается и опускается.
@@ -630,13 +652,18 @@
             const orderA = U.clamp(P.pa.order[P.la], 0, 1);
             const orderB = U.clamp(P.pb.order[P.lb], 0, 1);
             const keyB = insideOut ? 1 - orderB : orderB;
+            // Общее (плавное по месту) расписание пары — в исходном времени, затем ускоряется:
+            // фронт распада — в speedIn раз, полёт — по участкам (warp.K).
             const L0 = c.leaveStart + c.leaveSpread * orderA;
-            const rnd = U.seededRandom(k * 1.319 + 5.1);
-            const target = c.arriveStart + c.arriveSpread * keyB + (rnd - 0.5) * c.travelJitter;
-            // Расписание считается в исходном времени, затем ускоряется: фронт распада — в speedIn раз,
-            // полёт — по участкам (warp.K).
-            const L = c.leaveStart + c.leaveSpread * orderA / c.speedIn;
-            const D = U.clamp(target - L0, c.minTravel, c.maxTravel) * warp.K;
+            const target = c.arriveStart + c.arriveSpread * keyB;
+            const Lc = c.leaveStart + c.leaveSpread * orderA / c.speedIn;
+            const Dc = U.clamp(target - L0, c.minTravel, c.maxTravel) * warp.K;
+            // Свой разброс частицы (распад и сборка «по частицам»): сдвиг отрыва и сдвиг посадки.
+            // В вихре частица догоняет общий поток (simCohesion), и полотна снова становятся чёткими.
+            const jL = (U.seededRandom(k * 0.7311 + 3.3) - 0.5) * 2 * c.orderJitter * c.leaveSpread / c.speedIn;
+            const jA = (U.seededRandom(k * 1.319 + 5.1) - 0.5) * c.travelJitter * warp.K;
+            const L = Math.max(0, Lc + jL);
+            const D = Math.max(0.05, Dc + jA - (L - Lc));
 
             // Середина пути — НЕПРЕРЫВНОЕ отображение цветка в кольцо: соседи на цветке остаются
             // соседями в вихре, поэтому лепесток на глазах вытягивается в ленту, а не тает в пыль.
@@ -659,12 +686,13 @@
             }
             rMid = U.clamp(rMid, 0, 3.99);
             yMid = U.clamp(yMid, -2, 5.99);
-            return { L, D, seed, rMid, yMid };
+            return { L, D, seed, rMid, yMid, jL: L - Lc, jA };
         };
 
         // Данные пар для симуляции среды: пиксель k = (время, угол поворота, азимут старта, середина пути).
         const simSide = Math.max(1, Math.ceil(Math.sqrt(N)));
         const simData = new Float32Array(simSide * simSide * 4);
+        const simJit = new Float32Array(simSide * simSide * 4);   // свой сдвиг отрыва и посадки (сек)
 
         let cacheK = -1, cache = null;
         for (let k = 0; k < N; k++) {
@@ -708,11 +736,12 @@
             }
             const js = k * 4;
             simData[js] = packed; simData[js + 1] = delta; simData[js + 2] = U.azimuth(ax, az); simData[js + 3] = midPacked;
+            simJit[js] = cache.jL; simJit[js + 1] = cache.jA;
         }
 
         A.parts.forEach(p => { p.outAttr.needsUpdate = true; p.pairOutAttr.needsUpdate = true; });
         B.parts.forEach(p => { p.inAttr.needsUpdate = true; p.pairInAttr.needsUpdate = true; });
-        if (DP.flowSim) DP.flowSim.prepare(simSide, simData);
+        if (DP.flowSim) DP.flowSim.prepare(simSide, simData, simJit);
 
         return end + c.meshRevealLag + c.meshFade + 0.1;
     }
