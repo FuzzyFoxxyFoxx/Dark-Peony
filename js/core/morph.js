@@ -33,6 +33,7 @@
         uMorphSched2: { value: new THREE.Vector4() }, // assembleInvert, meshRevealLag, meshFade, -
         uFlowA: { value: new THREE.Vector4() },       // flowAmp, flowFreq, flowMemory (с), flowSpeed
         uFlowB: { value: new THREE.Vector4() },       // -, fieldDelay, poseBlend, precession
+        uWave: { value: new THREE.Vector4() },        // waveAmp, waveCount, waveSpeed, waveRadial
         uFlowC: { value: new THREE.Vector4() },       // flowSteps, -, скорость вращения поля (рад/с), -
         uClumpA: { value: new THREE.Vector4() },      // strength, freq, filaments, maxDist
         uClumpB: { value: new THREE.Vector4() },      // fraction, speed, spin (рад/с), shear
@@ -51,6 +52,7 @@
         shared.uMorphSched2.value.set(c.assemble === 'outside-in' ? 0 : 1, c.meshRevealLag, c.meshFade, 0);
         shared.uFlowA.value.set(c.flowAmp, c.flowFreq, c.flowMemory, c.flowSpeed);
         shared.uFlowB.value.set(0, c.fieldDelay, c.poseBlend, c.precession);
+        shared.uWave.value.set(c.waveAmp, c.waveCount, c.waveSpeed, c.waveRadial);
         const steps = c.flowSteps[DP.quality] || c.flowSteps.high;
         const rc = c.ringInner + (c.ringOuter - c.ringInner) * c.ringPeak;
         shared.uTwist.value.set(c.twistPerTurn, c.twistSpeed, rc, c.ringY);
@@ -201,6 +203,7 @@
         uniform mat4 uStageMatrixInv;
         uniform vec4 uFlowA;
         uniform vec4 uFlowC;
+        uniform vec4 uWave;
         uniform vec4 uFlowB;
         uniform vec4 uClumpA;
         uniform vec4 uClumpB;
@@ -333,7 +336,7 @@
                 //    Считается по идеальному пути пары, поэтому эстафета A→B не рвётся.
                 vec3 disp = vec3(0.0);
                 for (int i = 0; i < 6; i++) {
-                    if (float(i) >= uFlowC.x) break;
+                    if (float(i) >= uFlowC.x || uFlowA.x <= 0.0) break;
                     float tau = te - uFlowA.z * (float(i) + 0.5) / uFlowC.x;
                     float sT = clamp((tau - L) / D, 0.0, 1.0);
                     float gT = sT * sT * (3.0 - 2.0 * sT);
@@ -345,6 +348,12 @@
                 }
                 p += disp * (uFlowA.x * uFlowA.z / uFlowC.x) * smoothstep(0.0, 0.15, gp);
                 p.xz += vec2(sin(te * 0.63), cos(te * 0.47)) * uFlowB.w * wf;
+
+                // 2) Морская волна по вертикали: радиус не меняется, частица поднимается и опускается.
+                //    Фаза зависит от места (угол на пути, радиус) и времени, а не от частицы —
+                //    соседи качаются вместе, по вихрю бегут пологие волны, а не хаос.
+                float wph = uWave.y * thPath + uWave.w * rMid - uWave.z * te;
+                p.y += (sin(wph) + 0.35 * sin(1.7 * wph + 2.1 * rMid + 0.6 * te)) * uWave.x * wf;
 
                 // 2) Стягивание в жгуты (сейчас выключено: clumpStrength = 0 — давало хаос).
                 if (uClumpA.x > 0.0) {
