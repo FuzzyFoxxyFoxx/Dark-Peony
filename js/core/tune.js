@@ -26,7 +26,21 @@
     });
 
     DP.tuneSpec = DP.tuneSpec || [
-        ['Дым: время'],
+        ['Кольцо-кисть'],
+        ['sweep.descent', 'спуск кольца, с', 0.5, 6, 0.05],
+        ['sweep.ease', 'разгон/торможение', 0, 1, 0.01],
+        ['sweep.lead', 'срыв заранее, с', 0, 1.5, 0.01],
+        ['sweep.dwell', 'проявление новой, с', 0, 2, 0.01],
+        ['sweep.dome', 'фронт куполом', -0.5, 0.8, 0.01],
+        ['sweep.twist', 'закрутка до захвата', 0, 8, 0.05],
+        ['sweep.capture', 'захват кольцом, с', 0.05, 2, 0.01],
+        ['sweep.land', 'посадка, с', 0.1, 2, 0.01],
+        ['sweep.gravity', 'осыпание', 0, 10, 0.1],
+        ['sweep.pull', 'притяжение к сердцевине', 0, 8, 0.05],
+        ['sweep.ringK', 'радиус по силуэту', 0.2, 2, 0.01],
+        ['sweep.ringMin', 'мин. радиус', 0, 1, 0.01],
+        ['sweep.margin', 'выше/ниже фигур', 0, 0.5, 0.01],
+        ['Дым: время (режим «дымное кольцо»)'],
         ['smoke.leaveSpread', 'обрушение сверху вниз, с', 0.1, 4, 0.05],
         ['smoke.hold', 'кольцо целиком, с', 0, 5, 0.05],
         ['smoke.arriveSpread', 'сборка сверху вниз, с', 0.1, 4, 0.05],
@@ -119,7 +133,7 @@
     const loop = { on: DP.params.get('loop') !== '0', pause: parseFloat(DP.params.get('pause') || '1.5') };
     const bar = document.createElement('div');
     bar.innerHTML = '<button data-a="loop"></button><button data-a="now">морфинг сейчас</button>' +
-        '<select data-a="mode"><option value="smoke">дымное кольцо</option><option value="fountain">фонтан</option><option value="vortex">вихрь</option></select>';
+        '<select data-a="mode"><option value="sweep">кольцо-кисть</option><option value="smoke">дымное кольцо</option><option value="fountain">фонтан</option><option value="vortex">вихрь</option></select>';
     rows.appendChild(bar);
     const bLoop = bar.querySelector('[data-a=loop]'), sMode = bar.querySelector('[data-a=mode]');
     const showLoop = () => { bLoop.textContent = loop.on ? 'цикл: вкл' : 'цикл: выкл'; };

@@ -30,6 +30,7 @@
         uniform vec4 uNoise2;   // изменчивость, доля улетающих, подъём, скорость частиц
         uniform vec4 uLife;     // жизнь от, до, появление (доля), наклон кольца
         uniform vec4 uTimes;    // захват (с), посадка (с), ускорение осыпания, притяжение к сердцевине
+        uniform vec4 uMove;     // движение кольца: скорость центра по высоте, скорость «дыхания» (dR/dt / R), закрутка до захвата, -
         ${DP.morph.glsl.simplexNoise}
         float dpHash(float n) { return fract(sin(n * 127.1 + 311.7) * 43758.5453); }
         float h2(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
@@ -87,6 +88,11 @@
 
             // Осыпание: пока кольцо не захватило частицу, она падает с ускорением.
             vec3 v = vec3(0.0, -uTimes.z * since, 0.0) * (1.0 - cap);
+            // Закрутка: до захвата частица начинает кружить вокруг оси фигуры (как вихрь), всё быстрее.
+            vec3 ew = normalize(vec3(p.x, 0.0, p.z) + vec3(1e-5, 0.0, 0.0));
+            v += cross(vec3(0.0, 1.0, 0.0), ew) * uMove.z * (1.0 - cap) * since;
+            // Кольцо едет и «дышит» — захваченные частицы едут вместе с ним.
+            v += (vec3(0.0, uMove.x, 0.0) + vec3(p.x - uCenter.x, 0.0, p.z - uCenter.z) * uMove.y) * cap * (1.0 - land);
             vec3 q = toRing(p);
             vec3 vr = ringFlow(q, t, uTimes.w) * uNoise2.w;
             // Улетающие: часть частиц отрывается от кольца и уходит вверх, рассеиваясь.
@@ -151,7 +157,9 @@
         },
 
         // n — сторона текстуры; dA: xyz фигуры A + отрыв L; dB: xyz фигуры B + длительность D; dS: seed.
-        prepare(n, dA, dB, dS, ring) {
+        // ring: { center, R } — неподвижное кольцо, или { at(t) → {y, R, dy, dR} } — кольцо едет и дышит.
+        // timing: { capture, land, gravity, pull, twist } — вместо значений DP.config.morph.smoke.
+        prepare(n, dA, dB, dS, ring, timing) {
             if (!this.supported()) return;
             if (n !== side) {
                 if (targets) targets.forEach(t => t.dispose());
@@ -167,7 +175,7 @@
                         uSide: { value: 1 }, uTime: { value: 0 }, uDt: { value: 0 }, uReset: { value: 1 },
                         uCenter: { value: new THREE.Vector4() }, uRing: { value: new THREE.Vector4() },
                         uNoise: { value: new THREE.Vector4() }, uNoise2: { value: new THREE.Vector4() },
-                        uLife: { value: new THREE.Vector4() }, uTimes: { value: new THREE.Vector4() }
+                        uLife: { value: new THREE.Vector4() }, uTimes: { value: new THREE.Vector4() }, uMove: { value: new THREE.Vector4() }
                     },
                     vertexShader: 'void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }',
                     fragmentShader: simFragment,
@@ -181,13 +189,26 @@
             }
             const u = material.uniforms, f = DP.config.morph.smoke;
             u.uA.value = texA; u.uB.value = texB; u.uS.value = texS; u.uSide.value = n;
-            u.uCenter.value.set(ring.center.x, ring.center.y, ring.center.z, ring.R / LAB_R);
+            this.ring = ring; this.timing = timing || null;
+            this.placeRing(0);
             this.sync();
             needReset = true; lastTime = 0;
             shared.uSmokeTex.value = targets[cur].texture;
         },
 
         // Параметры течения и жизни из DP.config.morph.smoke (можно менять на ходу).
+        placeRing(t) {
+            const u = material.uniforms, r = this.ring;
+            if (r.at) {
+                const q = r.at(t);
+                u.uCenter.value.set(0, q.y, 0, q.R / LAB_R);
+                u.uMove.value.x = q.dy; u.uMove.value.y = q.dR / Math.max(q.R, 1e-3);
+            } else {
+                u.uCenter.value.set(r.center.x, r.center.y, r.center.z, r.R / LAB_R);
+                u.uMove.value.x = 0; u.uMove.value.y = 0;
+            }
+        },
+
         sync() {
             if (!material) return;
             const u = material.uniforms, f = DP.config.morph.smoke;
@@ -195,7 +216,9 @@
             u.uNoise.value.set(f.noiseAmp, f.noiseScale, f.detailAmp, f.detailScale);
             u.uNoise2.value.set(f.noiseSpeed, f.escape, f.lift, f.speed);
             u.uLife.value.set(f.lifeMin, Math.max(f.lifeMin + 0.01, f.lifeMax), f.fadeIn, f.tilt);
-            u.uTimes.value.set(f.capture, f.land, f.gravity, f.pull);
+            const tm = this.timing || f;
+            u.uTimes.value.set(tm.capture, tm.land, tm.gravity, tm.pull);
+            u.uMove.value.z = tm.twist || 0;
         },
 
         step(time) {
@@ -211,6 +234,7 @@
                 u.uTime.value = needReset ? 0 : lastTime + total * (i + 1) / n;
                 u.uDt.value = needReset ? 0 : total / n;
                 u.uReset.value = needReset ? 1 : 0;
+                this.placeRing(u.uTime.value);
                 renderer.setRenderTarget(targets[1 - cur]);
                 renderer.render(scene, camera);
                 cur = 1 - cur;
