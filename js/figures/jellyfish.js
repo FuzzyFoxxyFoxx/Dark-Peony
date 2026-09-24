@@ -21,6 +21,7 @@
     const RIB_COUNT = 16;         // радиальные каналы купола
     const RIBBON_COUNT = 6;       // ленты
     const TENTACLE_COUNT = 12;    // длинные щупальца
+    const TENTACLE_OUTER = 9;     // из них внешним кольцом; остальные 3 — ближе к центру и длиннее
     const STAMENS_PER_GAP = 5;    // коротких «тычинок» между соседними лентами
     // Какие части медузы показывать по умолчанию (доводим по частям; '' — все). ?parts= в адресе важнее.
     const DEFAULT_PARTS = 'tentacles';
@@ -198,19 +199,9 @@
         }
     `;
 
-    const tentPars = `uniform float uTime; attribute float aSeed; attribute vec3 aRingC; varying vec3 vNormal, vViewPosition; varying vec2 vUv;`;
+    const tentPars = `uniform float uTime; attribute float aSeed; varying vec3 vNormal, vViewPosition; varying vec2 vUv;`;
     const tentDisplacement = `
         vUv = uv; vec3 pos = position; vec3 dpRest = position; float whip = pow(uv.y, 1.3);
-        // Кольца наклонены к зрителю (одинаково для всех): сбоку они видны овалами, как у пиона сверху.
-        {
-            vec3 dC = cameraPosition - modelMatrix[3].xyz;
-            float s2 = dot(modelMatrix[0].xyz, modelMatrix[0].xyz);
-            vec3 camL = vec3(dot(modelMatrix[0].xyz, dC), dot(modelMatrix[1].xyz, dC), dot(modelMatrix[2].xyz, dC)) / s2;
-            vec2 toCam = camL.xz - aRingC.xz;
-            toCam /= max(length(toCam), 1e-4);
-            vec3 o = position - aRingC;
-            pos.y -= dot(o.xz, toCam) * 0.5;
-        }
         float t1 = uTime * 1.2 - uv.y * 7.0 + aSeed * 9.1;
         float t2 = uTime * 0.9 - uv.y * 9.5 + aSeed * 4.3;
         pos.x += (sin(t1) * 0.22 + cos(t2) * 0.10) * whip;
@@ -507,7 +498,7 @@
     }
 
     // ---------- ТОНКОЕ ЩУПАЛЬЦЕ (трубка вниз) ----------
-    // aRingC — центр кольца: шейдер наклоняет кольцо к зрителю (см. tentDisplacement).
+    // Кольца лежат горизонтально (не разворачиваются к зрителю): овалами их делает наклон сцены, как у пиона.
     function buildTentacle(len, radius, seed, segments, radial, sway) {
         const pts = [];
         for (let s = 0; s <= 40; s++) {
@@ -518,7 +509,7 @@
                 Math.cos(t * Math.PI * 0.9 + seed * 1.3) * sway * 0.8 * t));
         }
         const path = new THREE.CatmullRomCurve3(pts);
-        const pos = [], nor = [], uvs = [], seeds = [], idx = [], ringC = [];
+        const pos = [], nor = [], uvs = [], seeds = [], idx = [];
         for (let i = 0; i <= segments; i++) {
             const v = i / segments;
             const c = path.getPointAt(v);
@@ -530,7 +521,6 @@
                 nor.push(nx, 0, nz);
                 uvs.push(j / radial, v);
                 seeds.push(seed);
-                ringC.push(c.x, c.y, c.z);
             }
         }
         for (let i = 0; i < segments; i++) for (let j = 0; j < radial; j++) {
@@ -543,7 +533,6 @@
         geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
         geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
         geo.setAttribute('aSeed', new THREE.Float32BufferAttribute(seeds, 1));
-        geo.setAttribute('aRingC', new THREE.Float32BufferAttribute(ringC, 3));
         return geo;
     }
 
@@ -587,11 +576,17 @@
 
         const tentacles = [];
         // Длинные щупальца — трубки из колец точек, как у пиона (16 точек в кольце, тот же шаг на экране).
+        // 9 — внешним кольцом, в среднем на 20% длиннее лент; 3 самых длинных (ещё +16%) — ближе к центру.
+        // У каждого свой разброс длины, радиуса и угла.
+        const ribbonLen = 1.92 + 0.21;                       // средняя длина ленты
         for (let i = 0; i < TENTACLE_COUNT; i++) {
             const seed = i * 2.43 + 1.7;
-            const angle = (i / TENTACLE_COUNT) * Math.PI * 2 + (seededRandom(seed * 3.3) - 0.5) * 0.3;
-            const r = innerR * (0.3 + seededRandom(seed * 5.1) * 0.25);
-            const len = 1.9 + seededRandom(seed * 1.9) * 0.5;
+            const outer = i < TENTACLE_OUTER;
+            const n = outer ? TENTACLE_OUTER : TENTACLE_COUNT - TENTACLE_OUTER;
+            const k = outer ? i : i - TENTACLE_OUTER;
+            const angle = (k / n) * Math.PI * 2 + (outer ? 0 : Math.PI / 3) + (seededRandom(seed * 3.3) - 0.5) * (outer ? 0.35 : 0.6);
+            const r = innerR * (outer ? 0.42 + seededRandom(seed * 5.1) * 0.14 : 0.12 + seededRandom(seed * 5.1) * 0.1);
+            const len = ribbonLen * 1.2 * (outer ? 0.88 + seededRandom(seed * 1.9) * 0.24 : 1.16 * (0.96 + seededRandom(seed * 1.9) * 0.08));
             const geo = buildTentacle(len, TUBE_R * 1.8, seed, Math.round(len / RING_STEP), 16, 0.3);
             const matrix = matrixOf((pivot, obj) => {
                 pivot.rotation.y = angle;
@@ -951,7 +946,7 @@
     // ==========================================
     DP.figures.register({
         name: 'jellyfish',
-        stageTilt: -0.95,     // наклон сцены: смотрим чуть снизу, «под юбку» купола
+        stageTilt: -1.25,     // наклон сцены: смотрим снизу (~26°) — кольца щупалец видны овалами, как у пиона
         createInstance(ctx) {
             const data = cache[ctx.quality] || (cache[ctx.quality] = buildGeometry(ctx.qualityTier));
             const mats = createMaterials(ctx, data);
