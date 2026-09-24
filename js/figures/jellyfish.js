@@ -71,9 +71,18 @@
     const ribbonPars = `
         uniform float uTime;
         attribute float aSeed;
-        attribute vec3 aRuf;
+        attribute vec4 aRuf;
         varying vec3 vNormal, vViewPosition;
         varying vec2 vUv;
+        vec2 dpLobe(float ph, float sd) {
+            float k = floor(ph / 6.2831853), t = ph / 6.2831853 - k;
+            float h = 0.5 + 0.8 * fract(sin((k + sd) * 12.9898) * 43758.5453);
+            float o = 0.1 + 0.45 * fract(sin((k + sd) * 78.233) * 12345.678);
+            float mt = 1.0 - t;
+            float bx = 3.0 * mt * t * t * (1.0 + o) + t * t * t + 3.0 * mt * mt * t * 0.05;
+            float by = 3.0 * mt * mt * t * 0.9 + 3.0 * mt * t * t * 1.15;
+            return vec2(bx - t, by * h);
+        }
     `;
     // uv.x — поперёк ленты (0 прямой край, 1 волнистый), uv.y — вдоль (0 верх, 1 низ).
     const ribbonDisplacement = `
@@ -98,13 +107,13 @@
                                      + 0.4 * sin(u * (9.0 + 4.0 * rA) - uTime * (1.7 + 0.5 * rC) + aSeed * 1.3)) ;
             env *= 0.8 + 0.5 * rC;
             float amp = aRuf.x * env * (0.15 + 0.85 * smoothstep(0.03, 0.45, u));   // у крепления рюши слабые
-            amp *= 0.75 + 0.25 * sin(ph * 0.37 + aSeed * 2.1) + 0.15 * sin(ph * 0.61 + aSeed);  // лопасти разного размера
-            // Округлые лопасти с «шейками»: выпирают наружу и нависают вдоль длины (эскиз автора).
-            float e2 = uv.x * uv.x * (3.0 - 2.0 * uv.x);            // выпирает широкая полоса у кромки
-            float b0 = 0.5 + 0.5 * sin(ph); float bump = b0 * (2.0 - b0);   // скруглённые лопасти, узкие «шейки»
-            float acr = e2 * amp * 1.0 * bump;
-            float alg = -e2 * amp * 0.3 * cos(ph) * bump;
-            float zz = pow(uv.x, 1.8) * amp * 0.45 * sin(ph + 0.5);
+            // Лопасти-Безье с «шейками» и нависанием (эскиз автора), размер и нависание — свои у каждой лопасти.
+            // Номер лопасти берём от фазы без времени, сдвинутой на пройденный путь, — форма едет вместе с лопастью.
+            vec2 lb = dpLobe(ph, aSeed);
+            float e2 = uv.x * uv.x * (3.0 - 2.0 * uv.x);
+            float acr = e2 * amp * lb.y;
+            float alg = -e2 * lb.x * (6.2831853 / aRuf.w) * min(1.0, amp / 0.1);
+            float zz = pow(uv.x, 1.8) * amp * 0.3 * sin(ph + 0.5);
             float ca = cos(aRuf.z), sa = sin(aRuf.z);
             pos.x += acr * ca - zz * sa;
             pos.z += acr * sa + zz * ca;
@@ -306,20 +315,34 @@
         // (без сдвига фаз край не закручивается штопором, а складывается гармошкой).
         // Рюши — округлые лопасти с «шейками» (эскиз автора): кромка выпирает наружу и заворачивается
         // вдоль длины (нависает), размер лопастей плавно гуляет. Та же формула — в шейдере (ribbonDisplacement).
-        const lobe = rA * (0.75 + 0.25 * Math.sin(ph * 0.37 + p.seed * 2.1) + 0.15 * Math.sin(ph * 0.61 + p.seed));
+        const L = ribbonLobe(ph, p.seed);
         const e2 = v * v * (3 - 2 * v);                     // выпирает широкая полоса у кромки, а не одна линия
-        const b0 = 0.5 + 0.5 * Math.sin(ph), bump = b0 * (2 - b0);   // широкие скруглённые лопасти, узкие «шейки»
-        let across = v * W + e2 * lobe * 1.0 * bump;
-        const along = -e2 * lobe * 0.3 * Math.cos(ph) * bump;
-        let z = Math.pow(v, 1.8) * lobe * 0.45 * Math.sin(ph + 0.5);
+        let across = v * W + e2 * rA * L[1];
+        const along = e2 * L[0] * (Math.PI * 2 / p.ruffleK) * Math.min(1, rA / 0.1);
+        let z = Math.pow(v, 1.8) * rA * 0.3 * Math.sin(ph + 0.5);
         const a = p.twist * u;                                             // лёгкое скручивание вдоль длины (у крепления лента строго радиальна)
         const x = across * Math.cos(a) - z * Math.sin(a);
         z = across * Math.sin(a) + z * Math.cos(a);
         return [
             x + p.splay * Math.pow(u, 0.8) + Math.sin(u * Math.PI * 1.2 + p.seed) * 0.14 * u,
-            -u * p.len + along,
+            -u * p.len - along,
             z + Math.cos(u * Math.PI * 0.9 + p.seed * 1.7) * 0.12 * u
         ];
+    }
+
+    // Лопасть рюшей — кубическая кривая Безье (эскиз автора): от «шейки» к «шейке», верх лопасти
+    // выносится дальше её конца — нависает над следующей шейкой. Размер и нависание — свои у каждой
+    // лопасти (хэш номера лопасти), лопасть бежит по кромке вместе со своей формой.
+    // Возвращает [сдвиг вдоль длины (в долях шага лопасти), высоту выпуклости].
+    function ribbonLobe(ph, sd) {
+        const fr = (x) => x - Math.floor(x);
+        const k = Math.floor(ph / (Math.PI * 2)), t = ph / (Math.PI * 2) - k;
+        const h = 0.5 + 0.8 * fr(Math.sin((k + sd) * 12.9898) * 43758.5453);
+        const o = 0.1 + 0.45 * fr(Math.sin((k + sd) * 78.233) * 12345.678);
+        const mt = 1 - t;
+        const bx = 3 * mt * t * t * (1 + o) + t * t * t + 3 * mt * mt * t * 0.05;
+        const by = 3 * mt * mt * t * 0.9 + 3 * mt * t * t * 1.15;
+        return [bx - t, by * h];
     }
 
     // У основания волна рюшей длиннее (вдвое), к середине — обычная: фаза растёт медленнее у крепления.
@@ -328,7 +351,7 @@
     // Параметры оборки в точке ленты для шейдера: амплитуда, фаза, угол скручивания.
     function ribbonRuffle(u, p) {
         const W = p.width * Math.sin(Math.PI * (0.2 + 0.8 * u));
-        return [p.ruffleAmp * (W / p.width), ruffleWarp(u) * p.len * p.ruffleK + p.seed, p.twist * u];
+        return [p.ruffleAmp * (W / p.width), ruffleWarp(u) * p.len * p.ruffleK + p.seed, p.twist * u, p.ruffleK];
     }
 
     // Точки ленты — как у лепестков пиона: ровная сетка, у каждого узла несколько точек
@@ -368,7 +391,7 @@
         pointsGeo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
         pointsGeo.setAttribute('aSeed', new THREE.Float32BufferAttribute(seeds, 1));
         pointsGeo.setAttribute('aSizeScale', new THREE.Float32BufferAttribute(size, 1));
-        pointsGeo.setAttribute('aRuf', new THREE.Float32BufferAttribute(ruf, 3));
+        pointsGeo.setAttribute('aRuf', new THREE.Float32BufferAttribute(ruf, 4));
 
         // Поверхность.
         const mU = 220, mV = 16;
@@ -388,7 +411,7 @@
         meshGeo.setAttribute('position', new THREE.Float32BufferAttribute(mPos, 3));
         meshGeo.setAttribute('uv', new THREE.Float32BufferAttribute(mUv, 2));
         meshGeo.setAttribute('aSeed', new THREE.Float32BufferAttribute(mSeed, 1));
-        meshGeo.setAttribute('aRuf', new THREE.Float32BufferAttribute(mRuf, 3));
+        meshGeo.setAttribute('aRuf', new THREE.Float32BufferAttribute(mRuf, 4));
         meshGeo.computeVertexNormals();
         return { pointsGeo, meshGeo };
     }
@@ -780,7 +803,7 @@
                 varying float vDepthK;
                 uniform float uViewportScale, uSize;
                 attribute float aSizeScale;
-                varying float vAlpha, vFresnel;
+                varying float vAlpha, vFresnel, vComp;
                 void main() {
                     ${ribbonDisplacement}
                     vec4 mv = viewMatrix * dpMorph(dpRest, pos);
@@ -795,22 +818,25 @@
                     // 1/|cos| угла к взгляду — гасим прозрачность обратно; лицевые ленты чуть ярче прежнего.
                     float facing = abs(dot(N, normalize(-mv.xyz)));
                     float comp = mix(0.18, 1.0, smoothstep(0.04, 0.55, facing));
-                    vAlpha = (0.14 + 0.75 * vFresnel) * comp * ${ribbonAlpha};   // френель как у лепестков
+                    vComp = comp;
+                    vAlpha = (0.14 + 0.75 * vFresnel) * ${ribbonAlpha};   // френель как у лепестков
                     dpMorphFinish();
                 }
             `,
             fragmentShader: `
                 ${G.pointsFragment}
                 uniform sampler2D uTexture;
-                varying float vAlpha, vFresnel, vDepthK;
+                varying float vAlpha, vFresnel, vDepthK, vComp;
                 varying vec2 vUv;
                 void main() {
                     vec4 tex = texture2D(uTexture, gl_PointCoord);
                     if (tex.a < 0.01) discard;
                     vec3 color = mix(vec3(0.04, 0.1, 0.2), vec3(0.7, 0.88, 1.0), 0.2 + 1.0 * vFresnel);
                     // Края светятся сильнее, чем у лепестков пиона: волнистая кромка и немного — прямой край.
-                    float edgeGlow = smoothstep(0.55, 1.0, vUv.x) * 3.0 + (1.0 - smoothstep(0.0, 0.12, vUv.x)) * 1.8;
-                    float a = tex.a * vAlpha * 0.9 * (1.0 + edgeGlow);
+                    float edgeGlow = smoothstep(0.55, 1.0, vUv.x) * 4.0 + (1.0 - smoothstep(0.0, 0.12, vUv.x)) * 2.6;
+                    // Контур ленты светится и у лент, повёрнутых плашмя: компенсация «ребром» гасит полотно
+                    // сильнее, чем контур, — ленты видны ровнее при любом повороте.
+                    float a = tex.a * vAlpha * 0.9 * (vComp + edgeGlow * (0.45 + 0.55 * vComp));
                     a = a / (0.45 + a * 2.2) * vDepthK;
                     gl_FragColor = dpMorphColor(color, a, tex.a);
                 }
