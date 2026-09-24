@@ -107,19 +107,27 @@
     // Юбка: uv.x — угол по кругу (0..1), uv.y — от стыка с куполом (0) к нижнему краю (1).
     const skirtPars = `
         uniform float uTime;
+        attribute float aSeed;
         varying vec3 vNormal, vViewPosition;
         varying vec2 vUv;
     `;
-    // Две синусоиды: радиальная — юбка колышется по радиусу; вертикальная — колышется нижний край.
+    // Верхний край (стык с куполом) неподвижен: все колебания умножаются на степень h (0 у стыка).
+    //  • «гребок» в такт пульсации купола: подол сжимается внутрь и подтягивается вверх, потом расслабляется;
+    //  • радиальная волна — юбка колышется по радиусу;
+    //  • вертикальная волна по кругу — подол ходит вверх-вниз.
     const skirtDisplacement = `
         vUv = uv; vec3 pos = position; vec3 dpRest = position;
         float h = uv.y;
         float th = uv.x * 6.2831853;
         vec2 dir = normalize(position.xz + 1e-5);
-        float radial = sin(uTime * 1.2 + th * 3.0) * 0.6 + sin(uTime * 0.8 - th * 5.0 + 1.3) * 0.4;
-        pos.xz += dir * radial * 0.07 * pow(h, 1.3);
-        float vert = sin(uTime * 1.6 + th * 9.0) * 0.7 + sin(uTime * 1.1 - th * 4.0 + 2.1) * 0.3;
-        pos.y += vert * 0.06 * pow(h, 2.0);
+        float pulse = 0.5 + 0.5 * sin(uTime * 1.1 - h * 1.2);
+        float stroke = pulse * pow(h, 1.5);
+        pos.xz -= dir * stroke * 0.14;
+        pos.y += stroke * 0.12;
+        float radial = sin(uTime * 1.2 + th * 3.0 + aSeed) * 0.6 + sin(uTime * 0.8 - th * 5.0 + 1.3 + aSeed) * 0.4;
+        pos.xz += dir * radial * 0.06 * pow(h, 1.3);
+        float vert = sin(uTime * 1.6 + th * 9.0 + aSeed * 2.0) * 0.6 + sin(uTime * 1.1 - th * 4.0 + 2.1 + aSeed) * 0.4;
+        pos.y += vert * 0.13 * pow(h, 1.8);
     `;
 
     const tentPars = `uniform float uTime; attribute float aSeed; attribute vec3 aRingC; varying vec3 vNormal, vViewPosition; varying vec2 vUv;`;
@@ -362,6 +370,7 @@
         pointsGeo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
         pointsGeo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
         pointsGeo.setAttribute('aSizeScale', new THREE.Float32BufferAttribute(size, 1));
+        pointsGeo.setAttribute('aSeed', new THREE.Float32BufferAttribute(new Float32Array(size.length).fill(p.seed), 1));
 
         const mT = 240, mH = 24;
         const mPos = [], mUv = [], idx = [];
@@ -377,6 +386,7 @@
         meshGeo.setIndex(idx);
         meshGeo.setAttribute('position', new THREE.Float32BufferAttribute(mPos, 3));
         meshGeo.setAttribute('uv', new THREE.Float32BufferAttribute(mUv, 2));
+        meshGeo.setAttribute('aSeed', new THREE.Float32BufferAttribute(new Float32Array(mPos.length / 3).fill(p.seed), 1));
         meshGeo.computeVertexNormals();
         return { pointsGeo, meshGeo, matrix: new THREE.Matrix4() };
     }
@@ -505,12 +515,16 @@
             new THREE.Vector3(0, FIG_Y_OFFSET, 0), new THREE.Quaternion(),
             new THREE.Vector3(FIG_SCALE, FIG_SCALE, FIG_SCALE));
 
-        const skirt = buildSkirt({
-            r0: bell.rimR * 0.98, y0: bell.rimY + 0.04, len: 0.5, flare: 0.28,
-            folds: 9, foldAmp: 0.09, hemAmp: 0.07, seed: 0.7
-        }, tier);
+        // Два слоя юбки: второй — меньшего радиуса, со своими складками и фазой; слои частично
+        // пересекаются (как лепестки пиона) и дают плотность без «провала» в центре.
+        const skirts = [
+            buildSkirt({ r0: bell.rimR * 0.98, y0: bell.rimY + 0.04, len: 0.5, flare: 0.28,
+                         folds: 9, foldAmp: 0.09, hemAmp: 0.07, seed: 0.7 }, tier),
+            buildSkirt({ r0: bell.rimR * 0.86, y0: bell.rimY + 0.07, len: 0.44, flare: 0.22,
+                         folds: 7, foldAmp: 0.08, hemAmp: 0.06, seed: 2.9 }, tier)
+        ];
 
-        const data = { bell, bells, skirt, ribbons, tentacles, rootMatrix };
+        const data = { bell, bells, skirts, ribbons, tentacles, rootMatrix };
         assignOrderAndLayout(data);
         return data;
     }
@@ -527,11 +541,11 @@
     function assignOrderAndLayout(data) {
         const v = new THREE.Vector3();
         const pointSources = data.bells.map(b => ({ geo: b.pointsGeo, matrix: b.matrix }));
-        pointSources.push({ geo: data.skirt.pointsGeo, matrix: data.skirt.matrix });
+        data.skirts.forEach(k => pointSources.push({ geo: k.pointsGeo, matrix: k.matrix }));
         data.ribbons.forEach(r => pointSources.push({ geo: r.pointsGeo, matrix: r.matrix }));
         data.tentacles.forEach(t => pointSources.push({ geo: t.geo, matrix: t.matrix }));
         const meshOnly = data.bells.map(b => ({ geo: b.meshGeo, matrix: b.matrix }));
-        meshOnly.push({ geo: data.skirt.meshGeo, matrix: data.skirt.matrix });
+        data.skirts.forEach(k => meshOnly.push({ geo: k.meshGeo, matrix: k.matrix }));
         data.ribbons.forEach(r => meshOnly.push({ geo: r.meshGeo, matrix: r.matrix }));
 
         let dMin = Infinity, dMax = -Infinity;
@@ -738,7 +752,7 @@
                     vec3 N = normalize(normalMatrix * normal);
                     vFresnel = pow(clamp(1.0 - abs(dot(N, normalize(-mv.xyz))), 0.0, 1.0), 1.3);
                     gl_PointSize = uSize * uViewportScale * (0.7 + aSizeScale * 0.5) * (1.0 + 0.35 * smoothstep(0.8, 1.0, uv.y)) / (0.35 + 0.06 * dist);
-                    vAlpha = (0.2 + 0.5 * vFresnel) * ${skirtAlpha};
+                    vAlpha = (0.38 + 0.5 * vFresnel) * ${skirtAlpha};   // лицевая сторона не проваливается (как у купола)
                     dpMorphFinish();
                 }
             `,
@@ -835,10 +849,10 @@
                 place(meshRoot, new THREE.Mesh(b.meshGeo, mats.bellMesh), b.matrix);
                 place(pointsRoot, new THREE.Points(b.pointsGeo, mats.bellPoints), b.matrix);
             });
-            if (show('skirt')) {
-                place(meshRoot, new THREE.Mesh(data.skirt.meshGeo, mats.skirtMesh), data.skirt.matrix);
-                place(pointsRoot, new THREE.Points(data.skirt.pointsGeo, mats.skirtPoints), data.skirt.matrix);
-            }
+            if (show('skirt')) data.skirts.forEach(k => {
+                place(meshRoot, new THREE.Mesh(k.meshGeo, mats.skirtMesh), k.matrix);
+                place(pointsRoot, new THREE.Points(k.pointsGeo, mats.skirtPoints), k.matrix);
+            });
             if (show('ribbons')) data.ribbons.forEach(r => {
                 place(meshRoot, new THREE.Mesh(r.meshGeo, mats.ribbonMesh), r.matrix);
                 place(pointsRoot, new THREE.Points(r.pointsGeo, mats.ribbonPoints), r.matrix);
