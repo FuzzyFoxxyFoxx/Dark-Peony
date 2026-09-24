@@ -146,6 +146,12 @@
     // ==========================================
     const cache = {};
 
+    // Вид купола (общий для всех экземпляров, можно крутить из консоли: DP.jellyfish.bellLook.value.set(...)):
+    // x — базовая видимость лицевой стороны (против провала в центре), y — «свет сверху» (сферичность),
+    // z — яркость каналов, w — укрупнение точек на гребне канала.
+    const bellLook = { value: new THREE.Vector4(0.12, 0.75, 0.2, 0.35) };
+    DP.jellyfish = { bellLook };
+
     function matrixOf(setup) {
         const pivot = new THREE.Object3D();
         const obj = new THREE.Object3D();
@@ -155,10 +161,11 @@
         return obj.matrixWorld.clone();
     }
 
-    function ribAt(theta) { return Math.pow(0.5 + 0.5 * Math.cos(RIB_COUNT * theta), 10); }
+    function ribAt(theta, phase = 0) { return Math.pow(0.5 + 0.5 * Math.cos(RIB_COUNT * theta + phase), 10); }
 
     // ---------- КУПОЛ ----------
-    function buildBell(density, sr, sy, dy) {
+    // ribPhase — сдвиг каналов (у внутреннего купола на полшага: вдвое больше линий к вершине).
+    function buildBell(density, sr, sy, dy, ribPhase = 0) {
         const curve = makeBellCurve(sr, sy, dy);
         const lenP = curve.getLength();
 
@@ -170,7 +177,7 @@
         const profR = (s, theta) => {
             const p = curve.getPointAt(s);
             const outer = s < sRim ? Math.pow(Math.sin(Math.PI * s / sRim), 0.6) : 0;
-            return { r: Math.max(0, p.x) + ribAmp * ribAt(theta) * outer, y: p.y };
+            return { r: Math.max(0, p.x) + ribAmp * ribAt(theta, ribPhase) * outer, y: p.y };
         };
 
         // Точки — как у лепестков пиона: ровная сетка (параллели по профилю × меридианы по кругу),
@@ -198,7 +205,7 @@
                 pos.push(r * Math.sin(theta), y, r * Math.cos(theta));
                 nor.push(nr * Math.sin(theta), ny, nr * Math.cos(theta));
                 uvs.push(theta / (Math.PI * 2), s);
-                rib.push(Math.min(1, ribAt(theta) * (s < sRim ? 1 : 0.55)));
+                rib.push(Math.min(1, ribAt(theta, ribPhase) * (s < sRim ? 1 : 0.55)));
                 size.push(seededRandom(sd += 0.9));
             }
         }
@@ -218,9 +225,9 @@
             const theta = Math.atan2(mp.getX(i), mp.getZ(i));
             const s = muv.getY(i);
             const outer = s < sRim ? Math.pow(Math.sin(Math.PI * s / sRim), 0.6) : 0;
-            const k = 1 + ribAmp * ribAt(theta) * outer / Math.max(0.05, Math.hypot(mp.getX(i), mp.getZ(i)));
+            const k = 1 + ribAmp * ribAt(theta, ribPhase) * outer / Math.max(0.05, Math.hypot(mp.getX(i), mp.getZ(i)));
             mp.setXYZ(i, mp.getX(i) * k, mp.getY(i), mp.getZ(i) * k);
-            mRib[i] = ribAt(theta) * (s < sRim ? 1 : 0.55);
+            mRib[i] = ribAt(theta, ribPhase) * (s < sRim ? 1 : 0.55);
         }
         meshGeo.setAttribute('aRib', new THREE.BufferAttribute(mRib, 1));
         meshGeo.computeVertexNormals();
@@ -422,7 +429,7 @@
 
         // Два купола: внешний и внутренний поменьше — слои накладываются (add) и дают плотность головы.
         const bell = buildBell(density, 1, 1, 0);
-        const inner = buildBell(density * 0.8, 0.95, 0.96, -0.03);
+        const inner = buildBell(density * 0.8, 0.95, 0.96, -0.03, Math.PI);
         bell.matrix = new THREE.Matrix4();
         inner.matrix = new THREE.Matrix4();
         const bells = [bell, inner];
@@ -604,15 +611,16 @@
             side: THREE.DoubleSide, transparent: true, depthWrite: false
         }));
         const bellPoints = add(new THREE.ShaderMaterial(pointsBase({
-            uniforms: Object.assign({ uTime: S.uTime, uRimProf, uDepth, uTexture: S.uTexture, uViewportScale: S.uViewportScale, uSize: { value: 2.2 } }, morphUniforms),
+            uniforms: Object.assign({ uTime: S.uTime, uRimProf, uDepth, uBellLook: bellLook, uTexture: S.uTexture, uViewportScale: S.uViewportScale, uSize: { value: 2.2 } }, morphUniforms),
             vertexShader: `
                 ${bellPars}
                 ${G.pointsVertex}
                 uniform vec2 uDepth;
+                uniform vec4 uBellLook;
                 varying float vDepthK;
                 uniform float uViewportScale, uSize;
                 attribute float aSizeScale;
-                varying float vFresnel, vRimW;
+                varying float vFresnel, vRimW, vLight;
                 void main() {
                     ${bellDisplacement}
                     vec4 mv = viewMatrix * dpMorph(dpRest, pos);
@@ -621,19 +629,23 @@
                     ${depthVert}
                     vFresnel = pow(clamp(1.0 - abs(dot(normalize(normalMatrix * normal), normalize(-mv.xyz))), 0.0, 1.0), 1.3);
                     vRimW = rimW;
-                    gl_PointSize = uSize * uViewportScale * (0.7 + aSizeScale * 0.5) / (0.35 + 0.06 * dist);
+                    // «Свет сверху» в пространстве фигуры: верх купола ярче, к краю — в тень.
+                    vLight = clamp(dot(normalize(normal), normalize(vec3(0.15, 1.0, 0.35))) * 0.5 + 0.5, 0.0, 1.0);
+                    gl_PointSize = uSize * uViewportScale * (0.7 + aSizeScale * 0.5) * (1.0 + uBellLook.w * aRib) / (0.35 + 0.06 * dist);
                     dpMorphFinish();
                 }
             `,
             fragmentShader: `
                 ${G.pointsFragment}
                 uniform sampler2D uTexture;
-                varying float vFresnel, vRimW, vRib, vDepthK;
+                uniform vec4 uBellLook;
+                varying float vFresnel, vRimW, vRib, vDepthK, vLight;
                 void main() {
                     vec4 tex = texture2D(uTexture, gl_PointCoord);
                     if (tex.a < 0.01) discard;
-                    vec3 color = mix(vec3(0.05, 0.12, 0.22), vec3(0.72, 0.88, 1.0), vFresnel * 1.1 + vRib * 0.4);
-                    float a = tex.a * (0.035 + 0.12 * vFresnel + 0.07 * vRib + 0.05 * vRimW);
+                    float lit = mix(1.0, vLight * vLight * 1.6, uBellLook.y);
+                    vec3 color = mix(vec3(0.05, 0.12, 0.22), vec3(0.72, 0.88, 1.0), vFresnel * 1.1 + vRib * 0.4 + lit * 0.25);
+                    float a = tex.a * (uBellLook.x * lit + 0.12 * vFresnel + uBellLook.z * vRib + 0.05 * vRimW);
                     a = a / (0.45 + a * 2.2) * vDepthK;
                     gl_FragColor = dpMorphColor(color, a, tex.a);
                 }
