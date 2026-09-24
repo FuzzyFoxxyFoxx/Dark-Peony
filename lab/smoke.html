@@ -42,10 +42,12 @@
 (function () {
     'use strict';
     const P = new URLSearchParams(location.search);
-    const N = Math.min(1024, Math.max(64, parseInt(P.get('n') || '512', 10)));   // сторона текстуры: N² частиц
+    const N = Math.min(1024, Math.max(64, parseInt(P.get('n') || '1024', 10)));   // сторона текстуры: N² частиц
 
     // ---------- параметры (крутятся ползунками) ----------
     const S = {
+        speed: 1.0,        // скорость частиц: во сколько раз быстрее течение (жизнь не меняется — улетают дальше)
+        tempo: 1.0,        // темп всего: движение, жизнь и изменение водоворотов вместе
         R: 1.2,            // радиус кольца (до сердцевины тора)
         core: 0.2,         // толщина сердцевины (где рождаются частицы и крутятся быстрее всего)
         spin: 1.6,         // сила кружения вокруг сердцевины (циркуляция)
@@ -61,11 +63,13 @@
         grow: 2.2,         // во сколько раз частица крупнее к концу жизни
         escape: 0.2,       // доля частиц, которые отрываются от кольца и уходят вверх
         lift: 0.5,         // скорость подъёма оторвавшихся частиц
-        size: 3.5,         // размер частицы
-        alpha: 0.035,      // яркость одной частицы (дым светится наложением)
+        size: 2.5,         // размер частицы
+        alpha: 0.012,      // яркость одной частицы (дым светится наложением)
         tilt: 0.35         // наклон кольца к зрителю в начале (рад)
     };
     const SLIDERS = [
+        ['Скорость'],
+        ['speed', 'скорость частиц', 0, 4, 0.01], ['tempo', 'темп всего', 0, 3, 0.01],
         ['Кольцо'],
         ['R', 'радиус', 0.4, 2.5, 0.01], ['core', 'толщина сердцевины', 0.05, 1.0, 0.01],
         ['spin', 'кружение', 0, 5, 0.01], ['swirl', 'бег вдоль кольца', -1, 1, 0.01],
@@ -139,7 +143,7 @@
             uniform vec4 uRing;    // R, core, spin, swirl
             uniform vec4 uNoise;   // amp, scale, detailAmp, detailScale
             uniform vec4 uNoise2;  // speed, escape, lift, -
-            uniform vec4 uLife;    // lifeMin, lifeMax, -, -
+            uniform vec4 uLife;    // lifeMin, lifeMax, скорость частиц, -
             ${DP.morph.glsl.simplexNoise}
             // Водовороты: ∇n1 × ∇n2 — поле без стоков и источников (как curl noise, но дешевле).
             vec3 eddy(vec3 q, float t) {
@@ -180,12 +184,13 @@
                     age = 0.0;
                 } else if (age > 0.0) {
                     // Шаг средней точки (RK2) — поток держит форму и при крупном шаге.
+                    float vd = uDt * uLife.z;              // скорость частиц: путь за шаг длиннее, жизнь та же
                     vec3 v1 = flow(p, uTime);
-                    vec3 v2 = flow(p + v1 * uDt * 0.5, uTime + uDt * 0.5);
-                    p += v2 * uDt;
+                    vec3 v2 = flow(p + v1 * vd * 0.5, uTime + uDt * 0.5);
+                    p += v2 * vd;
                     // Улетающие: оторвавшись, поднимаются всё быстрее и тают (как дым в воздухе).
                     float k = age / life;
-                    p.y += step(I.y, uNoise2.y) * uNoise2.z * smoothstep(0.2, 1.0, k) * uDt;
+                    p.y += step(I.y, uNoise2.y) * uNoise2.z * smoothstep(0.2, 1.0, k) * vd;
                 }
                 gl_FragColor = vec4(p, age);
             }`,
@@ -251,7 +256,7 @@
         u.uRing.value.set(S.R, S.core, S.spin, S.swirl);
         u.uNoise.value.set(S.noiseAmp, S.noiseScale, S.detailAmp, S.detailScale);
         u.uNoise2.value.set(S.noiseSpeed, S.escape, S.lift, 0);
-        u.uLife.value.set(S.lifeMin, Math.max(S.lifeMin + 0.01, S.lifeMax), 0, 0);
+        u.uLife.value.set(S.lifeMin, Math.max(S.lifeMin + 0.01, S.lifeMax), S.speed, 0);
         drawMat.uniforms.uLook.value.set(S.fadeIn, S.fadeOut, S.grow, S.size);
         drawMat.uniforms.uAlpha.value = S.alpha;
     }
@@ -266,7 +271,7 @@
     // ---------- шаг ----------
     let simTime = 0, first = true;
     function step(dt) {
-        const n = Math.max(1, Math.ceil(dt / (1 / 60)));
+        const n = Math.min(8, Math.max(1, Math.ceil(dt * Math.max(1, S.speed) / (1 / 60))));   // быстрые частицы — мельче шаги
         for (let i = 0; i < n; i++) {
             const u = simMat.uniforms;
             u.uPos.value = first ? initTex : targets[cur].texture;
@@ -327,7 +332,7 @@
         const dt = Math.min(0.05, (now - last) / 1000); last = now;
         fAcc += dt; fN++;
         if (fAcc > 0.5) { fpsEl.textContent = Math.round(fN / fAcc) + ' FPS · ' + (N * N).toLocaleString('ru') + ' частиц'; fAcc = 0; fN = 0; }
-        if (!paused && !manual) step(dt);
+        if (!paused && !manual && S.tempo > 0) step(dt * S.tempo);
         renderer.render(scene, camera);
         requestAnimationFrame(frame);
     }
