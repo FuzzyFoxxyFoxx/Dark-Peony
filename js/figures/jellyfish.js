@@ -74,6 +74,18 @@
         attribute vec4 aRuf;
         varying vec3 vNormal, vViewPosition;
         varying vec2 vUv;
+        // Рюши с природным разбросом (та же формула на CPU — ribbonWaveJS): длина волны гуляет
+        // (фаза искажена двумя медленными синусами), на коротких волнах размах меньше, на длинных —
+        // больше, и по длинной волне бежит мелкая рябь. s — фаза, бегущая вниз; x — поперёк, y — из плоскости.
+        vec2 dpRibbonWave(float s, float sd) {
+            float a1 = 0.31 * s + 1.3 * sd, a2 = 0.13 * s + 2.9 * sd;
+            float P = s + 1.5 * sin(a1) + 2.0 * sin(a2);
+            float k = 1.0 + 0.465 * cos(a1) + 0.26 * cos(a2);          // местная частота: 0.27..1.73
+            float f = clamp(pow(k, -1.3), 0.4, 1.6);
+            float sub = 0.3 * (1.0 - smoothstep(0.55, 0.95, k));
+            return vec2(f * sin(P) + sub * sin(2.3 * P + 1.1 + sd),
+                        f * sin(P + 0.5) + sub * sin(2.3 * P + 1.6 + sd));
+        }
     `;
     // uv.x — поперёк ленты (0 прямой край, 1 волнистый), uv.y — вдоль (0 верх, 1 низ).
     const ribbonDisplacement = `
@@ -98,8 +110,9 @@
                                      + 0.4 * sin(u * (9.0 + 4.0 * rA) - uTime * (1.7 + 0.5 * rC) + aSeed * 1.3)) ;
             env *= 0.8 + 0.5 * rC;
             float amp = aRuf.x * env * (0.15 + 0.85 * smoothstep(0.03, 0.45, u));   // у крепления рюши слабые
-            float acr = pow(uv.x, 2.0) * amp * 0.3 * sin(ph);
-            float zz = pow(uv.x, 1.8) * amp * sin(ph + 0.5);
+            vec2 rw = dpRibbonWave(ph, aSeed);
+            float acr = pow(uv.x, 2.0) * amp * 0.3 * rw.x;
+            float zz = pow(uv.x, 1.8) * amp * rw.y;
             float ca = cos(aRuf.z), sa = sin(aRuf.z);
             pos.x += acr * ca - zz * sa;
             pos.z += acr * sa + zz * ca;
@@ -298,8 +311,9 @@
         const rA = ruffle ? p.ruffleAmp * (W / p.width) : 0;
         // Волнистый край длиннее прямого: волна в плоскости ленты + рюши из плоскости в той же фазе
         // (без сдвига фаз край не закручивается штопором, а складывается гармошкой).
-        let across = v * W + Math.pow(v, 2.0) * rA * 0.3 * Math.sin(ph);
-        let z = Math.pow(v, 1.8) * rA * Math.sin(ph + 0.5);
+        const rw = ribbonWaveJS(ph, p.seed);
+        let across = v * W + Math.pow(v, 2.0) * rA * 0.3 * rw[0];
+        let z = Math.pow(v, 1.8) * rA * rw[1];
         const a = p.twist * u;                                             // лёгкое скручивание вдоль длины (у крепления лента строго радиальна)
         const x = across * Math.cos(a) - z * Math.sin(a);
         z = across * Math.sin(a) + z * Math.cos(a);
@@ -308,6 +322,18 @@
             -u * p.len,
             z + Math.cos(u * Math.PI * 0.9 + p.seed * 1.7) * 0.12 * u
         ];
+    }
+
+    // Рюши с разной длиной волны — та же формула, что dpRibbonWave в шейдере.
+    function ribbonWaveJS(s, sd) {
+        const a1 = 0.31 * s + 1.3 * sd, a2 = 0.13 * s + 2.9 * sd;
+        const P = s + 1.5 * Math.sin(a1) + 2.0 * Math.sin(a2);
+        const k = 1 + 0.465 * Math.cos(a1) + 0.26 * Math.cos(a2);
+        const f = Math.min(1.6, Math.max(0.4, Math.pow(k, -1.3)));
+        const t = Math.min(1, Math.max(0, (k - 0.55) / 0.4));
+        const sub = 0.3 * (1 - t * t * (3 - 2 * t));
+        return [f * Math.sin(P) + sub * Math.sin(2.3 * P + 1.1 + sd),
+                f * Math.sin(P + 0.5) + sub * Math.sin(2.3 * P + 1.6 + sd)];
     }
 
     // У основания волна рюшей длиннее (вдвое), к середине — обычная: фаза растёт медленнее у крепления.
@@ -532,8 +558,8 @@
                 seed,
                 len: 1.92 + seededRandom(seed * 2.1) * 0.42,
                 width: 0.36 + seededRandom(seed * 3.3) * 0.085,
-                ruffleK: 18 + seededRandom(seed * 4.7) * 4,
-                ruffleAmp: 0.19,
+                ruffleK: 15 + seededRandom(seed * 4.7) * 4,
+                ruffleAmp: 0.17,
                 twist: (seededRandom(seed * 5.9) - 0.5) * 0.5,
                 splay: 0.05 + seededRandom(seed * 6.7) * 0.08
             };
