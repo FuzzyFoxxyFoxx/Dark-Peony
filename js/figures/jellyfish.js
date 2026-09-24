@@ -119,6 +119,13 @@
     //  • «гребок» в такт пульсации купола — подол подворачивается под себя и распрямляется;
     //  • поперечная волна бежит по кругу — подол то подворачивается, то выворачивается наружу;
     //  • складки подола бегут по кругу (против часовой стрелки при взгляде сверху).
+    // Юбка меняет только кривизну профиля (длина постоянна, верхний край неподвижен).
+    //  • Гребок: импульс идёт от купола к краю хлыстом (запаздывание вдоль длины): медленно (ease in-out)
+    //    подбирается под себя — «фонарик», затем резко выпрямляется хлыстом с небольшим выворотом
+    //    наружу — «колокольчик», и успокаивается. Ритм совпадает с пульсацией купола.
+    //  • Лёгкая поперечная волна по кругу.
+    //  • Складки-рюши бегут по кругу против часовой стрелки (взгляд сверху).
+    // Профиль интегрируется по шагам: кривизна разная по длине.
     const skirtDisplacement = `
         vUv = uv; vec3 pos = position; vec3 dpRest = position;
         {
@@ -126,16 +133,31 @@
             float th = uv.x * 6.2831853;
             vec2 dir = normalize(position.xz + 1e-5);
             float sL = h * aSk.x;
-            float pulse = 0.5 + 0.5 * sin(uTime * 1.1);
             float wave = sin(uTime * 1.3 - th * 2.0 + aSeed) * 0.65 + sin(uTime * 0.8 + th * 3.0 + aSeed * 1.7) * 0.35;
-            float k = aSk.z - 1.6 * pulse + 1.3 * wave;
+            float cyc = uTime * 1.1 / 6.2831853 + 0.1;
+            float ang = aSk.y;
+            vec2 a1 = vec2(0.0);
+            float ds = sL / 12.0;
+            for (int i = 0; i < 12; i++) {
+                float sm = (float(i) + 0.5) * ds;
+                float ph = fract(cyc - sm / aSk.x * 0.22);            // хлыст: край отстаёт от основания
+                float g;
+                if (ph < 0.6) g = smoothstep(0.0, 0.6, ph);            // медленно подбирается («фонарик»)
+                else {
+                    float q = (ph - 0.6) / 0.4;
+                    g = 1.0 - smoothstep(0.0, 0.4, q)                   // резко выпрямляется
+                        - 0.4 * sin(3.14159 * clamp((q - 0.15) / 0.85, 0.0, 1.0)); // выворот наружу и назад
+                }
+                float k = aSk.z - 3.2 * g + 0.7 * wave;
+                ang += k * ds * 0.5;
+                a1 += vec2(sin(ang), -cos(ang)) * ds;
+                ang += k * ds * 0.5;
+            }
             vec2 a0 = abs(aSk.z) < 1e-3 ? vec2(sL * sin(aSk.y), -sL * cos(aSk.y))
                 : vec2(cos(aSk.y) - cos(aSk.y + aSk.z * sL), -(sin(aSk.y + aSk.z * sL) - sin(aSk.y))) / aSk.z;
-            vec2 a1 = abs(k) < 1e-3 ? vec2(sL * sin(aSk.y), -sL * cos(aSk.y))
-                : vec2(cos(aSk.y) - cos(aSk.y + k * sL), -(sin(aSk.y + k * sL) - sin(aSk.y))) / k;
             float fp = pow(h, 1.3) * aSk.w;
             float fold0 = sin(th * aFolds + aSeed) * fp;
-            float fold1 = sin(th * aFolds + aSeed + uTime * 0.9) * fp * (1.0 + 0.5 * pulse);
+            float fold1 = sin(th * aFolds + aSeed + uTime * 0.35 * aFolds) * fp;   // рюши бегут по кругу
             pos.xz += dir * (a1.x - a0.x + fold1 - fold0);
             pos.y += a1.y - a0.y;
         }
@@ -541,10 +563,10 @@
         // Два слоя юбки: второй — меньшего радиуса, со своими складками и фазой; слои частично
         // пересекаются (как лепестки пиона) и дают плотность без «провала» в центре.
         const skirts = [
-            buildSkirt({ r0: bell.rimR * 0.88, y0: bell.rimY + 0.07, len: 0.5, phi0: 0.32, kappa0: 0.5,
-                         folds: 9, foldAmp: 0.07, seed: 0.7 }, tier),
-            buildSkirt({ r0: bell.rimR * 0.76, y0: bell.rimY + 0.11, len: 0.45, phi0: 0.26, kappa0: 0.4,
-                         folds: 7, foldAmp: 0.06, seed: 2.9 }, tier)
+            buildSkirt({ r0: bell.rimR * 0.88, y0: bell.rimY + 0.07, len: 0.55, phi0: 0.55, kappa0: 0.25,
+                         folds: 22, foldAmp: 0.05, seed: 0.7 }, tier),
+            buildSkirt({ r0: bell.rimR * 0.76, y0: bell.rimY + 0.11, len: 0.48, phi0: 0.45, kappa0: 0.2,
+                         folds: 17, foldAmp: 0.045, seed: 2.9 }, tier)
         ];
 
         const data = { bell, bells, skirts, ribbons, tentacles, rootMatrix };
