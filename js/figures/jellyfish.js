@@ -326,16 +326,16 @@
         const qs = tier.petalSegments / 100;
         const step = 0.019 / FIG_SCALE / qs;
         const segU = Math.round(p.len / step), segV = Math.max(4, Math.round(p.width / step));
-        // Меньше точек на узел и меньший сдвиг, чем у лепестков: лента плоская и видна плашмя,
-        // иначе рядки тонут в шуме и лента выглядит тяжелее лепестков пиона.
+        // Меньше точек на узел и чуть меньший сдвиг (±0.275 ячейки), чем у лепестков: лента видна плашмя,
+        // и рядки должны читаться, но не идеально — с живым разбросом, как у пиона.
         const mult = Math.max(1, tier.petalMultiplier - 1);
         const pos = [], nor = [], uvs = [], seeds = [], size = [], ruf = [];
         const e = 1e-3;
         let sd = p.seed * 11.3;
         for (let i = 0; i <= segU; i++) for (let j = 0; j <= segV; j++) {
             for (let m = 0; m < mult; m++) {
-                const u = Math.min(1, Math.max(0, (i + (seededRandom(sd += 1.1) - 0.5) * 0.3) / segU));
-                const v = Math.min(1, Math.max(0, (j + (seededRandom(sd += 1.3) - 0.5) * 0.3) / segV));
+                const u = Math.min(1, Math.max(0, (i + (seededRandom(sd += 1.1) - 0.5) * 0.55) / segU));
+                const v = Math.min(1, Math.max(0, (j + (seededRandom(sd += 1.3) - 0.5) * 0.55) / segV));
                 const qr = ribbonPoint(u, v, p);                 // с рюшами — только для нормали (френель)
                 const q = ribbonPoint(u, v, p, false);          // позиция — плоская лента
                 const du = ribbonPoint(Math.min(1, u + e), v, p), dv = ribbonPoint(u, Math.min(1, v + e), p);
