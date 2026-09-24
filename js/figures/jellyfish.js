@@ -80,12 +80,25 @@
         float t2 = uTime * 0.65 - u * 4.6 + aSeed * 2.7;
         pos.x += (sin(t1) * 0.22 + cos(t2) * 0.10) * whip;
         pos.z += (cos(t1 * 0.8) * 0.22 + sin(t2 * 1.2) * 0.10) * whip;
-        pos.z += sin(uTime * 1.3 + u * 14.0 + aSeed) * 0.03 * uv.x * whip;
+        // Волнистая кромка живёт отдельно: волна бежит сверху вниз.
+        float edge = pow(uv.x, 1.8) * smoothstep(0.05, 0.3, u);
+        pos.z += sin(u * 26.0 - uTime * 2.4 + aSeed) * 0.05 * edge;
+        pos.x += cos(u * 26.0 - uTime * 2.4 + aSeed) * 0.015 * edge;
     `;
 
-    const tentPars = `uniform float uTime; attribute float aSeed; varying vec3 vNormal, vViewPosition; varying vec2 vUv;`;
+    const tentPars = `uniform float uTime; attribute float aSeed; attribute vec3 aRingC; varying vec3 vNormal, vViewPosition; varying vec2 vUv;`;
     const tentDisplacement = `
         vUv = uv; vec3 pos = position; vec3 dpRest = position; float whip = pow(uv.y, 1.3);
+        // Кольца наклонены к зрителю (одинаково для всех): сбоку они видны овалами, как у пиона сверху.
+        {
+            vec3 dC = cameraPosition - modelMatrix[3].xyz;
+            float s2 = dot(modelMatrix[0].xyz, modelMatrix[0].xyz);
+            vec3 camL = vec3(dot(modelMatrix[0].xyz, dC), dot(modelMatrix[1].xyz, dC), dot(modelMatrix[2].xyz, dC)) / s2;
+            vec2 toCam = camL.xz - aRingC.xz;
+            toCam /= max(length(toCam), 1e-4);
+            vec3 o = position - aRingC;
+            pos.y -= dot(o.xz, toCam) * 0.5;
+        }
         float t1 = uTime * 1.2 - uv.y * 7.0 + aSeed * 9.1;
         float t2 = uTime * 0.9 - uv.y * 9.5 + aSeed * 4.3;
         pos.x += (sin(t1) * 0.22 + cos(t2) * 0.10) * whip;
@@ -186,8 +199,8 @@
         const rA = p.ruffleAmp * (W / p.width);
         // Волнистый край длиннее прямого: волна в плоскости ленты + рюши из плоскости в той же фазе
         // (без сдвига фаз край не закручивается штопором, а складывается гармошкой).
-        let across = v * W + Math.pow(v, 2.0) * rA * 0.9 * Math.sin(ph);
-        let z = Math.pow(v, 1.8) * rA * 0.6 * Math.sin(ph + 0.5);
+        let across = v * W + Math.pow(v, 2.0) * rA * 0.3 * Math.sin(ph);
+        let z = Math.pow(v, 1.8) * rA * Math.sin(ph + 0.5);
         const a = p.twist * u;                                             // лёгкое скручивание вдоль длины (у крепления лента строго радиальна)
         const x = across * Math.cos(a) - z * Math.sin(a);
         z = across * Math.sin(a) + z * Math.cos(a);
@@ -256,9 +269,8 @@
     }
 
     // ---------- ТОНКОЕ ЩУПАЛЬЦЕ (трубка вниз) ----------
-    // ringTilt — наклон плоскости кольца к оси трубки: сбоку кольца видны овалами, а не чёрточками;
-    // ось наклона поворачивается от кольца к кольцу.
-    function buildTentacle(len, radius, seed, segments, radial, sway, ringTilt = 0) {
+    // aRingC — центр кольца: шейдер наклоняет кольцо к зрителю (см. tentDisplacement).
+    function buildTentacle(len, radius, seed, segments, radial, sway) {
         const pts = [];
         for (let s = 0; s <= 40; s++) {
             const t = s / 40;
@@ -268,19 +280,19 @@
                 Math.cos(t * Math.PI * 0.9 + seed * 1.3) * sway * 0.8 * t));
         }
         const path = new THREE.CatmullRomCurve3(pts);
-        const pos = [], nor = [], uvs = [], seeds = [], idx = [];
+        const pos = [], nor = [], uvs = [], seeds = [], idx = [], ringC = [];
         for (let i = 0; i <= segments; i++) {
             const v = i / segments;
             const c = path.getPointAt(v);
-            const r = radius * Math.max(0.1, Math.pow(1 - v * 0.9, 1.1));
-            const phi = i * 0.9 + seed;
+            const r = radius * Math.max(0.08, Math.pow(1 - v * 0.88, 1.1));   // широкое кольцо у основания, к концу сужается (как у пиона)
             for (let j = 0; j <= radial; j++) {
                 const th = j / radial * Math.PI * 2;
                 const nx = Math.cos(th), nz = Math.sin(th);
-                pos.push(c.x + nx * r, c.y + Math.cos(th - phi) * r * ringTilt, c.z + nz * r);
+                pos.push(c.x + nx * r, c.y, c.z + nz * r);
                 nor.push(nx, 0, nz);
                 uvs.push(j / radial, v);
                 seeds.push(seed);
+                ringC.push(c.x, c.y, c.z);
             }
         }
         for (let i = 0; i < segments; i++) for (let j = 0; j < radial; j++) {
@@ -293,6 +305,7 @@
         geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
         geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
         geo.setAttribute('aSeed', new THREE.Float32BufferAttribute(seeds, 1));
+        geo.setAttribute('aRingC', new THREE.Float32BufferAttribute(ringC, 3));
         return geo;
     }
 
@@ -303,7 +316,7 @@
 
         // Два купола: внешний и внутренний поменьше — слои накладываются (add) и дают плотность головы.
         const bell = buildBell(density, 1, 1, 0);
-        const inner = buildBell(density * 0.8, 0.85, 0.88, -0.06);
+        const inner = buildBell(density * 0.8, 0.95, 0.96, -0.03);
         bell.matrix = new THREE.Matrix4();
         inner.matrix = new THREE.Matrix4();
         const bells = [bell, inner];
@@ -318,17 +331,17 @@
             const p = {
                 seed,
                 len: 1.6 + seededRandom(seed * 2.1) * 0.35,
-                width: 0.5 + seededRandom(seed * 3.3) * 0.15,
-                ruffleK: 22 + seededRandom(seed * 4.7) * 6,
-                ruffleAmp: 0.14,
+                width: 0.42 + seededRandom(seed * 3.3) * 0.1,
+                ruffleK: 16 + seededRandom(seed * 4.7) * 4,
+                ruffleAmp: 0.12,
                 twist: (seededRandom(seed * 5.9) - 0.5) * 0.5,
-                splay: 0.12 + seededRandom(seed * 6.7) * 0.12
+                splay: 0.05 + seededRandom(seed * 6.7) * 0.08
             };
             const { pointsGeo, meshGeo } = buildRibbon(p, tier);
             const angle = (i / RIBBON_COUNT) * Math.PI * 2;
             const matrix = matrixOf((pivot, obj) => {
                 pivot.rotation.y = angle;
-                obj.position.set(0, innerY + 0.22, innerR * 0.72);
+                obj.position.set(0, innerY + 0.3, innerR * 0.28);
                 obj.rotation.y = -Math.PI / 2;       // прямой край к оси, волнистый — наружу
             });
             ribbons.push({ pointsGeo, meshGeo, matrix });
@@ -341,7 +354,7 @@
             const angle = (i / TENTACLE_COUNT) * Math.PI * 2 + (seededRandom(seed * 3.3) - 0.5) * 0.3;
             const r = innerR * (0.3 + seededRandom(seed * 5.1) * 0.25);
             const len = 1.9 + seededRandom(seed * 1.9) * 0.5;
-            const geo = buildTentacle(len, TUBE_R * 1.3, seed, Math.round(len / RING_STEP), 16, 0.3, 0.9);
+            const geo = buildTentacle(len, TUBE_R * 1.8, seed, Math.round(len / RING_STEP), 16, 0.3);
             const matrix = matrixOf((pivot, obj) => {
                 pivot.rotation.y = angle;
                 obj.position.set(0, innerY + 0.3, r);
@@ -354,7 +367,7 @@
             const angle = ((i + (k + 1) / (STAMENS_PER_GAP + 1)) / RIBBON_COUNT) * Math.PI * 2;
             const r = innerR * (0.8 + (seededRandom(seed) - 0.5) * 0.12);
             const len = 0.7 + seededRandom(seed * 2.7) * 0.35;
-            const geo = buildTentacle(len, TUBE_R * 0.45, seed, Math.round(len / (RING_STEP * 0.5)), 6, 0.04, 0.6);
+            const geo = buildTentacle(len, TUBE_R * 0.8, seed, Math.round(len / RING_STEP), 12, 0.04);
             const matrix = matrixOf((pivot, obj) => {
                 pivot.rotation.y = angle;
                 obj.position.set(0, innerY + 0.08, r);
@@ -507,7 +520,7 @@
                     vec4 tex = texture2D(uTexture, gl_PointCoord);
                     if (tex.a < 0.01) discard;
                     vec3 color = mix(vec3(0.05, 0.12, 0.22), vec3(0.72, 0.88, 1.0), vFresnel * 1.1 + vRib * 0.4);
-                    float a = tex.a * (0.02 + 0.09 * vFresnel + 0.07 * vRib + 0.05 * vRimW);
+                    float a = tex.a * (0.035 + 0.12 * vFresnel + 0.07 * vRib + 0.05 * vRimW);
                     a = a / (0.45 + a * 2.2) * vDepthK;
                     gl_FragColor = dpMorphColor(color, a, tex.a);
                 }
@@ -557,7 +570,7 @@
                     if (tex.a < 0.01) discard;
                     vec3 color = mix(vec3(0.04, 0.1, 0.2), vec3(0.7, 0.88, 1.0), vFresnel * 1.1);
                     float edgeGlow = smoothstep(0.3, 1.0, vUv.x) * 1.5;
-                    float a = tex.a * vAlpha * 0.45 * (1.0 + edgeGlow);
+                    float a = tex.a * vAlpha * 0.7 * (1.0 + edgeGlow);
                     a = a / (0.45 + a * 2.2) * vDepthK;
                     gl_FragColor = dpMorphColor(color, a, tex.a);
                 }
