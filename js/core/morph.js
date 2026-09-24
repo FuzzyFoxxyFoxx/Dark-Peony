@@ -1120,6 +1120,52 @@
     // Фигура распадается по своему порядку aOrder — от краёв элементов к середине и низу (края лепестка →
     // середина и низ лепестка, кончики щупалец → основание), частицы закручиваются вихрем и втягиваются
     // в клубящийся дымный шар; из него новая фигура собирается в том же порядке (от краёв к середине и низу).
+    // Пары «по месту»: обе фигуры режутся на ячейки «сектор по кругу × полоса высоты», внутри ячейки точки
+    // сортируются сверху вниз и сопоставляются по порядку. Соседи в старой фигуре — соседи и в новой, поэтому
+    // в вихре они летят вместе (пряди, складки), а не перекрещиваются. Где в ячейке точек разное число,
+    // лишние тают в вихре (ib < 0 или повтор), недостающие рождаются из него (ia < 0 или повтор).
+    function cellPairs(A, B, S, NBd, bb, visit) {
+        const H = Math.max(bb.y1 - bb.y0, 1e-3), IDX = 4194304;
+        const cells = (Lay) => {
+            const n = Lay.total, keys = new Float64Array(n), cnt = new Int32Array(S * NBd);
+            Lay.parts.forEach(p => {
+                for (let i = 0; i < p.count; i++) {
+                    const g = p.start + i, x = p.rest[i * 3], y = p.rest[i * 3 + 1], z = p.rest[i * 3 + 2];
+                    const sec = Math.min(S - 1, Math.floor((U.azimuth(x, z) + Math.PI) / TWO_PI * S));
+                    const hh = U.clamp((y - bb.y0) / H, 0, 1), band = Math.min(NBd - 1, Math.floor((1 - hh) * NBd));
+                    const cell = sec * NBd + band;
+                    cnt[cell]++;
+                    keys[g] = (cell * 1048576 + Math.floor((1 - hh) * 1048575)) * IDX + g;
+                }
+            });
+            keys.sort();
+            const sorted = new Uint32Array(n);
+            for (let k = 0; k < n; k++) sorted[k] = keys[k] % IDX;
+            const start = new Int32Array(S * NBd + 1);
+            for (let q = 0; q < S * NBd; q++) start[q + 1] = start[q] + cnt[q];
+            return { sorted, start, cnt };
+        };
+        const CA = cells(A), CB = cells(B);
+        let total = 0;
+        for (let q = 0; q < S * NBd; q++) total += Math.max(CA.cnt[q], CB.cnt[q]);
+        if (!visit) return total;
+        const usedA = new Uint8Array(A.total), usedB = new Uint8Array(B.total);
+        let kk = 0;
+        for (let q = 0; q < S * NBd; q++) {
+            const nA = CA.cnt[q], nB = CB.cnt[q], n = Math.max(nA, nB);
+            for (let k = 0; k < n; k++, kk++) {
+                const ia = nA ? CA.sorted[CA.start[q] + Math.floor(k * nA / n)] : -1;
+                const ib = nB ? CB.sorted[CB.start[q] + Math.floor(k * nB / n)] : -1;
+                const firstA = ia >= 0 && !usedA[ia], firstB = ib >= 0 && !usedB[ib];
+                if (!firstA && !firstB) continue;
+                if (ia >= 0) usedA[ia] = 1;
+                if (ib >= 0) usedB[ib] = 1;
+                visit({ ia, ib, firstA, firstB, kk });
+            }
+        }
+        return total;
+    }
+
     function planSphere(A, B) {
         const c = DP.config.morph, f = c.sphere;
         syncConfig();
@@ -1127,40 +1173,57 @@
         shared.uSimInfo.value.set(0, 1, 0, 0);
         const bb = bounds([A, B]);
         DP.morph.lastBounds = bb;
+        const R = f.sphereR * bb.r1;
+        const center = new THREE.Vector3(0, bb.y0 + f.sphereY * (bb.y1 - bb.y0), 0);
+        const bySpace = f.pairing !== 'order';
         const NA = A.total, NB = B.total, N = Math.max(NA, NB);
-        const side = Math.max(1, Math.ceil(Math.sqrt(N)));
+        const total = bySpace ? cellPairs(A, B, f.sectors, f.bands, bb, null) : N;
+        const side = Math.max(1, Math.ceil(Math.sqrt(total)));
         const dA = new Float32Array(side * side * 4), dB = new Float32Array(side * side * 4), dS = new Float32Array(side * side * 4);
-        const usedA = new Uint8Array(NA), usedB = new Uint8Array(NB);
         const arriveStart = 0.05 + f.leaveSpread + f.hold;
+        const orderOf = (Lay, gi) => { const p = Lay.parts[Lay.partOf[gi]]; return U.clamp(p.order[gi - p.start], 0, 1); };
         let end = 0;
-        for (let k = 0; k < N; k++) {
-            const ia = A.sorted[Math.floor(k * NA / N)], ib = B.sorted[Math.floor(k * NB / N)];
-            const firstA = !usedA[ia], firstB = !usedB[ib];
-            if (!firstA && !firstB) continue;
-            usedA[ia] = 1; usedB[ib] = 1;
-            const pa = A.parts[A.partOf[ia]], pb = B.parts[B.partOf[ib]];
-            const oA = U.clamp(pa.order[ia - pa.start], 0, 1), oB = U.clamp(pb.order[ib - pb.start], 0, 1);
-            const seed = U.seededRandom(k * 0.618 + 0.37);
-            const jit = (U.seededRandom(k * 0.7311 + 3.3) - 0.5) * 2 * f.jitter;
-            const jitA = (U.seededRandom(k * 1.319 + 5.1) - 0.5) * 2 * f.jitter;
+        const visit = (P) => {
+            const { ia, ib, firstA, firstB, kk } = P;
+            const oA = ia >= 0 ? orderOf(A, ia) : orderOf(B, ib), oB = ib >= 0 ? orderOf(B, ib) : oA;
+            const seed = U.seededRandom(kk * 0.618 + 0.37);
+            const jit = (U.seededRandom(kk * 0.7311 + 3.3) - 0.5) * 2 * f.jitter;
+            const jitA = (U.seededRandom(kk * 1.319 + 5.1) - 0.5) * 2 * f.jitter;
             const L = Math.max(0, 0.05 + f.leaveSpread * oA + jit);
             const T = arriveStart + f.arriveSpread * oB + jitA;
             const D = Math.max(f.land + 0.4, T - L);   // подхват — лишь плавное включение, ему не нужно завершаться
             const Lq = U.clamp(Math.round(L * 100), 0, 2047), Dq = U.clamp(Math.round(D * 100), 5, 2047);
             end = Math.max(end, (Lq + Dq) * 0.01);
             const packed = Lq * 2048 + Dq;
-            writePair(A, B, { ia, ib, firstA, firstB, kk: k }, [packed, 0, seed + (firstB ? 0 : 2), 0], [packed, 0, seed + (firstA ? 0 : 2), 0]);
-            const a = restOf(A, ia), b = restOf(B, ib), j = k * 4;
+            writePair(A, B, P, [packed, 0, seed + (firstB ? 0 : 2), 0], [packed, 0, seed + (firstA ? 0 : 2), 0]);
+            // Нет точки в A — частица рождается внутри шара, в стороне своей точки B.
+            let a;
+            if (ia >= 0) a = restOf(A, ia);
+            else {
+                const b0 = restOf(B, ib), dx = b0[0] - center.x, dy = b0[1] - center.y, dz = b0[2] - center.z;
+                const k = 0.6 * R / Math.max(1e-3, Math.hypot(dx, dy, dz));
+                a = [center.x + dx * k, center.y + dy * k, center.z + dz * k];
+            }
+            const b = ib >= 0 ? restOf(B, ib) : a, j = kk * 4;
             dA[j] = a[0]; dA[j + 1] = a[1]; dA[j + 2] = a[2]; dA[j + 3] = Lq * 0.01;
             dB[j] = b[0]; dB[j + 1] = b[1]; dB[j + 2] = b[2]; dB[j + 3] = Dq * 0.01;
             dS[j] = seed;
+        };
+        if (bySpace) cellPairs(A, B, f.sectors, f.bands, bb, visit);
+        else {
+            const usedA = new Uint8Array(NA), usedB = new Uint8Array(NB);
+            for (let k = 0; k < N; k++) {
+                const ia = A.sorted[Math.floor(k * NA / N)], ib = B.sorted[Math.floor(k * NB / N)];
+                const firstA = !usedA[ia], firstB = !usedB[ib];
+                if (!firstA && !firstB) continue;
+                usedA[ia] = 1; usedB[ib] = 1;
+                visit({ ia, ib, firstA, firstB, kk: k });
+            }
         }
         A.parts.forEach(p => { p.outAttr.needsUpdate = true; p.pairOutAttr.needsUpdate = true; });
         B.parts.forEach(p => { p.inAttr.needsUpdate = true; p.pairInAttr.needsUpdate = true; });
 
         const sm = c.smoke;
-        const R = f.sphereR * bb.r1;
-        const center = new THREE.Vector3(0, bb.y0 + f.sphereY * (bb.y1 - bb.y0), 0);
         DP.smokeSim.prepare(side, dA, dB, dS, { center, R, w: f.rotate },
             { capture: f.capture, land: f.land, gravity: f.gravity, pull: f.pull, twist: f.twist, shape: 1, roll: f.roll, noiseK: f.noiseK,
               respawn: f.respawn, twistRamp: f.twistRamp, spiral: f.spiral });
