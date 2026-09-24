@@ -74,17 +74,6 @@
         attribute vec4 aRuf;
         varying vec3 vNormal, vViewPosition;
         varying vec2 vUv;
-        vec3 dpLobe(float ph, float sd) {
-            float k = floor(ph / 6.2831853), t = ph / 6.2831853 - k;
-            float hA = fract(sin((k + sd) * 12.9898) * 43758.5453);
-            float hB = fract(sin((k + sd) * 78.233) * 12345.678);
-            float h = 0.35 + 1.15 * hA;
-            float fold = max(0.0, hB - 0.55) / 0.45;
-            float st = sin(3.14159265 * t);
-            float bump = pow(st, 0.85);
-            float spread = (t - 0.5) * (0.15 + 0.9 * fold) * st;
-            return vec3(spread + 0.25 * fold * bump, bump * h, fold * st * st);
-        }
     `;
     // uv.x — поперёк ленты (0 прямой край, 1 волнистый), uv.y — вдоль (0 верх, 1 низ).
     const ribbonDisplacement = `
@@ -109,17 +98,11 @@
                                      + 0.4 * sin(u * (9.0 + 4.0 * rA) - uTime * (1.7 + 0.5 * rC) + aSeed * 1.3)) ;
             env *= 0.8 + 0.5 * rC;
             float amp = aRuf.x * env * (0.15 + 0.85 * smoothstep(0.03, 0.45, u));   // у крепления рюши слабые
-            // Лопасти-Безье с «шейками» и нависанием (эскиз автора), размер и нависание — свои у каждой лопасти.
-            // Номер лопасти берём от фазы без времени, сдвинутой на пройденный путь, — форма едет вместе с лопастью.
-            vec3 lb = dpLobe(ph, aSeed);
-            float e2 = uv.x * uv.x * (3.0 - 2.0 * uv.x);
-            float acr = e2 * amp * (lb.y + 0.12 * sin(ph * 3.1 + aSeed) * u);   // + мелкая рябь к кончику
-            float alg = -e2 * lb.x * (6.2831853 / aRuf.w) * min(1.0, amp / 0.1);
-            float zz = pow(uv.x, 1.8) * amp * (0.3 * sin(ph + 0.5) + 0.8 * lb.z);
+            float acr = pow(uv.x, 2.0) * amp * 0.3 * sin(ph);
+            float zz = pow(uv.x, 1.8) * amp * sin(ph + 0.5);
             float ca = cos(aRuf.z), sa = sin(aRuf.z);
             pos.x += acr * ca - zz * sa;
             pos.z += acr * sa + zz * ca;
-            pos.y += alg;
         }
     `;
 
@@ -315,39 +298,16 @@
         const rA = ruffle ? p.ruffleAmp * (W / p.width) : 0;
         // Волнистый край длиннее прямого: волна в плоскости ленты + рюши из плоскости в той же фазе
         // (без сдвига фаз край не закручивается штопором, а складывается гармошкой).
-        // Рюши — округлые лопасти с «шейками» (эскиз автора): кромка выпирает наружу и заворачивается
-        // вдоль длины (нависает), размер лопастей плавно гуляет. Та же формула — в шейдере (ribbonDisplacement).
-        const L = ribbonLobe(ph, p.seed);
-        const e2 = v * v * (3 - 2 * v);                     // выпирает широкая полоса у кромки, а не одна линия
-        let across = v * W + e2 * rA * (L[1] + 0.12 * Math.sin(ph * 3.1 + p.seed) * u);
-        const along = e2 * L[0] * (Math.PI * 2 / p.ruffleK) * Math.min(1, rA / 0.1);
-        let z = Math.pow(v, 1.8) * rA * (0.3 * Math.sin(ph + 0.5) + 0.8 * L[2]);
+        let across = v * W + Math.pow(v, 2.0) * rA * 0.3 * Math.sin(ph);
+        let z = Math.pow(v, 1.8) * rA * Math.sin(ph + 0.5);
         const a = p.twist * u;                                             // лёгкое скручивание вдоль длины (у крепления лента строго радиальна)
         const x = across * Math.cos(a) - z * Math.sin(a);
         z = across * Math.sin(a) + z * Math.cos(a);
         return [
             x + p.splay * Math.pow(u, 0.8) + Math.sin(u * Math.PI * 1.2 + p.seed) * 0.14 * u,
-            -u * p.len - along,
+            -u * p.len,
             z + Math.cos(u * Math.PI * 0.9 + p.seed * 1.7) * 0.12 * u
         ];
-    }
-
-    // Лопасть рюшей: от «шейки» к «шейке». Размер и заворот — свои у каждой лопасти (хэш номера),
-    // лопасть бежит по кромке вместе со своей формой. [сдвиг вдоль (доли шага), высота, складка]
-    // Возвращает [сдвиг вдоль длины (в долях шага лопасти), высоту выпуклости].
-    function ribbonLobe(ph, sd) {
-        const fr = (x) => x - Math.floor(x);
-        const k = Math.floor(ph / (Math.PI * 2)), t = ph / (Math.PI * 2) - k;
-        const hA = fr(Math.sin((k + sd) * 12.9898) * 43758.5453);
-        const hB = fr(Math.sin((k + sd) * 78.233) * 12345.678);
-        // Крупные неровные лопасти (эскиз автора, зелёным): высота 0.35–1.5, часть лопастей (≈45%)
-        // заворачивается — нависает над шейками, свисает к кончику и уходит из плоскости («складка»).
-        const h = 0.35 + 1.15 * hA;
-        const fold = Math.max(0, hB - 0.55) / 0.45;
-        const st = Math.sin(Math.PI * t);
-        const bump = Math.pow(st, 0.85);
-        const spread = (t - 0.5) * (0.15 + 0.9 * fold) * st;
-        return [spread + 0.25 * fold * bump, bump * h, fold * st * st];
     }
 
     // У основания волна рюшей длиннее (вдвое), к середине — обычная: фаза растёт медленнее у крепления.
@@ -572,8 +532,8 @@
                 seed,
                 len: 1.92 + seededRandom(seed * 2.1) * 0.42,
                 width: 0.36 + seededRandom(seed * 3.3) * 0.085,
-                ruffleK: 6.5 + seededRandom(seed * 4.7) * 2.5,   // крупные лопасти: 3–5 по длине ленты
-                ruffleAmp: 0.24,
+                ruffleK: 18 + seededRandom(seed * 4.7) * 4,
+                ruffleAmp: 0.19,
                 twist: (seededRandom(seed * 5.9) - 0.5) * 0.5,
                 splay: 0.05 + seededRandom(seed * 6.7) * 0.08
             };
