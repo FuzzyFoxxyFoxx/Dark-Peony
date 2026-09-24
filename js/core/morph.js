@@ -48,7 +48,12 @@
         uSwirlB: { value: new THREE.Vector4() },      // leaveGlow, swirlBlend, swirlTint, swirlLook
         uTwist: { value: new THREE.Vector4() },       // перекрутов за оборот, скорость проворота, центр сечения r, y
         uTwist2: { value: new THREE.Vector4() },      // сжатие по высоте, режим нитей (0/1), -, -
-        uSwirlColor: { value: new THREE.Vector3() }
+        uSwirlColor: { value: new THREE.Vector3() },
+        // Режим «фонтан» (planFountain): включён, центр петли по радиусу, полуширина петли, центр по высоте;
+        // полувысота петли, «квадратность», ускорение осыпания, вход в столб; вложенные петли (3 шт.) и их разброс.
+        uFountA: { value: new THREE.Vector4() },
+        uFountB: { value: new THREE.Vector4() },
+        uFountC: { value: new THREE.Vector4() }
     };
 
     // Путь частицы (в «исходном» времени) делится на уход [0, a], вихрь [a, 1-a] и посадку [1-a, 1],
@@ -296,6 +301,9 @@
         uniform vec4 uSwirlB;
         uniform vec4 uTwist;
         uniform vec4 uTwist2;
+        uniform vec4 uFountA;
+        uniform vec4 uFountB;
+        uniform vec4 uFountC;
         varying float vDpW;
         varying float vDpWA;
         varying float vDpGlow;
@@ -334,6 +342,7 @@
                 vec4 jit = texture2D(uSimJit, dpSimUV);
                 s = dpPathS(t, L, D, jit.x, jit.y, uSimJitInfo.x);
             }
+            if (uFountA.x > 0.5) s = clamp((t - L) / D, 0.0, 1.0);   // фонтан: без ускорений участков вихря
 
             // Видимость: уходящая точка живёт до середины пути, прилетающая — после.
             if (outRole) {
@@ -358,90 +367,127 @@
             vec3 cur = (uStageMatrixInv * world).xyz;
             vec3 rest = (uStageMatrixInv * modelMatrix * vec4(restLocal, 1.0)).xyz;
 
-            // 0 → 1 (плато в середине пути) → 0. На плато частица целиком в вихре — братья
-            // по хвосту идут точно по траектории лидера, и хвост получается линией.
-            float w = smoothstep(0.0, uTrail.w, s) * smoothstep(0.0, uTrail.w, 1.0 - s);
-            float g = s * s * (3.0 - 2.0 * s);            // плавный разгон и торможение по углу
-
-            // Прогресс поворота от ближайшего конца пути: 0 — на месте, 1 — в середине вихря.
-            // Сначала частица плавно уходит по кругу, и лишь по мере поворота среда «сопротивляется»:
-            // поле нарастает с задержкой (fieldDelay) и так же раньше гаснет перед посадкой.
-            float gp = 2.0 * min(g, 1.0 - g);
-            float wf = smoothstep(uFlowB.y, 1.0, gp);         // сила поля
-            float wp = smoothstep(0.0, uFlowB.z, gp);         // переход с видимой позы на траекторию
-
-            // Фигура может изгибать точки своим шейдером (щупальца, лепестки), и видимое положение
-            // отличается от сырой геометрии, по которой планировщик посчитал середину пути.
-            // Переносим эту разницу на середину пути — иначе частица летит к «неизогнутому» месту
-            // (щупальца ныряют в центр, цветок схлопывается). Для одной и той же фигуры A и B
-            // одинаковы, эстафета не рвётся.
-            // В середине вихря сдвиг убирается: у разных фигур он разный, а в точке эстафеты (s = 0.5)
-            // положение должно зависеть только от общих данных пары.
-            float dpKeep = 1.0 - smoothstep(0.5, 0.95, 2.0 * min(g, 1.0 - g));
-            rMid = max(rMid + (length(cur.xz) - length(rest.xz)) * dpKeep, 0.0);
-            yMid += (cur.y - rest.y) * dpKeep;
-            float thRest = dpAzimuth(rest);
-            float dTh = dpAzimuth(cur) - thRest;
-            dTh -= 6.2831853 * floor((dTh + 3.14159265) / 6.2831853);
-            float thPath = outRole ? thRest + delta * g : thRest - delta * (1.0 - g);
-            float th = thPath + dTh * (1.0 - wp);
-
-            // Перекрут ленты: сечение кольца поворачивается вокруг своей средней линии по ходу
-            // вращения (uTwist.x раз за оборот) и медленно проворачивается во времени — плоская
-            // лента складывается в жгут, частицы внутри идут по спиралям, а не по ровным кругам.
-            if (uTwist.x != 0.0 || uTwist.y != 0.0) {
-                float ang = uTwist.x * thPath + uTwist.y * (t - rank * uTrail.x);
-                vec2 off = vec2(rMid - uTwist.z, yMid - uTwist.w);
-                float ca = cos(ang), sa = sin(ang);
-                off = vec2(off.x * ca - off.y * sa, (off.x * sa + off.y * ca) * uTwist2.x);
-                rMid = max(uTwist.z + off.x, 0.15);
-                yMid = uTwist.w + off.y;
-            }
-            float r = mix(length(cur.xz), rMid, wp);
-            float y = mix(cur.y, yMid, wp);
-            vec3 p = vec3(sin(th) * r, y, cos(th) * r);
-
             float h1 = dpHash(seed * 91.7);
             float h2 = dpHash(seed * 53.3 + 1.7);
             float h3 = dpHash(seed * 17.9 + 4.1);
 
             float clumped = step(h3, uClumpB.x);  // остальные — свободная пыль вокруг
-            if (w > 0.0005) {
-                // 1) Среда: отклонение от траектории считает симуляция на видеокарте (js/core/flowsim.js).
-                //    Каждая пара частиц — пиксель текстуры; A и B читают один пиксель, эстафета не рвётся.
-                if (uSimInfo.x > 0.5) p += texture2D(uSimTex, dpSimUV).xyz * smoothstep(0.0, 0.1, gp);
-                p.xz += vec2(sin(te * 0.63), cos(te * 0.47)) * uFlowB.w * wf;
 
-                // 2) Морская волна по вертикали: радиус не меняется, частица поднимается и опускается.
-                //    Фаза зависит от места (угол на пути, радиус) и времени, а не от частицы —
-                //    соседи качаются вместе, по вихрю бегут пологие волны, а не хаос.
-                float wph = uWave.y * thPath + uWave.w * rMid - uWave.z * te;
-                p.y += (sin(wph) + 0.35 * sin(1.7 * wph + 2.1 * rMid + 0.6 * te)) * uWave.x * wf;
+            float w; vec3 p;
+            if (uFountA.x > 0.5) {
+                // ФОНТАН: частица осыпается вниз по центральному столбу, у дна уходит наружу, поднимается
+                // по стенке сферы, переходит через верх и падает сверху на своё место (петли, как силовые
+                // линии магнита). Всё — в вертикальной плоскости частицы; по пути частицы сходятся в струи.
+                // В точке эстафеты (s = 0.5) положение зависит только от общих данных пары.
+                float hA = floor(m.w / 4096.0) / 4095.0;       // высота на уходящей фигуре (1 — верх)
+                float hB = mod(m.w, 4096.0) / 4095.0;          // высота на прилетающей фигуре
+                float aIn = 1.5707963 + (1.0 - hA) * 3.14159265 * uFountB.w;
+                float aOut = 7.8539816 + (1.0 - hB) * 3.14159265 * uFountB.w;
+                float e = s * s * (3.0 - 2.0 * s);
+                float al = mix(aIn, aOut, e);
+                float hs = dpHash(seed * 29.3 + 7.7);
+                float kap = hs < 0.333 ? uFountC.x : (hs < 0.667 ? uFountC.y : uFountC.z);
+                kap += (dpHash(seed * 61.1 + 2.3) - 0.5) * 2.0 * uFountC.w;
+                float ex = 2.0 / uFountB.y;
+                float ca = cos(al), sa = sin(al);
+                float rho = uFountA.y + kap * uFountA.z * sign(ca) * pow(abs(ca), ex);
+                float z = uFountA.w + kap * uFountB.x * sign(sa) * pow(abs(sa), ex);
+                // Азимут: из своей плоскости частица сходится в струю, пока падает, и расходится при посадке.
+                float phJ = m.y;
+                float dph = dpAzimuth(cur) - phJ;
+                dph -= 6.2831853 * floor((dph + 3.14159265) / 6.2831853);
+                float kPh = outRole ? 1.0 - smoothstep(0.0, 0.35, s) : smoothstep(0.65, 1.0, s);
+                float ph = phJ + dph * kPh;
+                vec3 lp = vec3(sin(ph) * rho, z, cos(ph) * rho);
+                // Поза на фигуре: до выхода на петлю частица осыпается с ускорением, при посадке — падает сверху.
+                float tau = outRole ? s * D : (1.0 - s) * D;
+                vec3 pose = cur;
+                pose.y += (outRole ? -0.5 : 0.5) * uFountB.z * tau * tau;
+                float wp = outRole ? smoothstep(0.05, 0.4, s) : 1.0 - smoothstep(0.6, 0.95, s);
+                p = mix(pose, lp, wp);
+                w = smoothstep(0.0, 0.25, s) * smoothstep(0.0, 0.25, 1.0 - s);
+            } else {
 
-                // 2) Стягивание в жгуты (сейчас выключено: clumpStrength = 0 — давало хаос).
-                if (uClumpA.x > 0.0) {
-                    float spinK = uClumpB.z + uClumpB.w * log(1.4 / max(length(p.xz), 0.3));
-                    float phi = t * spinK;
-                    float cphi = cos(phi), sphi = sin(phi);
-                    vec3 fp = vec3(p.x * cphi - p.z * sphi, p.y, p.z * cphi + p.x * sphi);
-                    float wc = smoothstep(0.0, uClumpC.w, w) * uClumpA.x * clumped;
-                    vec3 qc = fp * uClumpA.y;
-                    vec3 o1 = vec3(0.3, -1.0, 0.2) * (t * uClumpB.y);
-                    vec3 o2 = vec3(19.1, -7.3, 4.7) + vec3(-0.6, 0.5, 0.7) * (t * uClumpB.y);
-                    vec3 d = vec3(0.0);
-                    for (int it = 0; it < 2; it++) {
-                        vec4 n1 = dpSnoiseGrad(qc + d + o1);
-                        float g1 = dot(n1.xyz, n1.xyz) + 1e-3;
-                        vec3 d1 = -n1.w * n1.xyz / g1;
-                        vec4 n2 = dpSnoiseGrad(qc + d + d1 + o2);
-                        vec3 d2 = -n2.w * n2.xyz / (dot(n2.xyz, n2.xyz) + 1e-3);
-                        d2 -= n1.xyz * dot(d2, n1.xyz) / g1;   // двигаться вдоль первой поверхности
-                        d += d1 + d2 * uClumpA.z;
+                // 0 → 1 (плато в середине пути) → 0. На плато частица целиком в вихре — братья
+                // по хвосту идут точно по траектории лидера, и хвост получается линией.
+                w = smoothstep(0.0, uTrail.w, s) * smoothstep(0.0, uTrail.w, 1.0 - s);
+                float g = s * s * (3.0 - 2.0 * s);            // плавный разгон и торможение по углу
+
+                // Прогресс поворота от ближайшего конца пути: 0 — на месте, 1 — в середине вихря.
+                // Сначала частица плавно уходит по кругу, и лишь по мере поворота среда «сопротивляется»:
+                // поле нарастает с задержкой (fieldDelay) и так же раньше гаснет перед посадкой.
+                float gp = 2.0 * min(g, 1.0 - g);
+                float wf = smoothstep(uFlowB.y, 1.0, gp);         // сила поля
+                float wp = smoothstep(0.0, uFlowB.z, gp);         // переход с видимой позы на траекторию
+
+                // Фигура может изгибать точки своим шейдером (щупальца, лепестки), и видимое положение
+                // отличается от сырой геометрии, по которой планировщик посчитал середину пути.
+                // Переносим эту разницу на середину пути — иначе частица летит к «неизогнутому» месту
+                // (щупальца ныряют в центр, цветок схлопывается). Для одной и той же фигуры A и B
+                // одинаковы, эстафета не рвётся.
+                // В середине вихря сдвиг убирается: у разных фигур он разный, а в точке эстафеты (s = 0.5)
+                // положение должно зависеть только от общих данных пары.
+                float dpKeep = 1.0 - smoothstep(0.5, 0.95, 2.0 * min(g, 1.0 - g));
+                rMid = max(rMid + (length(cur.xz) - length(rest.xz)) * dpKeep, 0.0);
+                yMid += (cur.y - rest.y) * dpKeep;
+                float thRest = dpAzimuth(rest);
+                float dTh = dpAzimuth(cur) - thRest;
+                dTh -= 6.2831853 * floor((dTh + 3.14159265) / 6.2831853);
+                float thPath = outRole ? thRest + delta * g : thRest - delta * (1.0 - g);
+                float th = thPath + dTh * (1.0 - wp);
+
+                // Перекрут ленты: сечение кольца поворачивается вокруг своей средней линии по ходу
+                // вращения (uTwist.x раз за оборот) и медленно проворачивается во времени — плоская
+                // лента складывается в жгут, частицы внутри идут по спиралям, а не по ровным кругам.
+                if (uTwist.x != 0.0 || uTwist.y != 0.0) {
+                    float ang = uTwist.x * thPath + uTwist.y * (t - rank * uTrail.x);
+                    vec2 off = vec2(rMid - uTwist.z, yMid - uTwist.w);
+                    float ca = cos(ang), sa = sin(ang);
+                    off = vec2(off.x * ca - off.y * sa, (off.x * sa + off.y * ca) * uTwist2.x);
+                    rMid = max(uTwist.z + off.x, 0.15);
+                    yMid = uTwist.w + off.y;
+                }
+                float r = mix(length(cur.xz), rMid, wp);
+                float y = mix(cur.y, yMid, wp);
+                p = vec3(sin(th) * r, y, cos(th) * r);
+
+                if (w > 0.0005) {
+                    // 1) Среда: отклонение от траектории считает симуляция на видеокарте (js/core/flowsim.js).
+                    //    Каждая пара частиц — пиксель текстуры; A и B читают один пиксель, эстафета не рвётся.
+                    if (uSimInfo.x > 0.5) p += texture2D(uSimTex, dpSimUV).xyz * smoothstep(0.0, 0.1, gp);
+                    p.xz += vec2(sin(te * 0.63), cos(te * 0.47)) * uFlowB.w * wf;
+
+                    // 2) Морская волна по вертикали: радиус не меняется, частица поднимается и опускается.
+                    //    Фаза зависит от места (угол на пути, радиус) и времени, а не от частицы —
+                    //    соседи качаются вместе, по вихрю бегут пологие волны, а не хаос.
+                    float wph = uWave.y * thPath + uWave.w * rMid - uWave.z * te;
+                    p.y += (sin(wph) + 0.35 * sin(1.7 * wph + 2.1 * rMid + 0.6 * te)) * uWave.x * wf;
+
+                    // 2) Стягивание в жгуты (сейчас выключено: clumpStrength = 0 — давало хаос).
+                    if (uClumpA.x > 0.0) {
+                        float spinK = uClumpB.z + uClumpB.w * log(1.4 / max(length(p.xz), 0.3));
+                        float phi = t * spinK;
+                        float cphi = cos(phi), sphi = sin(phi);
+                        vec3 fp = vec3(p.x * cphi - p.z * sphi, p.y, p.z * cphi + p.x * sphi);
+                        float wc = smoothstep(0.0, uClumpC.w, w) * uClumpA.x * clumped;
+                        vec3 qc = fp * uClumpA.y;
+                        vec3 o1 = vec3(0.3, -1.0, 0.2) * (t * uClumpB.y);
+                        vec3 o2 = vec3(19.1, -7.3, 4.7) + vec3(-0.6, 0.5, 0.7) * (t * uClumpB.y);
+                        vec3 d = vec3(0.0);
+                        for (int it = 0; it < 2; it++) {
+                            vec4 n1 = dpSnoiseGrad(qc + d + o1);
+                            float g1 = dot(n1.xyz, n1.xyz) + 1e-3;
+                            vec3 d1 = -n1.w * n1.xyz / g1;
+                            vec4 n2 = dpSnoiseGrad(qc + d + d1 + o2);
+                            vec3 d2 = -n2.w * n2.xyz / (dot(n2.xyz, n2.xyz) + 1e-3);
+                            d2 -= n1.xyz * dot(d2, n1.xyz) / g1;   // двигаться вдоль первой поверхности
+                            d += d1 + d2 * uClumpA.z;
+                        }
+                        float ld = length(d);
+                        if (ld > uClumpA.w) d *= uClumpA.w / ld;
+                        fp += d / uClumpA.y * wc;
+                        p = vec3(fp.x * cphi + fp.z * sphi, fp.y, fp.z * cphi - fp.x * sphi);
                     }
-                    float ld = length(d);
-                    if (ld > uClumpA.w) d *= uClumpA.w / ld;
-                    fp += d / uClumpA.y * wc;
-                    p = vec3(fp.x * cphi + fp.z * sphi, fp.y, fp.z * cphi - fp.x * sphi);
                 }
             }
 
@@ -603,6 +649,8 @@
     // Возвращает длительность морфинга (сек).
     function plan(A, B) {
         const c = DP.config.morph;
+        if (c.mode === 'fountain') return planFountain(A, B);
+        shared.uFountA.value.x = 0;
         syncConfig();
         const NA = A.total, NB = B.total, N = Math.max(NA, NB);
         const insideOut = c.assemble !== 'outside-in';
@@ -746,6 +794,94 @@
         B.parts.forEach(p => { p.inAttr.needsUpdate = true; p.pairInAttr.needsUpdate = true; });
         if (DP.flowSim) DP.flowSim.prepare(simSide, simData, simJit);
 
+        return end + c.meshRevealLag + c.meshFade + 0.1;
+    }
+
+    // ------------------------------------------
+    // ПЛАНИРОВЩИК «ФОНТАНА»
+    // ------------------------------------------
+    // Обе фигуры режутся на секторы по кругу; внутри сектора точки сортируются сверху вниз, и k-я
+    // уходящая становится k-й прилетающей: верх рушится первым и первым строит верх новой фигуры,
+    // частица остаётся почти в своей вертикальной плоскости.
+    function planFountain(A, B) {
+        const c = DP.config.morph, f = c.fountain;
+        syncConfig();
+        const bA = bounds([A]), bB = bounds([B]), bb = bounds([A, B]);
+        const wallR = bb.r1 * f.wallR;
+        const aRho = (wallR - f.innerR) / 2;
+        shared.uFountA.value.set(1, f.innerR + aRho, aRho, 0.5 * (bb.y0 + bb.y1));
+        shared.uFountB.value.set(0.5 * (bb.y1 - bb.y0) * f.heightK, f.box, f.gravity, f.entry);
+        shared.uFountC.value.set(f.shells[0], f.shells[1], f.shells[2], f.shellJitter);
+        shared.uSimInfo.value.set(0, 1, 0, 0);                // симуляция среды здесь не нужна
+        shared.uMorphSched.value.set(0.05, f.fallSpread, 0.05 + f.travel, f.fallSpread);
+        shared.uMorphSched2.value.set(0, c.meshRevealLag, c.meshFade, 0);
+
+        const S = f.sectors, IDX = 4194304;
+        const prep = (Lay, b) => {
+            const n = Lay.total, keys = new Float64Array(n), h = new Float32Array(n), ph = new Float32Array(n);
+            const cnt = new Int32Array(S);
+            const dy = Math.max(b.y1 - b.y0, 1e-3);
+            Lay.parts.forEach(p => {
+                for (let i = 0; i < p.count; i++) {
+                    const g = p.start + i, x = p.rest[i * 3], y = p.rest[i * 3 + 1], z = p.rest[i * 3 + 2];
+                    const a = U.azimuth(x, z);
+                    const sec = Math.min(S - 1, Math.floor((a + Math.PI) / TWO_PI * S));
+                    h[g] = U.clamp((y - b.y0) / dy, 0, 1); ph[g] = a; cnt[sec]++;
+                    keys[g] = (sec * 1048576 + Math.floor((1 - h[g]) * 1048575)) * IDX + g;
+                }
+            });
+            keys.sort();
+            const sorted = new Uint32Array(n);
+            for (let k = 0; k < n; k++) sorted[k] = keys[k] % IDX;
+            const start = new Int32Array(S + 1);
+            for (let q = 0; q < S; q++) start[q + 1] = start[q] + cnt[q];
+            return { h, ph, sorted, start, cnt };
+        };
+        const PA = prep(A, bA), PB = prep(B, bB);
+        const nonEmpty = (P, sec) => { for (let d = 0; d < S; d++) { const q = (sec + d) % S; if (P.cnt[q] > 0) return q; } return -1; };
+        const usedA = new Uint8Array(A.total), usedB = new Uint8Array(B.total);
+        const dJet = TWO_PI / f.jets;
+        let end = 0, kk = 0;
+        for (let sec = 0; sec < S; sec++) {
+            if (PA.cnt[sec] === 0 && PB.cnt[sec] === 0) continue;
+            const sa = PA.cnt[sec] ? sec : nonEmpty(PA, sec), sb = PB.cnt[sec] ? sec : nonEmpty(PB, sec);
+            if (sa < 0 || sb < 0) continue;
+            const nA = PA.cnt[sa], nB = PB.cnt[sb], n = Math.max(PA.cnt[sec], PB.cnt[sec]);
+            for (let k = 0; k < n; k++, kk++) {
+                const ia = PA.sorted[PA.start[sa] + Math.floor(k * nA / n)];
+                const ib = PB.sorted[PB.start[sb] + Math.floor(k * nB / n)];
+                const firstA = !usedA[ia], firstB = !usedB[ib];
+                if (!firstA && !firstB) continue;
+                usedA[ia] = 1; usedB[ib] = 1;
+                const hA = PA.h[ia], hB = PB.h[ib];
+                const seed = U.seededRandom(kk * 0.618 + 0.37);
+                const jit = (U.seededRandom(kk * 0.7311 + 3.3) - 0.5) * 2 * f.jitter;
+                const jitA = (U.seededRandom(kk * 1.319 + 5.1) - 0.5) * 2 * f.jitter * 0.7;
+                const L = Math.max(0, 0.05 + f.fallSpread * (1 - hA) + jit);
+                const arrive = 0.05 + f.fallSpread * (1 - hB) + f.travel + jitA;
+                const D = Math.max(0.6, arrive - L);
+                const Lq = U.clamp(Math.round(L * 100), 0, 2047);
+                const Dq = U.clamp(Math.round(D * 100), 5, 2047);
+                const packed = Lq * 2048 + Dq;
+                end = Math.max(end, (Lq + Dq) * 0.01);
+                // Струя: азимут уходящей точки притягивается к ближайшей из f.jets струй.
+                const phA = PA.ph[ia];
+                const phJ = Math.round(phA / dJet) * dJet + (U.seededRandom(kk * 2.17 + 0.9) - 0.5) * dJet * f.jetWidth;
+                const hw = Math.round(hA * 4095) * 4096 + Math.round(hB * 4095);
+                if (firstA) {
+                    const pa = A.parts[A.partOf[ia]], la = ia - pa.start, o = pa.outAttr.array, j = la * 4;
+                    o[j] = packed; o[j + 1] = phJ; o[j + 2] = seed + (firstB ? 0 : 2); o[j + 3] = hw;
+                    pa.pairOutAttr.array[la] = kk;
+                }
+                if (firstB) {
+                    const pb = B.parts[B.partOf[ib]], lb = ib - pb.start, o = pb.inAttr.array, j = lb * 4;
+                    o[j] = packed; o[j + 1] = phJ; o[j + 2] = seed + (firstA ? 0 : 2); o[j + 3] = hw;
+                    pb.pairInAttr.array[lb] = kk;
+                }
+            }
+        }
+        A.parts.forEach(p => { p.outAttr.needsUpdate = true; p.pairOutAttr.needsUpdate = true; });
+        B.parts.forEach(p => { p.inAttr.needsUpdate = true; p.pairInAttr.needsUpdate = true; });
         return end + c.meshRevealLag + c.meshFade + 0.1;
     }
 
