@@ -2,6 +2,7 @@
 // DARK PEONY — ФИГУРА «МЕДУЗА»
 // ==========================================
 // Три части:
+//  • юбка — расширяющийся книзу подол от края купола с крупными складками (две синусоиды колышут её);
 //  • купол — тело вращения: сфера, закруглённая внизу и вдавленная сама в себя (внешняя сторона,
 //    скруглённый край, внутренняя чаша), с радиальными полосками-каналами и ресничками по краю;
 //  • ленты (ротовые щупальца) — плоские ленты: верх не узкий, середина самая широкая, низ сходит в ноль;
@@ -68,6 +69,7 @@
     const ribbonPars = `
         uniform float uTime;
         attribute float aSeed;
+        attribute vec3 aRuf;
         varying vec3 vNormal, vViewPosition;
         varying vec2 vUv;
     `;
@@ -75,15 +77,49 @@
     const ribbonDisplacement = `
         vUv = uv; vec3 pos = position; vec3 dpRest = position;
         float u = uv.y;
-        float whip = pow(u, 1.3);
-        float t1 = uTime * 0.9 - u * 3.2 + aSeed * 5.1;
-        float t2 = uTime * 0.65 - u * 4.6 + aSeed * 2.7;
+        // Свой характер у каждой ленты (как phase/amp/flex у лепестков пиона).
+        float rA = fract(sin(aSeed * 12.9898) * 43758.5453);
+        float rB = fract(sin(aSeed * 78.233) * 12345.678);
+        float rC = fract(sin(aSeed * 39.425) * 24634.634);
+        float flex = 0.75 + 0.6 * rA;
+        // Синяя волна — вся лента: бежит от основания к кончику.
+        float whip = pow(u, 1.3) * flex;
+        float t1 = uTime * (0.8 + 0.3 * rB) - u * (2.8 + 1.2 * rC) + aSeed * 5.1;
+        float t2 = uTime * (0.55 + 0.25 * rC) - u * (4.2 + 1.2 * rA) + aSeed * 2.7;
         pos.x += (sin(t1) * 0.22 + cos(t2) * 0.10) * whip;
         pos.z += (cos(t1 * 0.8) * 0.22 + sin(t2 * 1.2) * 0.10) * whip;
-        // Волнистая кромка живёт отдельно: волна бежит сверху вниз.
-        float edge = pow(uv.x, 1.8) * smoothstep(0.05, 0.3, u);
-        pos.z += sin(u * 26.0 - uTime * 2.4 + aSeed) * 0.05 * edge;
-        pos.x += cos(u * 26.0 - uTime * 2.4 + aSeed) * 0.015 * edge;
+        // Зелёная волна — рюши кромки бегут вниз; амплитуда меняется пакетами, которые тоже
+        // бегут вниз: то вильнёт сильнее, то слабее. aRuf: x — амплитуда, y — фаза, z — скручивание.
+        {
+            float ph = aRuf.y - uTime * (2.6 + 1.4 * rB);
+            float env = 0.45 + 0.55 * (0.6 * sin(u * (5.0 + 3.0 * rC) - uTime * (1.1 + 0.6 * rA) + aSeed * 3.0)
+                                     + 0.4 * sin(u * (9.0 + 4.0 * rA) - uTime * (1.7 + 0.5 * rC) + aSeed * 1.3)) ;
+            env *= 0.8 + 0.5 * rC;
+            float amp = aRuf.x * env;
+            float acr = pow(uv.x, 2.0) * amp * 0.3 * sin(ph);
+            float zz = pow(uv.x, 1.8) * amp * sin(ph + 0.5);
+            float ca = cos(aRuf.z), sa = sin(aRuf.z);
+            pos.x += acr * ca - zz * sa;
+            pos.z += acr * sa + zz * ca;
+        }
+    `;
+
+    // Юбка: uv.x — угол по кругу (0..1), uv.y — от стыка с куполом (0) к нижнему краю (1).
+    const skirtPars = `
+        uniform float uTime;
+        varying vec3 vNormal, vViewPosition;
+        varying vec2 vUv;
+    `;
+    // Две синусоиды: радиальная — юбка колышется по радиусу; вертикальная — колышется нижний край.
+    const skirtDisplacement = `
+        vUv = uv; vec3 pos = position; vec3 dpRest = position;
+        float h = uv.y;
+        float th = uv.x * 6.2831853;
+        vec2 dir = normalize(position.xz + 1e-5);
+        float radial = sin(uTime * 1.2 + th * 3.0) * 0.6 + sin(uTime * 0.8 - th * 5.0 + 1.3) * 0.4;
+        pos.xz += dir * radial * 0.07 * pow(h, 1.3);
+        float vert = sin(uTime * 1.6 + th * 9.0) * 0.7 + sin(uTime * 1.1 - th * 4.0 + 2.1) * 0.3;
+        pos.y += vert * 0.06 * pow(h, 2.0);
     `;
 
     const tentPars = `uniform float uTime; attribute float aSeed; attribute vec3 aRingC; varying vec3 vNormal, vViewPosition; varying vec2 vUv;`;
@@ -193,10 +229,11 @@
 
     // ---------- ЛЕНТА ----------
     // Форма ленты в её собственных координатах: x — поперёк, y — вниз по длине, z — из плоскости.
-    function ribbonPoint(u, v, p) {
+    // ruffle = false — плоская лента без рюшей (рюши рисует шейдер и гонит их волной по кромке).
+    function ribbonPoint(u, v, p, ruffle = true) {
         const W = p.width * Math.sin(Math.PI * (0.2 + 0.8 * u));
         const ph = u * p.len * p.ruffleK + p.seed;
-        const rA = p.ruffleAmp * (W / p.width);
+        const rA = ruffle ? p.ruffleAmp * (W / p.width) : 0;
         // Волнистый край длиннее прямого: волна в плоскости ленты + рюши из плоскости в той же фазе
         // (без сдвига фаз край не закручивается штопором, а складывается гармошкой).
         let across = v * W + Math.pow(v, 2.0) * rA * 0.3 * Math.sin(ph);
@@ -211,25 +248,33 @@
         ];
     }
 
+    // Параметры оборки в точке ленты для шейдера: амплитуда, фаза, угол скручивания.
+    function ribbonRuffle(u, p) {
+        const W = p.width * Math.sin(Math.PI * (0.2 + 0.8 * u));
+        return [p.ruffleAmp * (W / p.width), u * p.len * p.ruffleK + p.seed, p.twist * u];
+    }
+
     // Точки ленты — как у лепестков пиона: сетка по поверхности, у каждой вершины несколько точек
     // со случайным сдвигом внутри ячейки и лёгким объёмным разбросом (без рядов и полосок).
     function buildRibbon(p, tier) {
         const qs = tier.petalSegments / 100;
         const segU = Math.round(150 * qs * p.len / 1.75), segV = Math.round(46 * qs);
         const mult = tier.petalMultiplier;
-        const pos = [], nor = [], uvs = [], seeds = [], size = [];
+        const pos = [], nor = [], uvs = [], seeds = [], size = [], ruf = [];
         const e = 1e-3;
         let sd = p.seed * 11.3;
         for (let i = 0; i <= segU; i++) for (let j = 0; j <= segV; j++) {
             for (let m = 0; m < mult; m++) {
                 const u = Math.min(1, Math.max(0, (i + (seededRandom(sd += 1.1) - 0.5) * 0.8) / segU));
                 const v = Math.min(1, Math.max(0, (j + (seededRandom(sd += 1.3) - 0.5) * 0.8) / segV));
-                const q = ribbonPoint(u, v, p);
+                const qr = ribbonPoint(u, v, p);                 // с рюшами — только для нормали (френель)
+                const q = ribbonPoint(u, v, p, false);          // позиция — плоская лента
                 const du = ribbonPoint(Math.min(1, u + e), v, p), dv = ribbonPoint(u, Math.min(1, v + e), p);
-                const ax = du[0] - q[0], ay = du[1] - q[1], az = du[2] - q[2];
-                const bx = dv[0] - q[0], by = dv[1] - q[1], bz = dv[2] - q[2];
+                const ax = du[0] - qr[0], ay = du[1] - qr[1], az = du[2] - qr[2];
+                const bx = dv[0] - qr[0], by = dv[1] - qr[1], bz = dv[2] - qr[2];
                 const nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
                 const nl = Math.hypot(nx, ny, nz) || 1;
+                ruf.push(...ribbonRuffle(u, p));
                 const vol = 0.006 + 0.01 * u;
                 pos.push(q[0] + (seededRandom(sd += 0.3) - 0.5) * vol,
                          q[1] + (seededRandom(sd += 0.3) - 0.5) * vol,
@@ -246,14 +291,16 @@
         pointsGeo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
         pointsGeo.setAttribute('aSeed', new THREE.Float32BufferAttribute(seeds, 1));
         pointsGeo.setAttribute('aSizeScale', new THREE.Float32BufferAttribute(size, 1));
+        pointsGeo.setAttribute('aRuf', new THREE.Float32BufferAttribute(ruf, 3));
 
         // Поверхность.
         const mU = 220, mV = 16;
-        const mPos = [], mUv = [], mSeed = [], idx = [];
+        const mPos = [], mUv = [], mSeed = [], mRuf = [], idx = [];
         for (let i = 0; i <= mU; i++) for (let j = 0; j <= mV; j++) {
             const u = i / mU, v = j / mV;
-            const q = ribbonPoint(u, v, p);
+            const q = ribbonPoint(u, v, p, false);
             mPos.push(q[0], q[1], q[2]); mUv.push(v, u); mSeed.push(p.seed);
+            mRuf.push(...ribbonRuffle(u, p));
         }
         for (let i = 0; i < mU; i++) for (let j = 0; j < mV; j++) {
             const a = i * (mV + 1) + j, b = a + mV + 1;
@@ -264,8 +311,67 @@
         meshGeo.setAttribute('position', new THREE.Float32BufferAttribute(mPos, 3));
         meshGeo.setAttribute('uv', new THREE.Float32BufferAttribute(mUv, 2));
         meshGeo.setAttribute('aSeed', new THREE.Float32BufferAttribute(mSeed, 1));
+        meshGeo.setAttribute('aRuf', new THREE.Float32BufferAttribute(mRuf, 3));
         meshGeo.computeVertexNormals();
         return { pointsGeo, meshGeo };
+    }
+
+    // ---------- ЮБКА (под куполом) ----------
+    // Расширяющийся книзу подол от края купола: крупные складки по кругу, нижний край — волнистый.
+    function skirtPoint(t, h, p) {
+        const th = t * Math.PI * 2;
+        const fold = Math.sin(th * p.folds + p.seed) * 0.75 + Math.sin(th * p.folds * 2 + p.seed * 1.7) * 0.25;
+        const r = p.r0 * (1 - 0.06 * h) + p.flare * Math.pow(h, 1.4) + fold * p.foldAmp * Math.pow(h, 1.3);
+        const y = p.y0 - h * p.len - Math.cos(th * p.folds + p.seed) * p.hemAmp * Math.pow(h, 2.0);
+        return [r * Math.sin(th), y, r * Math.cos(th)];
+    }
+
+    function buildSkirt(p, tier) {
+        const qs = tier.petalSegments / 100;
+        const segT = Math.round(420 * qs), segH = Math.round(40 * qs);
+        const mult = tier.petalMultiplier;
+        const pos = [], nor = [], uvs = [], size = [];
+        const e = 1e-3;
+        let sd = 91.7;
+        for (let i = 0; i < segT; i++) for (let j = 0; j <= segH; j++) {
+            for (let m = 0; m < mult; m++) {
+                const t = (i + seededRandom(sd += 1.1) * 0.9) / segT;
+                const h = Math.min(1, Math.max(0, (j + (seededRandom(sd += 1.3) - 0.5) * 0.8) / segH));
+                const q = skirtPoint(t, h, p);
+                const dt = skirtPoint(t + e, h, p), dh = skirtPoint(t, Math.min(1, h + e), p);
+                const ax = dt[0] - q[0], ay = dt[1] - q[1], az = dt[2] - q[2];
+                const bx = dh[0] - q[0], by = dh[1] - q[1], bz = dh[2] - q[2];
+                const nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
+                const nl = Math.hypot(nx, ny, nz) || 1;
+                const vol = 0.006;
+                pos.push(q[0] + (seededRandom(sd += 0.3) - 0.5) * vol, q[1] + (seededRandom(sd += 0.3) - 0.5) * vol, q[2] + (seededRandom(sd += 0.3) - 0.5) * vol);
+                nor.push(nx / nl, ny / nl, nz / nl);
+                uvs.push(t, h);
+                size.push(seededRandom(sd += 0.7));
+            }
+        }
+        const pointsGeo = new THREE.BufferGeometry();
+        pointsGeo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        pointsGeo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+        pointsGeo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+        pointsGeo.setAttribute('aSizeScale', new THREE.Float32BufferAttribute(size, 1));
+
+        const mT = 240, mH = 24;
+        const mPos = [], mUv = [], idx = [];
+        for (let i = 0; i <= mT; i++) for (let j = 0; j <= mH; j++) {
+            const q = skirtPoint(i / mT, j / mH, p);
+            mPos.push(q[0], q[1], q[2]); mUv.push(i / mT, j / mH);
+        }
+        for (let i = 0; i < mT; i++) for (let j = 0; j < mH; j++) {
+            const a = i * (mH + 1) + j, b = a + mH + 1;
+            idx.push(a, b, a + 1, b, b + 1, a + 1);
+        }
+        const meshGeo = new THREE.BufferGeometry();
+        meshGeo.setIndex(idx);
+        meshGeo.setAttribute('position', new THREE.Float32BufferAttribute(mPos, 3));
+        meshGeo.setAttribute('uv', new THREE.Float32BufferAttribute(mUv, 2));
+        meshGeo.computeVertexNormals();
+        return { pointsGeo, meshGeo, matrix: new THREE.Matrix4() };
     }
 
     // ---------- ТОНКОЕ ЩУПАЛЬЦЕ (трубка вниз) ----------
@@ -392,7 +498,12 @@
             new THREE.Vector3(0, FIG_Y_OFFSET, 0), new THREE.Quaternion(),
             new THREE.Vector3(FIG_SCALE, FIG_SCALE, FIG_SCALE));
 
-        const data = { bell, bells, ribbons, tentacles, rootMatrix };
+        const skirt = buildSkirt({
+            r0: bell.rimR * 0.98, y0: bell.rimY + 0.04, len: 0.5, flare: 0.28,
+            folds: 9, foldAmp: 0.09, hemAmp: 0.07, seed: 0.7
+        }, tier);
+
+        const data = { bell, bells, skirt, ribbons, tentacles, rootMatrix };
         assignOrderAndLayout(data);
         return data;
     }
@@ -409,9 +520,11 @@
     function assignOrderAndLayout(data) {
         const v = new THREE.Vector3();
         const pointSources = data.bells.map(b => ({ geo: b.pointsGeo, matrix: b.matrix }));
+        pointSources.push({ geo: data.skirt.pointsGeo, matrix: data.skirt.matrix });
         data.ribbons.forEach(r => pointSources.push({ geo: r.pointsGeo, matrix: r.matrix }));
         data.tentacles.forEach(t => pointSources.push({ geo: t.geo, matrix: t.matrix }));
         const meshOnly = data.bells.map(b => ({ geo: b.meshGeo, matrix: b.matrix }));
+        meshOnly.push({ geo: data.skirt.meshGeo, matrix: data.skirt.matrix });
         data.ribbons.forEach(r => meshOnly.push({ geo: r.meshGeo, matrix: r.matrix }));
 
         let dMin = Infinity, dMax = -Infinity;
@@ -555,7 +668,7 @@
                     ${depthVert}
                     vec3 N = normalize(normalMatrix * normal);
                     vFresnel = pow(clamp(1.0 - abs(dot(N, normalize(-mv.xyz))), 0.0, 1.0), 1.3);
-                    gl_PointSize = uSize * uViewportScale * (0.7 + aSizeScale * 0.5) / (0.35 + 0.06 * dist);
+                    gl_PointSize = uSize * uViewportScale * (0.7 + aSizeScale * 0.5) * (1.0 + 0.35 * smoothstep(0.7, 1.0, uv.x)) / (0.35 + 0.06 * dist);
                     vAlpha = (0.2 + 0.5 * vFresnel) * ${ribbonAlpha};
                     dpMorphFinish();
                 }
@@ -569,8 +682,59 @@
                     vec4 tex = texture2D(uTexture, gl_PointCoord);
                     if (tex.a < 0.01) discard;
                     vec3 color = mix(vec3(0.04, 0.1, 0.2), vec3(0.7, 0.88, 1.0), vFresnel * 1.1);
-                    float edgeGlow = smoothstep(0.3, 1.0, vUv.x) * 1.5;
+                    // Края светятся сильнее, чем у лепестков пиона: волнистая кромка и немного — прямой край.
+                    float edgeGlow = smoothstep(0.55, 1.0, vUv.x) * 3.0 + (1.0 - smoothstep(0.0, 0.08, vUv.x)) * 1.0;
                     float a = tex.a * vAlpha * 0.7 * (1.0 + edgeGlow);
+                    a = a / (0.45 + a * 2.2) * vDepthK;
+                    gl_FragColor = dpMorphColor(color, a, tex.a);
+                }
+            `
+        })));
+
+        // ---------- ЮБКА ----------
+        // У стыка с куполом — ноль по прозрачности, к краю с рюшами — видимая; френель как у лепестков.
+        const skirtAlpha = 'smoothstep(0.0, 0.55, vUv.y)';
+        const skirtMesh = add(new THREE.ShaderMaterial({
+            uniforms: Object.assign({ uTime: S.uTime }, morphUniforms),
+            vertexShader: `${skirtPars} ${G.meshVertex} void main(){ ${skirtDisplacement} vDpOrder = aOrder;
+                vec4 mv = modelViewMatrix * vec4(pos, 1.0); vViewPosition = -mv.xyz; vNormal = normalize(normalMatrix * normal); gl_Position = projectionMatrix * mv; }`,
+            fragmentShader: meshFrag(`0.6 * ${skirtAlpha}`),
+            side: THREE.DoubleSide, transparent: true, depthWrite: false
+        }));
+        const skirtPoints = add(new THREE.ShaderMaterial(pointsBase({
+            uniforms: Object.assign({ uTime: S.uTime, uDepth, uTexture: S.uTexture, uViewportScale: S.uViewportScale, uSize: { value: 2.2 } }, morphUniforms),
+            vertexShader: `
+                ${skirtPars}
+                ${G.pointsVertex}
+                uniform vec2 uDepth;
+                varying float vDepthK;
+                uniform float uViewportScale, uSize;
+                attribute float aSizeScale;
+                varying float vAlpha, vFresnel;
+                void main() {
+                    ${skirtDisplacement}
+                    vec4 mv = viewMatrix * dpMorph(dpRest, pos);
+                    gl_Position = projectionMatrix * mv;
+                    float dist = max(-mv.z, 0.1);
+                    ${depthVert}
+                    vec3 N = normalize(normalMatrix * normal);
+                    vFresnel = pow(clamp(1.0 - abs(dot(N, normalize(-mv.xyz))), 0.0, 1.0), 1.3);
+                    gl_PointSize = uSize * uViewportScale * (0.7 + aSizeScale * 0.5) * (1.0 + 0.35 * smoothstep(0.8, 1.0, uv.y)) / (0.35 + 0.06 * dist);
+                    vAlpha = (0.2 + 0.5 * vFresnel) * ${skirtAlpha};
+                    dpMorphFinish();
+                }
+            `,
+            fragmentShader: `
+                ${G.pointsFragment}
+                uniform sampler2D uTexture;
+                varying float vAlpha, vFresnel, vDepthK;
+                varying vec2 vUv;
+                void main() {
+                    vec4 tex = texture2D(uTexture, gl_PointCoord);
+                    if (tex.a < 0.01) discard;
+                    vec3 color = mix(vec3(0.04, 0.1, 0.2), vec3(0.7, 0.88, 1.0), vFresnel * 1.1);
+                    float hemGlow = smoothstep(0.65, 1.0, vUv.y) * 3.0;   // нижний край с рюшами светится
+                    float a = tex.a * vAlpha * 0.6 * (1.0 + hemGlow);
                     a = a / (0.45 + a * 2.2) * vDepthK;
                     gl_FragColor = dpMorphColor(color, a, tex.a);
                 }
@@ -624,7 +788,7 @@
             `
         })));
 
-        return { list, bellMesh, bellPoints, ribbonMesh, ribbonPoints, tentMesh, tentPoints };
+        return { list, bellMesh, bellPoints, skirtMesh, skirtPoints, ribbonMesh, ribbonPoints, tentMesh, tentPoints };
     }
 
     // ==========================================
@@ -649,6 +813,8 @@
                 place(meshRoot, new THREE.Mesh(b.meshGeo, mats.bellMesh), b.matrix);
                 place(pointsRoot, new THREE.Points(b.pointsGeo, mats.bellPoints), b.matrix);
             });
+            place(meshRoot, new THREE.Mesh(data.skirt.meshGeo, mats.skirtMesh), data.skirt.matrix);
+            place(pointsRoot, new THREE.Points(data.skirt.pointsGeo, mats.skirtPoints), data.skirt.matrix);
             data.ribbons.forEach(r => {
                 place(meshRoot, new THREE.Mesh(r.meshGeo, mats.ribbonMesh), r.matrix);
                 place(pointsRoot, new THREE.Points(r.pointsGeo, mats.ribbonPoints), r.matrix);
