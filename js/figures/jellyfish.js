@@ -23,7 +23,7 @@
     const TENTACLE_COUNT = 12;    // длинные щупальца
     const STAMENS_PER_GAP = 5;    // коротких «тычинок» между соседними лентами
     // Какие части медузы показывать по умолчанию (доводим по частям; '' — все). ?parts= в адресе важнее.
-    const DEFAULT_PARTS = 'bell,skirt,ribbons';
+    const DEFAULT_PARTS = 'tentacles';
     const FRINGE_COUNT = 0;       // короткие реснички по краю купола (выкл.: давали хаос из точек у края)
 
     const ORDER_ANCHOR = new THREE.Vector3(0, 0.95, 0); // вершина купола: распадается последней
