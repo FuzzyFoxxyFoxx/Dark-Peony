@@ -40,7 +40,7 @@
         uSwirlA: { value: new THREE.Vector4() },      // size, sizeMin, alpha, visibleFraction
         uSwirlB: { value: new THREE.Vector4() },      // leaveGlow, swirlBlend, swirlTint, -
         uTwist: { value: new THREE.Vector4() },       // перекрутов за оборот, скорость проворота, центр сечения r, y
-        uTwist2: { value: new THREE.Vector4() },      // сжатие по высоте, -, -, -
+        uTwist2: { value: new THREE.Vector4() },      // сжатие по высоте, режим нитей (0/1), -, -
         uSwirlColor: { value: new THREE.Vector3() }
     };
 
@@ -52,7 +52,7 @@
         shared.uFlowB.value.set(c.flowDetailFreq, c.jitter, c.precession, c.shiver);
         const rc = c.ringInner + (c.ringOuter - c.ringInner) * c.ringPeak;
         shared.uTwist.value.set(c.twistPerTurn, c.twistSpeed, rc, c.ringY);
-        shared.uTwist2.value.set(c.twistSquash, 0, 0, 0);
+        shared.uTwist2.value.set(c.twistSquash, c.threadCell > 0 ? 1 : 0, 0, 0);
         shared.uSwirlB.value.set(c.leaveGlow, c.swirlBlend, c.swirlTint, 0);
         shared.uClumpA.value.set(c.clumpStrength, c.clumpFreq, c.clumpFilaments, c.clumpMaxDist);
         // Поля вращаются вместе с вихрем: fieldSpin — доля пиковой угловой скорости частиц.
@@ -301,16 +301,15 @@
 
             float clumped = step(h3, uClumpB.x);  // остальные — свободная пыль вокруг
             if (w > 0.0005) {
-                // 1) Нити (как линии тока): планировщик сводит частицы в ячейки сечения кольца —
-                //    все частицы ячейки идут по одной нити, каждая со своего места и в своё время,
-                //    и растягиваются вдоль неё цепочкой. Форма нити — плавная волна (подъёмы, спуски,
-                //    уходы внутрь/наружу) + мелкие завитки; поле берётся в точке идеального пути,
-                //    одинаковой для всей нити, поэтому нить — линия, а не облако. Волны медленно ползут.
+                // 1) Сильное плавное поле, взятое в точке идеального пути (исходное место частицы,
+                //    повёрнутое вокруг оси): соседи сдвигаются одинаково, поэтому лепесток срывается
+                //    цельной вуалью, изгибается синусоидой и складывается, а не рассыпается.
+                //    (С ringMode + threadCell та же формула даёт нити вдоль кольца.)
                 vec3 np = vec3(sin(thPath) * rMid, yMid, cos(thPath) * rMid);
                 vec3 q = np * uFlowA.y + vec3(0.0, -te * uFlowA.w, te * uFlowA.w * 0.37);
                 //    Завитки у каждой нити свои (сдвиг по номеру нити) — соседние нити расходятся
                 //    и перекрещиваются, а не сливаются в сплошную пелену.
-                float tid = dpHash(rMid * 37.1 + yMid * 91.3);
+                float tid = dpHash(rMid * 37.1 + yMid * 91.3) * uTwist2.y;  // только в режиме нитей
                 vec3 q2 = np * uFlowB.x + vec3(te * uFlowA.w * 0.6, 7.3, -te * uFlowA.w) + tid * 40.0;
                 p += (dpNoise3(q) * uFlowA.x + dpNoise3(q2) * uFlowA.z) * w;
                 vec3 grain = vec3(sin(te * 1.7 + ph * 3.0), sin(te * 1.3 + ph * 5.0), cos(te * 1.9 + ph * 4.0));
@@ -566,6 +565,8 @@
             const ring = sampleRing(c, k);
             let rMid = rMap + (ring.r - rMap) * c.cloudMix;
             let yMid = yMap + (ring.y - yMap) * c.cloudMix + c.lift * seed;
+            // Без кольца: частица остаётся на своём уровне и радиусе (слой цветка летит целиком).
+            if (!c.ringMode) { rMid = rPair; yMid = yPair + c.lift * seed; }
             // Нити: все частицы одной ячейки сечения летят по одной линии.
             if (c.threadCell > 0) {
                 rMid = (Math.floor(rMid / c.threadCell) + 0.5) * c.threadCell;
