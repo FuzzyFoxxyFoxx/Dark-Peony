@@ -141,7 +141,8 @@
                 morph.to.uniforms.uMorphTime.value = morph.time;
                 if (DP.flowSim) DP.flowSim.step(morph.time);
                 if (DP.smokeSim) DP.smokeSim.step(morph.time);
-                const k = DP.util.smoothstep(0.15, 0.75, morph.time / morph.duration);
+                const tw = DP.morph.tiltWindow || [0.15, 0.75];   // «кольцо-кисть»: наклон меняется медленно, весь переход
+                const k = DP.util.smoothstep(tw[0], tw[1], morph.time / morph.duration);
                 setTilt(morph.tilt0 + (morph.to.tilt - morph.tilt0) * k);
                 events.emit('morphprogress', { time: morph.time, duration: morph.duration });
                 if (morph.time >= morph.duration) finishMorph();

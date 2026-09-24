@@ -678,8 +678,11 @@
     function plan(A, B) {
         const c = DP.config.morph;
         shared.uSmokeA.value.x = 0;
-        if (c.mode === 'smoke' && DP.smokeSim && DP.smokeSim.supported()) return planSmoke(A, B);
-        if (c.mode === 'fountain' || c.mode === 'smoke') return planFountain(A, B);
+        DP.morph.tiltWindow = c.mode === 'sweep' ? [0, 1] : [0.15, 0.75];
+        const smokeOk = DP.smokeSim && DP.smokeSim.supported();
+        if (c.mode === 'sweep' && smokeOk) return planSweep(A, B);
+        if (c.mode === 'smoke' && smokeOk) return planSmoke(A, B);
+        if (c.mode === 'fountain' || c.mode === 'smoke' || c.mode === 'sweep') return planFountain(A, B);
         shared.uFountA.value.x = 0;
         syncConfig();
         const NA = A.total, NB = B.total, N = Math.max(NA, NB);
@@ -987,6 +990,139 @@
         shared.uSmokeA.value.set(1, side, f.lifeMin, Math.max(f.lifeMin + 0.01, f.lifeMax));
         shared.uSmokeB.value.set(f.fadeIn, f.fadeOut, f.grow, f.capture);
         shared.uSmokeC.value.set(f.land, 0, 0, 0);
+        return end + c.meshRevealLag + c.meshFade + 0.1;
+    }
+
+    // ------------------------------------------
+    // ПЛАНИРОВЩИК «КОЛЬЦО-КИСТЬ» (sweep)
+    // ------------------------------------------
+    // Дымное кольцо опускается сверху вниз и «дышит» по силуэту фигур на своей высоте. Где оно проходит,
+    // старая фигура срывается в кольцо (на каждом уровне сначала крайние точки), а над кольцом из дыма
+    // проявляется новая. Пары — на одной высоте (сектор × полоса); где точек старой фигуры больше, лишние
+    // тают в кольце, где меньше — недостающие рождаются из кольца.
+    function planSweep(A, B) {
+        const c = DP.config.morph, f = c.sweep;
+        syncConfig();
+        shared.uFountA.value.x = 0;
+        shared.uSimInfo.value.set(0, 1, 0, 0);
+        const bb = bounds([A, B]);
+        DP.morph.lastBounds = bb;
+        const H = Math.max(bb.y1 - bb.y0, 1e-3);
+        const yTop = bb.y1 + f.margin * H, yBot = bb.y0 - f.margin * H;
+        const Td = f.descent;
+        const ease = (x) => { x = U.clamp(x, 0, 1); return x + (x * x * (3 - 2 * x) - x) * f.ease; };
+        const yAt = (t) => yTop - (yTop - yBot) * ease(t / Td);
+        const tAt = (y) => {
+            let lo = 0, hi = Td;
+            if (y >= yTop) return 0;
+            if (y <= yBot) return Td;
+            for (let i = 0; i < 30; i++) { const m = 0.5 * (lo + hi); if (yAt(m) > y) lo = m; else hi = m; }
+            return 0.5 * (lo + hi);
+        };
+
+        // Силуэт: радиус фигур по высоте (85-й процентиль в полосе), кольцо идёт по большему из двух.
+        const NP = 64;
+        const bandOfY = (y) => U.clamp(Math.floor((y - bb.y0) / H * NP), 0, NP - 1);
+        const profile = (Lay) => {
+            const bins = Array.from({ length: NP }, () => []);
+            Lay.parts.forEach(p => {
+                for (let i = 0; i < p.count; i += 5) bins[bandOfY(p.rest[i * 3 + 1])].push(Math.hypot(p.rest[i * 3], p.rest[i * 3 + 2]));
+            });
+            return bins.map(b => { if (!b.length) return 0; b.sort((x, y) => x - y); return b[Math.floor(0.85 * (b.length - 1))]; });
+        };
+        const RA = profile(A), RB = profile(B);
+        let Rp = RA.map((r, i) => Math.max(r, RB[i]));
+        Rp = Rp.map((r, i) => (Rp[Math.max(0, i - 2)] + Rp[Math.max(0, i - 1)] + r + Rp[Math.min(NP - 1, i + 1)] + Rp[Math.min(NP - 1, i + 2)]) / 5);
+        Rp = Rp.map(r => Math.max(r * f.ringK, f.ringMin * bb.r1));
+        const Ry = (y) => {
+            const x = U.clamp((y - bb.y0) / H * NP - 0.5, 0, NP - 1);
+            const i = Math.min(NP - 2, Math.floor(x)), k = x - i;
+            return Rp[i] + (Rp[i + 1] - Rp[i]) * k;
+        };
+        const ring = {
+            at(t) {
+                const e = 1 / 60, y = yAt(t), R = Ry(y);
+                return { y, R, dy: (yAt(t + e) - yAt(t - e)) / (2 * e), dR: (Ry(yAt(t + e)) - Ry(yAt(t - e))) / (2 * e) };
+            }
+        };
+
+        // Пары по ячейкам «сектор × полоса высоты».
+        const S = f.sectors, NBd = f.bands, IDX = 4194304;
+        const cells = (Lay) => {
+            const n = Lay.total, keys = new Float64Array(n), cnt = new Int32Array(S * NBd);
+            const h = new Float32Array(n), r = new Float32Array(n);
+            Lay.parts.forEach(p => {
+                for (let i = 0; i < p.count; i++) {
+                    const g = p.start + i, x = p.rest[i * 3], y = p.rest[i * 3 + 1], z = p.rest[i * 3 + 2];
+                    const sec = Math.min(S - 1, Math.floor((U.azimuth(x, z) + Math.PI) / TWO_PI * S));
+                    const hh = U.clamp((y - bb.y0) / H, 0, 1), band = Math.min(NBd - 1, Math.floor((1 - hh) * NBd));
+                    const cell = sec * NBd + band;
+                    h[g] = hh; r[g] = Math.hypot(x, z); cnt[cell]++;
+                    keys[g] = (cell * 1048576 + Math.floor((1 - hh) * 1048575)) * IDX + g;
+                }
+            });
+            keys.sort();
+            const sorted = new Uint32Array(n);
+            for (let k = 0; k < n; k++) sorted[k] = keys[k] % IDX;
+            const start = new Int32Array(S * NBd + 1);
+            for (let q = 0; q < S * NBd; q++) start[q + 1] = start[q] + cnt[q];
+            return { sorted, start, cnt, h, r };
+        };
+        const CA = cells(A), CB = cells(B);
+        let total = 0;
+        for (let q = 0; q < S * NBd; q++) total += Math.max(CA.cnt[q], CB.cnt[q]);
+        const side = Math.max(1, Math.ceil(Math.sqrt(total)));
+        const dA = new Float32Array(side * side * 4), dB = new Float32Array(side * side * 4), dS = new Float32Array(side * side * 4);
+        const usedA = new Uint8Array(A.total), usedB = new Uint8Array(B.total);
+        let end = 0, kk = 0;
+        for (let q = 0; q < S * NBd; q++) {
+            const nA = CA.cnt[q], nB = CB.cnt[q], n = Math.max(nA, nB);
+            for (let k = 0; k < n; k++, kk++) {
+                const ia = nA ? CA.sorted[CA.start[q] + Math.floor(k * nA / n)] : -1;
+                const ib = nB ? CB.sorted[CB.start[q] + Math.floor(k * nB / n)] : -1;
+                const firstA = ia >= 0 && !usedA[ia], firstB = ib >= 0 && !usedB[ib];
+                if (!firstA && !firstB) continue;
+                if (ia >= 0) usedA[ia] = 1;
+                if (ib >= 0) usedB[ib] = 1;
+                const hA = ia >= 0 ? CA.h[ia] : CB.h[ib], hB = ib >= 0 ? CB.h[ib] : hA;
+                const rA = ia >= 0 ? CA.r[ia] : 0;
+                const yA = bb.y0 + hA * H, yB = bb.y0 + hB * H;
+                const seed = U.seededRandom(kk * 0.618 + 0.37);
+                const jit = (U.seededRandom(kk * 0.7311 + 3.3) - 0.5) * 2 * f.jitter;
+                const jitA = (U.seededRandom(kk * 1.319 + 5.1) - 0.5) * 2 * f.jitter;
+                // Отрыв: кольцо дошло до точки; крайние точки — раньше (фронт куполом), и чуть заранее (lead).
+                const L = Math.max(0, 0.05 + tAt(yA + f.dome * H * U.clamp(rA / bb.r1, 0, 1)) - f.lead + jit);
+                const T = 0.05 + tAt(yB) + f.dwell + jitA;
+                const D = Math.max(f.capture + f.land + 0.2, T - L);
+                const Lq = U.clamp(Math.round(L * 100), 0, 2047), Dq = U.clamp(Math.round(D * 100), 5, 2047);
+                end = Math.max(end, (Lq + Dq) * 0.01);
+                const packed = Lq * 2048 + Dq;
+                const P = { ia, ib, firstA, firstB, kk };
+                writePair(A, B, P, [packed, 0, seed + (firstB ? 0 : 2), 0], [packed, 0, seed + (firstA ? 0 : 2), 0]);
+                // Нет своей точки в A — частица «рождается» в сердцевине кольца там, где оно в момент отрыва.
+                let a, b;
+                if (ia >= 0) a = restOf(A, ia);
+                else {
+                    const bp = restOf(B, ib), ph = U.azimuth(bp[0], bp[2]), y = yAt(Lq * 0.01), R = Ry(y);
+                    a = [Math.sin(ph) * R, y, Math.cos(ph) * R];
+                }
+                b = ib >= 0 ? restOf(B, ib) : a;
+                const j = kk * 4;
+                dA[j] = a[0]; dA[j + 1] = a[1]; dA[j + 2] = a[2]; dA[j + 3] = Lq * 0.01;
+                dB[j] = b[0]; dB[j + 1] = b[1]; dB[j + 2] = b[2]; dB[j + 3] = Dq * 0.01;
+                dS[j] = seed;
+            }
+        }
+        A.parts.forEach(p => { p.outAttr.needsUpdate = true; p.pairOutAttr.needsUpdate = true; });
+        B.parts.forEach(p => { p.inAttr.needsUpdate = true; p.pairInAttr.needsUpdate = true; });
+
+        const sm = c.smoke;
+        DP.smokeSim.prepare(side, dA, dB, dS, ring, { capture: f.capture, land: f.land, gravity: f.gravity, pull: f.pull, twist: f.twist });
+        shared.uSmokeA.value.set(1, side, sm.lifeMin, Math.max(sm.lifeMin + 0.01, sm.lifeMax));
+        shared.uSmokeB.value.set(sm.fadeIn, sm.fadeOut, sm.grow, f.capture);
+        shared.uSmokeC.value.set(f.land, 0, 0, 0);
+        shared.uMorphSched.value.set(0.05, Td, 0.05 + f.dwell, Td);
+        shared.uMorphSched2.value.set(0, c.meshRevealLag, c.meshFade, 0);
         return end + c.meshRevealLag + c.meshFade + 0.1;
     }
 
