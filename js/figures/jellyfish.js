@@ -639,6 +639,7 @@
                 ${G.pointsFragment}
                 uniform sampler2D uTexture;
                 uniform vec4 uBellLook;
+                uniform float uRimProf;
                 varying float vFresnel, vRimW, vRib, vDepthK, vLight;
                 varying vec2 vUv;
                 void main() {
@@ -646,6 +647,9 @@
                     if (tex.a < 0.01) discard;
                     float lit = mix(1.0, vLight * vLight * 1.6, uBellLook.y);
                     vec3 color = mix(vec3(0.05, 0.12, 0.22), vec3(0.72, 0.88, 1.0), vFresnel * 1.1 + vRib * 0.4 + lit * 0.25);
+                    // Градиент как у пиона: белое — в нижней широкой части купола, к вершине — лёгкая синева.
+                    float whiteK = smoothstep(0.1, uRimProf, vUv.y);
+                    color = mix(color * vec3(0.62, 0.8, 1.12), mix(color, vec3(0.92, 0.97, 1.0), 0.35), whiteK);
                     float a = tex.a * (uBellLook.x * lit + 0.12 * vFresnel + uBellLook.z * vRib + 0.05 * vRimW);
                     a *= 1.0 - smoothstep(0.95, 1.0, vUv.y);   // загиб внутрь: последние 5% профиля — в ноль
                     a = a / (0.45 + a * 2.2) * vDepthK;
