@@ -112,8 +112,25 @@
         attribute float aSeed;
         attribute float aFolds;
         attribute vec4 aSk;          // длина профиля, угол крепления, кривизна в покое, глубина складок
+        attribute float aHem;        // волнистость среза подола
         varying vec3 vNormal, vViewPosition;
         varying vec2 vUv;
+
+        // Рюши юбки с природным разбросом (та же формула на CPU — skirtFoldJS):
+        // неровный шаг (фазовые искажения), разная высота (огибающая до ±50%), волнистый срез подола
+        // и провисание краёв. t — время дрейфа (0 — форма в покое).
+        vec2 skFold(float th, float t, float N, float sd) {
+            float r1 = fract(sin(sd * 12.9898) * 43758.5453) * 6.2832;
+            float r2 = fract(sin(sd * 78.233) * 12345.678) * 6.2832;
+            float r3 = fract(sin(sd * 39.425) * 24634.634) * 6.2832;
+            float warp = 1.1 * sin(th + r1 + 0.21 * t) + 0.8 * sin(2.0 * th + r2 - 0.17 * t) + 0.5 * sin(3.0 * th + r3 + 0.13 * t);
+            float ph = th * N + sd + t * 0.35 * N + warp;
+            float env = 1.0 + 0.3 * sin(2.0 * th + r3 + 0.11 * t) + 0.2 * sin(3.0 * th + r1 - 0.09 * t) + 0.15 * sin(5.0 * th + r2);
+            float fine = sin(th * (N + 7.0) - t * 0.6 + sd * 3.1) * (0.5 + 0.5 * sin(4.0 * th - t * 0.3 + r1));
+            float radial = env * sin(ph) + 0.3 * fine;
+            float hem = env * cos(ph) + 0.7 * sin(2.0 * th + r2) + 0.5 * sin(3.0 * th + r3 - 0.05 * t);
+            return vec2(radial, hem);
+        }
     `;
     // Юбка меняет только кривизну профиля (длина постоянна, верхний край неподвижен):
     //  • «гребок» в такт пульсации купола — подол подворачивается под себя и распрямляется;
@@ -151,13 +168,10 @@
             }
             vec2 a0 = abs(aSk.z) < 1e-3 ? vec2(sL * sin(aSk.y), -sL * cos(aSk.y))
                 : vec2(cos(aSk.y) - cos(aSk.y + aSk.z * sL), -(sin(aSk.y + aSk.z * sL) - sin(aSk.y))) / aSk.z;
-            float fp = pow(h, 1.3) * aSk.w;
-            float fold0 = sin(th * aFolds + aSeed) * fp;
-            float env = 0.7 + 0.3 * sin(th * 3.0 + aSeed * 2.3 + uTime * 0.21) + 0.2 * sin(th * 5.0 - uTime * 0.17 + aSeed);
-            float warp = 0.9 * sin(th * 2.0 + uTime * 0.37 + aSeed) + 0.5 * sin(th * 5.0 - uTime * 0.23 + aSeed * 1.9);
-            float fine = sin(th * (aFolds + 7.0) - uTime * 0.6 + aSeed * 3.1) * (0.5 + 0.5 * sin(th * 4.0 - uTime * 0.3 + aSeed));
-            float fold1 = (env * sin(th * aFolds + aSeed + uTime * 0.35 * aFolds + warp) + 0.35 * fine) * fp;
-            pos.xz += dir * (a1.x - a0.x + fold1 - fold0);
+            vec2 f0 = skFold(th, 0.0, aFolds, aSeed);
+            vec2 f1 = skFold(th, uTime, aFolds, aSeed);
+            pos.xz += dir * (a1.x - a0.x + (f1.x - f0.x) * pow(h, 1.3) * aSk.w);
+            pos.y += (f1.y - f0.y) * aHem * pow(h, 2.0);
             pos.y += a1.y - a0.y;
         }
     `;
@@ -365,6 +379,19 @@
 
     // ---------- ЮБКА (под куполом) ----------
     // Расширяющийся книзу подол от края купола: крупные складки по кругу, нижний край — волнистый.
+    // Та же формула, что skFold в шейдере (t = 0 — форма в покое).
+    function skirtFoldJS(th, N, sd) {
+        const fr = (x) => x - Math.floor(x);
+        const r1 = fr(Math.sin(sd * 12.9898) * 43758.5453) * 6.2832;
+        const r2 = fr(Math.sin(sd * 78.233) * 12345.678) * 6.2832;
+        const r3 = fr(Math.sin(sd * 39.425) * 24634.634) * 6.2832;
+        const warp = 1.1 * Math.sin(th + r1) + 0.8 * Math.sin(2 * th + r2) + 0.5 * Math.sin(3 * th + r3);
+        const ph = th * N + sd + warp;
+        const env = 1 + 0.3 * Math.sin(2 * th + r3) + 0.2 * Math.sin(3 * th + r1) + 0.15 * Math.sin(5 * th + r2);
+        const fine = Math.sin(th * (N + 7) + sd * 3.1) * (0.5 + 0.5 * Math.sin(4 * th + r1));
+        return [env * Math.sin(ph) + 0.3 * fine, env * Math.cos(ph) + 0.7 * Math.sin(2 * th + r2) + 0.5 * Math.sin(3 * th + r3)];
+    }
+
     // Профиль юбки — дуга постоянной длины: из точки крепления (r0, y0) под углом phi0 от вертикали
     // (наружу) с кривизной kappa. Длина профиля не меняется ни при какой кривизне — юбка не растягивается.
     // Шейдер меняет только кривизну (подворачивается / выворачивается) и фазу складок.
@@ -376,9 +403,9 @@
         const th = t * Math.PI * 2;
         const a = skirtArc(p.kappa0, h * p.len, p.phi0);
         // Подол шире верха: лишняя ширина собирается в складки — одна плавная синусоида по радиусу.
-        const fold = Math.sin(th * p.folds + p.seed) * p.foldAmp * Math.pow(h, 1.3);
-        const r = p.r0 + a[0] + fold;
-        return [r * Math.sin(th), p.y0 + a[1], r * Math.cos(th)];
+        const f = skirtFoldJS(th, p.folds, p.seed);
+        const r = p.r0 + a[0] + f[0] * p.foldAmp * Math.pow(h, 1.3);
+        return [r * Math.sin(th), p.y0 + a[1] + f[1] * p.hemAmp * Math.pow(h, 2.0), r * Math.cos(th)];
     }
 
     function buildSkirt(p, tier) {
@@ -412,6 +439,7 @@
         pointsGeo.setAttribute('aSizeScale', new THREE.Float32BufferAttribute(size, 1));
         pointsGeo.setAttribute('aSeed', new THREE.Float32BufferAttribute(new Float32Array(size.length).fill(p.seed), 1));
         pointsGeo.setAttribute('aFolds', new THREE.Float32BufferAttribute(new Float32Array(size.length).fill(p.folds), 1));
+        pointsGeo.setAttribute('aHem', new THREE.Float32BufferAttribute(new Float32Array(size.length).fill(p.hemAmp), 1));
         pointsGeo.setAttribute('aSk', new THREE.Float32BufferAttribute(new Float32Array(size.length * 4).map((_, i) => [p.len, p.phi0, p.kappa0, p.foldAmp][i % 4]), 4));
 
         const mT = 240, mH = 24;
@@ -430,6 +458,7 @@
         meshGeo.setAttribute('uv', new THREE.Float32BufferAttribute(mUv, 2));
         meshGeo.setAttribute('aSeed', new THREE.Float32BufferAttribute(new Float32Array(mPos.length / 3).fill(p.seed), 1));
         meshGeo.setAttribute('aFolds', new THREE.Float32BufferAttribute(new Float32Array(mPos.length / 3).fill(p.folds), 1));
+        meshGeo.setAttribute('aHem', new THREE.Float32BufferAttribute(new Float32Array(mPos.length / 3).fill(p.hemAmp), 1));
         meshGeo.setAttribute('aSk', new THREE.Float32BufferAttribute(new Float32Array(mPos.length / 3 * 4).map((_, i) => [p.len, p.phi0, p.kappa0, p.foldAmp][i % 4]), 4));
         meshGeo.computeVertexNormals();
         return { pointsGeo, meshGeo, matrix: new THREE.Matrix4() };
@@ -563,9 +592,9 @@
         // пересекаются (как лепестки пиона) и дают плотность без «провала» в центре.
         const skirts = [
             buildSkirt({ r0: bell.rimR * 0.88, y0: bell.rimY + 0.07, len: 0.55, phi0: 0.55, kappa0: 0.25,
-                         folds: 22, foldAmp: 0.05, seed: 0.7 }, tier),
+                         folds: 20, foldAmp: 0.06, hemAmp: 0.04, seed: 0.7 }, tier),
             buildSkirt({ r0: bell.rimR * 0.76, y0: bell.rimY + 0.11, len: 0.48, phi0: 0.45, kappa0: 0.2,
-                         folds: 17, foldAmp: 0.045, seed: 2.9 }, tier)
+                         folds: 15, foldAmp: 0.055, hemAmp: 0.035, seed: 2.9 }, tier)
         ];
 
         const data = { bell, bells, skirts, ribbons, tentacles, rootMatrix };
