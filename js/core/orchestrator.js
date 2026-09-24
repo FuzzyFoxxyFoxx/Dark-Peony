@@ -93,6 +93,7 @@
         const m = morph;
         morph = null;
         if (DP.flowSim) DP.flowSim.stop();
+        if (DP.smokeSim) DP.smokeSim.stop();
         release(m.from);
         setTilt(m.to.tilt);
         m.to.uniforms.uMorphActive.value = 0;
@@ -139,6 +140,7 @@
                 morph.from.uniforms.uMorphTime.value = morph.time;
                 morph.to.uniforms.uMorphTime.value = morph.time;
                 if (DP.flowSim) DP.flowSim.step(morph.time);
+                if (DP.smokeSim) DP.smokeSim.step(morph.time);
                 const k = DP.util.smoothstep(0.15, 0.75, morph.time / morph.duration);
                 setTilt(morph.tilt0 + (morph.to.tilt - morph.tilt0) * k);
                 events.emit('morphprogress', { time: morph.time, duration: morph.duration });
