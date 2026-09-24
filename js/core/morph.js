@@ -678,11 +678,12 @@
     function plan(A, B) {
         const c = DP.config.morph;
         shared.uSmokeA.value.x = 0;
-        DP.morph.tiltWindow = c.mode === 'sweep' ? [0, 1] : [0.15, 0.75];
+        DP.morph.tiltWindow = (c.mode === 'sweep' || c.mode === 'sphere') ? [0, 1] : [0.15, 0.75];
         const smokeOk = DP.smokeSim && DP.smokeSim.supported();
+        if (c.mode === 'sphere' && smokeOk) return planSphere(A, B);
         if (c.mode === 'sweep' && smokeOk) return planSweep(A, B);
         if (c.mode === 'smoke' && smokeOk) return planSmoke(A, B);
-        if (c.mode === 'fountain' || c.mode === 'smoke' || c.mode === 'sweep') return planFountain(A, B);
+        if (c.mode === 'fountain' || c.mode === 'smoke' || c.mode === 'sweep' || c.mode === 'sphere') return planFountain(A, B);
         shared.uFountA.value.x = 0;
         syncConfig();
         const NA = A.total, NB = B.total, N = Math.max(NA, NB);
@@ -1109,6 +1110,63 @@
         shared.uSmokeB.value.set(sm.fadeIn, sm.fadeOut, sm.grow, f.capture);
         shared.uSmokeC.value.set(f.land, 0, 0, 0);
         shared.uMorphSched.value.set(0.05, Td, 0.05 + f.dwell, Td);
+        shared.uMorphSched2.value.set(0, c.meshRevealLag, c.meshFade, 0);
+        return end + c.meshRevealLag + c.meshFade + 0.1;
+    }
+
+    // ------------------------------------------
+    // ПЛАНИРОВЩИК «ДЫМНАЯ СФЕРА» (sphere)
+    // ------------------------------------------
+    // Фигура распадается по своему порядку aOrder — от краёв элементов к середине и низу (края лепестка →
+    // середина и низ лепестка, кончики щупалец → основание), частицы закручиваются вихрем и втягиваются
+    // в клубящийся дымный шар; из него новая фигура собирается в том же порядке (от краёв к середине и низу).
+    function planSphere(A, B) {
+        const c = DP.config.morph, f = c.sphere;
+        syncConfig();
+        shared.uFountA.value.x = 0;
+        shared.uSimInfo.value.set(0, 1, 0, 0);
+        const bb = bounds([A, B]);
+        DP.morph.lastBounds = bb;
+        const NA = A.total, NB = B.total, N = Math.max(NA, NB);
+        const side = Math.max(1, Math.ceil(Math.sqrt(N)));
+        const dA = new Float32Array(side * side * 4), dB = new Float32Array(side * side * 4), dS = new Float32Array(side * side * 4);
+        const usedA = new Uint8Array(NA), usedB = new Uint8Array(NB);
+        const arriveStart = 0.05 + f.leaveSpread + f.hold;
+        let end = 0;
+        for (let k = 0; k < N; k++) {
+            const ia = A.sorted[Math.floor(k * NA / N)], ib = B.sorted[Math.floor(k * NB / N)];
+            const firstA = !usedA[ia], firstB = !usedB[ib];
+            if (!firstA && !firstB) continue;
+            usedA[ia] = 1; usedB[ib] = 1;
+            const pa = A.parts[A.partOf[ia]], pb = B.parts[B.partOf[ib]];
+            const oA = U.clamp(pa.order[ia - pa.start], 0, 1), oB = U.clamp(pb.order[ib - pb.start], 0, 1);
+            const seed = U.seededRandom(k * 0.618 + 0.37);
+            const jit = (U.seededRandom(k * 0.7311 + 3.3) - 0.5) * 2 * f.jitter;
+            const jitA = (U.seededRandom(k * 1.319 + 5.1) - 0.5) * 2 * f.jitter;
+            const L = Math.max(0, 0.05 + f.leaveSpread * oA + jit);
+            const T = arriveStart + f.arriveSpread * oB + jitA;
+            const D = Math.max(f.capture + f.land + 0.2, T - L);
+            const Lq = U.clamp(Math.round(L * 100), 0, 2047), Dq = U.clamp(Math.round(D * 100), 5, 2047);
+            end = Math.max(end, (Lq + Dq) * 0.01);
+            const packed = Lq * 2048 + Dq;
+            writePair(A, B, { ia, ib, firstA, firstB, kk: k }, [packed, 0, seed + (firstB ? 0 : 2), 0], [packed, 0, seed + (firstA ? 0 : 2), 0]);
+            const a = restOf(A, ia), b = restOf(B, ib), j = k * 4;
+            dA[j] = a[0]; dA[j + 1] = a[1]; dA[j + 2] = a[2]; dA[j + 3] = Lq * 0.01;
+            dB[j] = b[0]; dB[j + 1] = b[1]; dB[j + 2] = b[2]; dB[j + 3] = Dq * 0.01;
+            dS[j] = seed;
+        }
+        A.parts.forEach(p => { p.outAttr.needsUpdate = true; p.pairOutAttr.needsUpdate = true; });
+        B.parts.forEach(p => { p.inAttr.needsUpdate = true; p.pairInAttr.needsUpdate = true; });
+
+        const sm = c.smoke;
+        const R = f.sphereR * bb.r1;
+        const center = new THREE.Vector3(0, bb.y0 + f.sphereY * (bb.y1 - bb.y0), 0);
+        DP.smokeSim.prepare(side, dA, dB, dS, { center, R, w: f.rotate },
+            { capture: f.capture, land: f.land, gravity: f.gravity, pull: f.pull, twist: f.twist, shape: 1, roll: f.roll, noiseK: f.noiseK });
+        shared.uSmokeA.value.set(1, side, sm.lifeMin, Math.max(sm.lifeMin + 0.01, sm.lifeMax));
+        shared.uSmokeB.value.set(sm.fadeIn, sm.fadeOut, sm.grow, f.capture);
+        shared.uSmokeC.value.set(f.land, 0, 0, 0);
+        shared.uMorphSched.value.set(0.05, f.leaveSpread, arriveStart, f.arriveSpread);
         shared.uMorphSched2.value.set(0, c.meshRevealLag, c.meshFade, 0);
         return end + c.meshRevealLag + c.meshFade + 0.1;
     }
