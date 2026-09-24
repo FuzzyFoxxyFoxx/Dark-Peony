@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Dark Peony — дымное кольцо (лаборатория)</title>
+<style>
+    html, body { margin: 0; height: 100%; background: #000102; overflow: hidden; font: 12px/1.3 -apple-system, system-ui, sans-serif; color: #cfe3ff; }
+    canvas { display: block; touch-action: none; }
+    #panel { position: fixed; top: 10px; right: 10px; width: 250px; max-height: calc(100% - 20px); overflow: auto;
+             background: rgba(4, 10, 20, 0.78); border: 1px solid rgba(120, 170, 255, 0.25); border-radius: 8px; padding: 8px 10px; }
+    #panel.hidden .rows { display: none; }
+    #panel h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; cursor: pointer; display: flex; justify-content: space-between; }
+    .row { margin: 5px 0; }
+    .row label { display: flex; justify-content: space-between; opacity: 0.85; }
+    .row input { width: 100%; margin: 2px 0 0; }
+    .sec { margin-top: 8px; padding-top: 6px; border-top: 1px solid rgba(120, 170, 255, 0.15); font-weight: 600; opacity: 0.7; }
+    #fps { position: fixed; left: 10px; top: 10px; color: #9f9; font: 12px monospace; }
+    button { background: #0b1a33; color: #cfe3ff; border: 1px solid rgba(120, 170, 255, 0.35); border-radius: 5px; padding: 3px 8px; margin: 6px 4px 0 0; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="fps"></div>
+<div id="panel"><h3 id="ptitle"><span>Дымное кольцо</span><span>▾</span></h3><div class="rows" id="rows"></div></div>
+
+<script src="../vendor/three.r134.min.js"></script>
+<script src="../js/core/dp.js"></script>
+<script src="../js/core/morph.js"></script>
+<script>
+// ==========================================
+// ЛАБОРАТОРИЯ: ДЫМНОЕ КОЛЬЦО
+// ==========================================
+// Принципы The Spirit (Edan Kwan) и Trapcode Particular:
+//  • частицы живут на видеокарте: в текстуре — положение и возраст каждой частицы;
+//  • каждый кадр частицу несёт течение: вихревое кольцо (кружение вокруг сердцевины тора)
+//    + водовороты двух размеров (curl noise: ∇n1 × ∇n2 — без стоков и источников, поток не слипается
+//    в точки, а тянется в нити, делится на рукава и сходится снова);
+//  • у частицы есть время жизни: появляется по кривой, к концу растёт и тает (Size / Opacity over Life);
+//    умершая частица сразу рождается заново в сердцевине кольца — число частиц не меняется;
+//  • часть частиц отрывается от кольца и уходит вверх, рассеиваясь, как дым в воздухе.
+(function () {
+    'use strict';
+    const P = new URLSearchParams(location.search);
+    const N = Math.min(1024, Math.max(64, parseInt(P.get('n') || '512', 10)));   // сторона текстуры: N² частиц
+
+    // ---------- параметры (крутятся ползунками) ----------
+    const S = {
+        R: 1.2,            // радиус кольца (до сердцевины тора)
+        core: 0.2,         // толщина сердцевины (где рождаются частицы и крутятся быстрее всего)
+        spin: 1.6,         // сила кружения вокруг сердцевины (циркуляция)
+        swirl: 0.7,        // скорость, с которой поток ещё и бежит вдоль кольца (спирали, как на референсе)
+        noiseAmp: 0.12,    // сила крупных водоворотов
+        noiseScale: 0.8,   // размер крупных водоворотов (больше — мельче)
+        detailAmp: 0.06,   // сила мелких завитков по кромкам
+        detailScale: 3.2,
+        noiseSpeed: 0.25,  // как быстро водовороты меняются во времени
+        lifeMin: 2.0, lifeMax: 6.0,   // время жизни частицы, с
+        fadeIn: 0.15,      // доля жизни на появление (ease)
+        fadeOut: 0.45,     // доля жизни на угасание
+        grow: 2.2,         // во сколько раз частица крупнее к концу жизни
+        escape: 0.2,       // доля частиц, которые отрываются от кольца и уходят вверх
+        lift: 0.5,         // скорость подъёма оторвавшихся частиц
+        size: 3.5,         // размер частицы
+        alpha: 0.035,      // яркость одной частицы (дым светится наложением)
+        tilt: 0.35         // наклон кольца к зрителю в начале (рад)
+    };
+    const SLIDERS = [
+        ['Кольцо'],
+        ['R', 'радиус', 0.4, 2.5, 0.01], ['core', 'толщина сердцевины', 0.05, 1.0, 0.01],
+        ['spin', 'кружение', 0, 5, 0.01], ['swirl', 'бег вдоль кольца', -1, 1, 0.01],
+        ['Водовороты'],
+        ['noiseAmp', 'крупные: сила', 0, 1.5, 0.01], ['noiseScale', 'крупные: частота', 0.2, 4, 0.01],
+        ['detailAmp', 'мелкие: сила', 0, 1, 0.01], ['detailScale', 'мелкие: частота', 1, 10, 0.05],
+        ['noiseSpeed', 'изменчивость', 0, 1.5, 0.01],
+        ['Жизнь частицы'],
+        ['lifeMin', 'жизнь от, с', 0.3, 10, 0.1], ['lifeMax', 'жизнь до, с', 0.3, 15, 0.1],
+        ['fadeIn', 'появление (доля)', 0.01, 0.8, 0.01], ['fadeOut', 'угасание (доля)', 0.01, 0.95, 0.01],
+        ['grow', 'рост к концу', 0.2, 5, 0.05],
+        ['escape', 'доля улетающих', 0, 1, 0.01], ['lift', 'подъём улетающих', 0, 2, 0.01],
+        ['Вид'],
+        ['size', 'размер', 0.2, 6, 0.05], ['alpha', 'яркость', 0.005, 0.4, 0.005]
+    ];
+    // значения из адреса: ?spin=2&alpha=0.08
+    Object.keys(S).forEach(k => { if (P.has(k)) S[k] = parseFloat(P.get(k)); });
+
+    // ---------- сцена ----------
+    const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setClearColor(0x000102, 1);
+    document.body.appendChild(renderer.domElement);
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.05, 100);
+    camera.position.set(0, 0, 6.2);
+    const ringGroup = new THREE.Group();
+    ringGroup.rotation.x = Math.PI / 2 - S.tilt;       // по умолчанию смотрим почти вдоль оси, как на референсе
+    scene.add(ringGroup);
+
+    // ---------- симуляция ----------
+    const caps = renderer.capabilities, ext = renderer.extensions;
+    let type = THREE.FloatType;
+    if (caps.isWebGL2) { if (!ext.has('EXT_color_buffer_float')) type = THREE.HalfFloatType; }
+    else if (!ext.has('WEBGL_color_buffer_float')) type = THREE.HalfFloatType;
+    const rt = () => new THREE.WebGLRenderTarget(N, N, {
+        type, format: THREE.RGBAFormat, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+        depthBuffer: false, stencilBuffer: false });
+    const targets = [rt(), rt()];
+    let cur = 0;
+
+    const rnd = (() => { let s = 12345; return () => (s = (s * 16807) % 2147483647) / 2147483647; })();
+    // info: время жизни, seed (доля «улетающих» по нему), фаза, -
+    const info = new Float32Array(N * N * 4);
+    const init = new Float32Array(N * N * 4);
+    for (let i = 0; i < N * N; i++) {
+        const life = S.lifeMin + (S.lifeMax - S.lifeMin) * rnd();
+        info[i * 4] = rnd(); info[i * 4 + 1] = rnd(); info[i * 4 + 2] = rnd(); info[i * 4 + 3] = rnd();
+        const ph = rnd() * Math.PI * 2, th = rnd() * Math.PI * 2, rr = S.core * Math.sqrt(rnd());
+        const ex = Math.cos(ph), ez = Math.sin(ph);
+        init[i * 4] = (S.R + rr * Math.cos(th)) * ex;
+        init[i * 4 + 1] = rr * Math.sin(th);
+        init[i * 4 + 2] = (S.R + rr * Math.cos(th)) * ez;
+        init[i * 4 + 3] = -rnd() * life;                // возраст < 0 — частица ещё не родилась (разные фазы)
+    }
+    const infoTex = new THREE.DataTexture(info, N, N, THREE.RGBAFormat, THREE.FloatType); infoTex.needsUpdate = true;
+    const initTex = new THREE.DataTexture(init, N, N, THREE.RGBAFormat, THREE.FloatType); initTex.needsUpdate = true;
+
+    const simMat = new THREE.ShaderMaterial({
+        uniforms: {
+            uPos: { value: initTex }, uInfo: { value: infoTex }, uTime: { value: 0 }, uDt: { value: 0 },
+            uRing: { value: new THREE.Vector4() }, uNoise: { value: new THREE.Vector4() },
+            uNoise2: { value: new THREE.Vector4() }, uLife: { value: new THREE.Vector4() }
+        },
+        vertexShader: 'void main(){ gl_Position = vec4(position.xy, 0.0, 1.0); }',
+        fragmentShader: `
+            precision highp float;
+            uniform sampler2D uPos, uInfo;
+            uniform float uTime, uDt;
+            uniform vec4 uRing;    // R, core, spin, swirl
+            uniform vec4 uNoise;   // amp, scale, detailAmp, detailScale
+            uniform vec4 uNoise2;  // speed, escape, lift, -
+            uniform vec4 uLife;    // lifeMin, lifeMax, -, -
+            ${DP.morph.glsl.simplexNoise}
+            // Водовороты: ∇n1 × ∇n2 — поле без стоков и источников (как curl noise, но дешевле).
+            vec3 eddy(vec3 q, float t) {
+                vec3 g1 = dpSnoiseGrad(q + vec3(0.0, -t, 0.0)).xyz;
+                vec3 g2 = dpSnoiseGrad(q + vec3(31.4, 7.1 + 0.5 * t, 5.3)).xyz;
+                return cross(g1, g2);
+            }
+            float h(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+            // Течение в точке p: кольцо + водовороты.
+            vec3 flow(vec3 p, float t) {
+                float R = uRing.x, a = uRing.y;
+                vec3 e = normalize(vec3(p.x, 0.0, p.z) + vec3(1e-5, 0.0, 0.0));
+                vec2 q = vec2(length(p.xz) - R, p.y);                  // место в сечении тора
+                float rho = max(length(q), 1e-4);
+                // Вихрь Лэмба — Озеена: у сердцевины кружит быстро, вдали — медленно, в самой оси — плавно.
+                float vt = uRing.z * a / rho * (1.0 - exp(-rho * rho / (a * a)));
+                vec2 tq = vec2(-q.y, q.x) / rho;
+                vec3 v = (e * tq.x + vec3(0.0, 1.0, 0.0) * tq.y) * vt;
+                v += cross(vec3(0.0, 1.0, 0.0), e) * uRing.w * exp(-rho * rho / (4.0 * a * a));   // бег вдоль кольца
+                float ts = t * uNoise2.x;
+                v += uNoise.x * eddy(p * uNoise.y, ts);
+                v += uNoise.z * eddy(p * uNoise.w + vec3(17.0, 3.0, -9.0), ts * 1.7);
+                return v;
+            }
+            void main() {
+                vec2 uv = gl_FragCoord.xy / vec2(${N}.0);
+                vec4 P = texture2D(uPos, uv);
+                vec4 I = texture2D(uInfo, uv);
+                float life = mix(uLife.x, uLife.y, I.x);
+                float age = P.w + uDt;
+                vec3 p = P.xyz;
+                if (age > life) {
+                    // Смерть → новое рождение в сердцевине кольца (в случайной точке сечения).
+                    float h1 = h(uv + fract(uTime * 0.137)), h2 = h(uv * 1.7 + fract(uTime * 0.291) + 3.1), h3 = h(uv * 2.3 + fract(uTime * 0.173) + 7.7);
+                    float ph = h1 * 6.2831853, th = h2 * 6.2831853, rr = uRing.y * 0.8 * sqrt(h3);
+                    vec3 e = vec3(cos(ph), 0.0, sin(ph));
+                    p = e * (uRing.x + rr * cos(th)) + vec3(0.0, rr * sin(th), 0.0);
+                    age = 0.0;
+                } else if (age > 0.0) {
+                    // Шаг средней точки (RK2) — поток держит форму и при крупном шаге.
+                    vec3 v1 = flow(p, uTime);
+                    vec3 v2 = flow(p + v1 * uDt * 0.5, uTime + uDt * 0.5);
+                    p += v2 * uDt;
+                    // Улетающие: оторвавшись, поднимаются всё быстрее и тают (как дым в воздухе).
+                    float k = age / life;
+                    p.y += step(I.y, uNoise2.y) * uNoise2.z * smoothstep(0.2, 1.0, k) * uDt;
+                }
+                gl_FragColor = vec4(p, age);
+            }`,
+        depthTest: false, depthWrite: false
+    });
+    const simScene = new THREE.Scene();
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), simMat); quad.frustumCulled = false;
+    simScene.add(quad);
+    const simCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+    // ---------- частицы ----------
+    const ref = new Float32Array(N * N * 2);
+    for (let i = 0; i < N * N; i++) { ref[i * 2] = ((i % N) + 0.5) / N; ref[i * 2 + 1] = (Math.floor(i / N) + 0.5) / N; }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * N * 3), 3));
+    geo.setAttribute('aRef', new THREE.BufferAttribute(ref, 2));
+    const drawMat = new THREE.ShaderMaterial({
+        uniforms: {
+            uPos: { value: null }, uInfo: { value: infoTex }, uLife: simMat.uniforms.uLife,
+            uLook: { value: new THREE.Vector4() },   // fadeIn, fadeOut, grow, size
+            uAlpha: { value: 0.05 }, uScale: { value: 1 }
+        },
+        vertexShader: `
+            uniform sampler2D uPos, uInfo;
+            uniform vec4 uLife, uLook;
+            uniform float uAlpha, uScale;
+            attribute vec2 aRef;
+            varying float vA;
+            varying float vK;
+            void main() {
+                vec4 P = texture2D(uPos, aRef);
+                float life = mix(uLife.x, uLife.y, texture2D(uInfo, aRef).x);
+                float k = clamp(P.w / life, 0.0, 1.0);
+                // Opacity over Life: появление по кривой ease, угасание к нулю.
+                float fin = smoothstep(0.0, uLook.x, k);
+                float fout = 1.0 - smoothstep(1.0 - uLook.y, 1.0, k);
+                vA = uAlpha * fin * fout * step(0.0, P.w);
+                vK = k;
+                vec4 mv = modelViewMatrix * vec4(P.xyz, 1.0);
+                // Size over Life: к концу жизни частица расплывается.
+                gl_PointSize = uLook.w * uScale * mix(1.0, uLook.z, k * k) / max(-mv.z, 0.1);
+                gl_Position = projectionMatrix * mv;
+                if (vA < 0.0005) gl_PointSize = 0.0;
+            }`,
+        fragmentShader: `
+            varying float vA;
+            varying float vK;
+            void main() {
+                vec2 d = gl_PointCoord - 0.5;
+                float r2 = dot(d, d) * 4.0;
+                if (r2 > 1.0) discard;
+                float a = exp(-r2 * 3.0) * vA;
+                vec3 c = mix(vec3(0.85, 0.93, 1.0), vec3(0.55, 0.7, 0.95), vK);   // старый дым холоднее
+                gl_FragColor = vec4(c, a);   // сложение: цвет × прозрачность
+            }`,
+        transparent: true, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending
+    });
+    const points = new THREE.Points(geo, drawMat); points.frustumCulled = false;
+    ringGroup.add(points);
+
+    function syncUniforms() {
+        const u = simMat.uniforms;
+        u.uRing.value.set(S.R, S.core, S.spin, S.swirl);
+        u.uNoise.value.set(S.noiseAmp, S.noiseScale, S.detailAmp, S.detailScale);
+        u.uNoise2.value.set(S.noiseSpeed, S.escape, S.lift, 0);
+        u.uLife.value.set(S.lifeMin, Math.max(S.lifeMin + 0.01, S.lifeMax), 0, 0);
+        drawMat.uniforms.uLook.value.set(S.fadeIn, S.fadeOut, S.grow, S.size);
+        drawMat.uniforms.uAlpha.value = S.alpha;
+    }
+    syncUniforms();
+    function resize() {
+        renderer.setSize(innerWidth, innerHeight);
+        camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+        drawMat.uniforms.uScale.value = Math.min(innerWidth, innerHeight) * renderer.getPixelRatio() * 0.012;
+    }
+    addEventListener('resize', resize); resize();
+
+    // ---------- шаг ----------
+    let simTime = 0, first = true;
+    function step(dt) {
+        const n = Math.max(1, Math.ceil(dt / (1 / 60)));
+        for (let i = 0; i < n; i++) {
+            const u = simMat.uniforms;
+            u.uPos.value = first ? initTex : targets[cur].texture;
+            u.uDt.value = dt / n;
+            u.uTime.value = simTime;
+            renderer.setRenderTarget(targets[1 - cur]);
+            renderer.render(simScene, simCam);
+            cur = 1 - cur; first = false;
+            simTime += dt / n;
+        }
+        renderer.setRenderTarget(null);
+        drawMat.uniforms.uPos.value = targets[cur].texture;
+    }
+
+    // ---------- вращение кольца пальцем / мышью ----------
+    let drag = null;
+    const q = new THREE.Quaternion();
+    renderer.domElement.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY }; renderer.domElement.setPointerCapture(e.pointerId); });
+    renderer.domElement.addEventListener('pointermove', e => {
+        if (!drag) return;
+        const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag = { x: e.clientX, y: e.clientY };
+        q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), dx * 0.006); ringGroup.quaternion.premultiply(q);
+        q.setFromAxisAngle(new THREE.Vector3(1, 0, 0), dy * 0.006); ringGroup.quaternion.premultiply(q);
+    });
+    addEventListener('pointerup', () => { drag = null; });
+    renderer.domElement.addEventListener('wheel', e => { camera.position.z = Math.min(20, Math.max(2, camera.position.z * (1 + e.deltaY * 0.001))); e.preventDefault(); }, { passive: false });
+
+    // ---------- панель ----------
+    const rows = document.getElementById('rows');
+    SLIDERS.forEach(s => {
+        if (s.length === 1) { const d = document.createElement('div'); d.className = 'sec'; d.textContent = s[0]; rows.appendChild(d); return; }
+        const [k, name, min, max, st] = s;
+        const row = document.createElement('div'); row.className = 'row';
+        row.innerHTML = `<label><span>${name}</span><b id="v_${k}"></b></label><input type="range" min="${min}" max="${max}" step="${st}" value="${S[k]}">`;
+        const inp = row.querySelector('input'), val = row.querySelector('b');
+        const show = () => { val.textContent = (+S[k]).toFixed(st < 0.01 ? 3 : 2); };
+        inp.addEventListener('input', () => { S[k] = parseFloat(inp.value); show(); syncUniforms(); });
+        show(); rows.appendChild(row);
+    });
+    const bar = document.createElement('div');
+    bar.innerHTML = '<button id="bLink">ссылка с настройками</button><button id="bPause">пауза</button>';
+    rows.appendChild(bar);
+    document.getElementById('bLink').onclick = () => {
+        const qs = new URLSearchParams(); qs.set('n', N); Object.keys(S).forEach(k => qs.set(k, +(+S[k]).toFixed(3)));
+        const url = location.origin + location.pathname + '?' + qs.toString();
+        history.replaceState(null, '', url);
+        if (navigator.clipboard) navigator.clipboard.writeText(url).catch(() => {});
+    };
+    let paused = false;
+    document.getElementById('bPause').onclick = (e) => { paused = !paused; e.target.textContent = paused ? 'дальше' : 'пауза'; };
+    document.getElementById('ptitle').onclick = () => document.getElementById('panel').classList.toggle('hidden');
+
+    // ---------- цикл ----------
+    const fpsEl = document.getElementById('fps');
+    let last = performance.now(), fAcc = 0, fN = 0;
+    const manual = P.has('manual');
+    function frame(now) {
+        const dt = Math.min(0.05, (now - last) / 1000); last = now;
+        fAcc += dt; fN++;
+        if (fAcc > 0.5) { fpsEl.textContent = Math.round(fN / fAcc) + ' FPS · ' + (N * N).toLocaleString('ru') + ' частиц'; fAcc = 0; fN = 0; }
+        if (!paused && !manual) step(dt);
+        renderer.render(scene, camera);
+        requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+    // для проверки кадров: ?manual, затем SMOKE.step(сек)
+    window.SMOKE = { S, step: (sec) => { const n = Math.ceil(sec * 60); for (let i = 0; i < n; i++) step(sec / n); renderer.render(scene, camera); }, sync: syncUniforms, renderer, ringGroup,
+        read: (i = 0) => { const b = new Float32Array(4); renderer.readRenderTargetPixels(targets[cur], i % N, Math.floor(i / N), 1, 1, b); return Array.from(b); } };
+})();
+</script>
+</body>
+</html>
