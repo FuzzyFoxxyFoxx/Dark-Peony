@@ -32,10 +32,12 @@
         uMorphSched: { value: new THREE.Vector4() },  // leaveStart, leaveSpread, arriveStart, arriveSpread
         uMorphSched2: { value: new THREE.Vector4() }, // assembleInvert, meshRevealLag, meshFade, -
         uWarp: { value: new THREE.Vector4() },        // доля времени на уход, доля на уход+вихрь, доля пути ухода/посадки, -
-        uFlowA: { value: new THREE.Vector4() },       // flowAmp, flowFreq, flowMemory (с), flowSpeed
+        uFlowA: { value: new THREE.Vector4() },       // flowAmp, flowFreq, -, flowSpeed
         uFlowB: { value: new THREE.Vector4() },       // -, fieldDelay, poseBlend, precession
         uWave: { value: new THREE.Vector4() },        // waveAmp, waveCount, waveSpeed, waveRadial
-        uFlowC: { value: new THREE.Vector4() },       // flowSteps, -, скорость вращения поля (рад/с), -
+        uFlowC: { value: new THREE.Vector4() },       // -, -, скорость вращения поля (рад/с), -
+        uSimTex: { value: null },                     // отклонения частиц от траектории (flowsim.js)
+        uSimInfo: { value: new THREE.Vector4() },     // включено (0/1), сторона текстуры, -, -
         uClumpA: { value: new THREE.Vector4() },      // strength, freq, filaments, maxDist
         uClumpB: { value: new THREE.Vector4() },      // fraction, speed, spin (рад/с), shear
         uClumpC: { value: new THREE.Vector4() },      // levels, fibers, dustAlpha, ramp
@@ -67,10 +69,9 @@
             c.leaveStart + w.K * (c.arriveStart - c.leaveStart),
             c.leaveSpread / c.speedIn + w.K * (c.arriveSpread - c.leaveSpread));
         shared.uMorphSched2.value.set(c.assemble === 'outside-in' ? 0 : 1, c.meshRevealLag, c.meshFade, 0);
-        shared.uFlowA.value.set(c.flowAmp, c.flowFreq, c.flowMemory, c.flowSpeed);
+        shared.uFlowA.value.set(c.flowAmp, c.flowFreq, 0, c.flowSpeed);
         shared.uFlowB.value.set(0, c.fieldDelay, c.poseBlend, c.precession);
         shared.uWave.value.set(c.waveAmp, c.waveCount, c.waveSpeed, c.waveRadial);
-        const steps = c.flowSteps[DP.quality] || c.flowSteps.high;
         const rc = c.ringInner + (c.ringOuter - c.ringInner) * c.ringPeak;
         shared.uTwist.value.set(c.twistPerTurn, c.twistSpeed, rc, c.ringY);
         shared.uTwist2.value.set(c.twistSquash, c.threadCell > 0 ? 1 : 0, 0, 0);
@@ -80,7 +81,7 @@
         const meanTravel = 0.5 * (c.minTravel + c.maxTravel);
         const spin = c.fieldSpin * 1.5 * TWO_PI * c.turns / meanTravel;
         shared.uClumpB.value.set(c.clumpFraction, c.clumpSpeed, spin, c.fieldShear);
-        shared.uFlowC.value.set(Math.min(6, Math.max(1, steps)), 0, spin, 0);
+        shared.uFlowC.value.set(0, 0, spin, 0);
         shared.uClumpC.value.set(c.clumpLevels, c.clumpFibers, c.dustAlpha, c.clumpRamp);
         shared.uTrail.value.set(c.trailLag, Math.max(1, Math.round(c.trailLength) - 1), c.trailFade, Math.max(0.05, 0.5 - c.swirlHold));
         shared.uSwirlA.value.set(c.swirlSize, c.swirlSizeMin, c.swirlAlpha, c.swirlVisible);
@@ -214,39 +215,13 @@
         }
     `;
 
-    const pointsVertex = `
-        ${commonPars}
-        uniform mat4 uStageMatrix;
-        uniform mat4 uStageMatrixInv;
+
+    // Общие для вершинного шейдера частиц и симуляции среды (js/core/flowsim.js):
+    // ускорение участков пути и поле водоворотов.
+    const flowGlsl = `
+        uniform vec4 uWarp;
         uniform vec4 uFlowA;
         uniform vec4 uFlowC;
-        uniform vec4 uWave;
-        uniform vec4 uWarp;
-        uniform vec4 uFlowB;
-        uniform vec4 uClumpA;
-        uniform vec4 uClumpB;
-        uniform vec4 uClumpC;
-        uniform vec4 uTrail;
-        uniform vec4 uSwirlA;
-        uniform vec3 uSwirlColor;
-        attribute vec4 aMorphOut;
-        attribute vec4 aMorphIn;
-        uniform vec4 uSwirlB;
-        uniform vec4 uTwist;
-        uniform vec4 uTwist2;
-        varying float vDpW;
-        varying float vDpWA;
-        varying float vDpGlow;
-        varying float vDpFade;
-        varying vec3 vDpSwirlColor;
-        varying float vDpSwirlAlpha;
-        float dpHidden;
-        float dpSizeMul;
-
-        ${simplexNoise}
-
-        float dpHash(float n) { return fract(sin(n * 127.1 + 311.7) * 43758.5453); }
-
         // Реальная доля времени полёта u → доля пути s. Три участка с разной скоростью,
         // сшитые кубическими кривыми Эрмита (скорость меняется плавно, без рывков на стыках).
         float dpHermite(float x, float x0, float x1, float y0, float y1, float m0, float m1) {
@@ -278,6 +253,43 @@
             return vec3(v.x * c + v.z * s, v.y, v.z * c - v.x * s);
         }
         float dpAzimuth(vec3 p) { return (abs(p.x) + abs(p.z) < 1e-5) ? 0.0 : atan(p.x, p.z); }
+
+    `;
+
+    const pointsVertex = `
+        ${commonPars}
+        uniform mat4 uStageMatrix;
+        uniform mat4 uStageMatrixInv;
+        uniform vec4 uWave;
+        uniform sampler2D uSimTex;
+        uniform vec4 uSimInfo;
+        attribute float aPairOut;
+        attribute float aPairIn;
+        uniform vec4 uFlowB;
+        uniform vec4 uClumpA;
+        uniform vec4 uClumpB;
+        uniform vec4 uClumpC;
+        uniform vec4 uTrail;
+        uniform vec4 uSwirlA;
+        uniform vec3 uSwirlColor;
+        attribute vec4 aMorphOut;
+        attribute vec4 aMorphIn;
+        uniform vec4 uSwirlB;
+        uniform vec4 uTwist;
+        uniform vec4 uTwist2;
+        varying float vDpW;
+        varying float vDpWA;
+        varying float vDpGlow;
+        varying float vDpFade;
+        varying vec3 vDpSwirlColor;
+        varying float vDpSwirlAlpha;
+        float dpHidden;
+        float dpSizeMul;
+
+        ${simplexNoise}
+        ${flowGlsl}
+
+        float dpHash(float n) { return fract(sin(n * 127.1 + 311.7) * 43758.5453); }
 
         // restLocal — точка в покое (без анимации), animLocal — текущая анимированная позиция.
         // Обе в локальных координатах объекта. Возвращает мировую позицию.
@@ -366,23 +378,13 @@
 
             float clumped = step(h3, uClumpB.x);  // остальные — свободная пыль вокруг
             if (w > 0.0005) {
-                // 1) Среда толкает, а не сдвигает: смещение — сумма толчков поля водоворотов
-                //    вдоль уже пройденного пути за последние flowMemory секунд (flowSteps отсчётов).
-                //    Частицы с разной историей расходятся — появляются ряды, сгущения, подъёмы и провалы.
-                //    Считается по идеальному пути пары, поэтому эстафета A→B не рвётся.
-                vec3 disp = vec3(0.0);
-                for (int i = 0; i < 6; i++) {
-                    if (float(i) >= uFlowC.x || uFlowA.x <= 0.0) break;
-                    float tau = te - uFlowA.z * (float(i) + 0.5) / uFlowC.x;
-                    float sT = dpWarp(clamp((tau - L) / D, 0.0, 1.0));
-                    float gT = sT * sT * (3.0 - 2.0 * sT);
-                    float wT = smoothstep(uFlowB.y, 1.0, 2.0 * min(gT, 1.0 - gT));
-                    if (wT > 0.0) {
-                        float thT = outRole ? thRest + delta * gT : thRest - delta * (1.0 - gT);
-                        disp += dpFlowVel(vec3(sin(thT) * rMid, yMid, cos(thT) * rMid), tau) * wT;
-                    }
+                // 1) Среда: отклонение от траектории считает симуляция на видеокарте (js/core/flowsim.js).
+                //    Каждая пара частиц — пиксель текстуры; A и B читают один пиксель, эстафета не рвётся.
+                if (uSimInfo.x > 0.5) {
+                    float kk = outRole ? aPairOut : aPairIn;
+                    vec2 suv = (vec2(mod(kk, uSimInfo.y), floor(kk / uSimInfo.y)) + 0.5) / uSimInfo.y;
+                    p += texture2D(uSimTex, suv).xyz * smoothstep(0.0, 0.1, gp);
                 }
-                p += disp * (uFlowA.x * uFlowA.z / uFlowC.x) * smoothstep(0.0, 0.15, gp);
                 p.xz += vec2(sin(te * 0.63), cos(te * 0.47)) * uFlowB.w * wf;
 
                 // 2) Морская волна по вертикали: радиус не меняется, частица поднимается и опускается.
@@ -497,13 +499,17 @@
             if (!geo.attributes.aMorphOut) {
                 geo.setAttribute('aMorphOut', new THREE.BufferAttribute(new Float32Array(count * 4), 4).setUsage(THREE.DynamicDrawUsage));
                 geo.setAttribute('aMorphIn', new THREE.BufferAttribute(new Float32Array(count * 4), 4).setUsage(THREE.DynamicDrawUsage));
+                geo.setAttribute('aPairOut', new THREE.BufferAttribute(new Float32Array(count), 1).setUsage(THREE.DynamicDrawUsage));
+                geo.setAttribute('aPairIn', new THREE.BufferAttribute(new Float32Array(count), 1).setUsage(THREE.DynamicDrawUsage));
             }
             const part = {
                 start: total, count,
                 rest: p.rest,
                 order: geo.attributes.aOrder.array,
                 outAttr: geo.attributes.aMorphOut,
-                inAttr: geo.attributes.aMorphIn
+                inAttr: geo.attributes.aMorphIn,
+                pairOutAttr: geo.attributes.aPairOut,
+                pairInAttr: geo.attributes.aPairIn
             };
             total += count;
             return part;
@@ -656,6 +662,10 @@
             return { L, D, seed, rMid, yMid };
         };
 
+        // Данные пар для симуляции среды: пиксель k = (время, угол поворота, азимут старта, середина пути).
+        const simSide = Math.max(1, Math.ceil(Math.sqrt(N)));
+        const simData = new Float32Array(simSide * simSide * 4);
+
         let cacheK = -1, cache = null;
         for (let k = 0; k < N; k++) {
             const P = pairOf(k);
@@ -689,15 +699,20 @@
             if (firstA) {
                 const o = pa.outAttr.array, j = la * 4;
                 o[j] = packed; o[j + 1] = delta; o[j + 2] = zA; o[j + 3] = midPacked;
+                pa.pairOutAttr.array[la] = k;
             }
             if (firstB) {
                 const o = pb.inAttr.array, j = lb * 4;
                 o[j] = packed; o[j + 1] = delta; o[j + 2] = zB; o[j + 3] = midPacked;
+                pb.pairInAttr.array[lb] = k;
             }
+            const js = k * 4;
+            simData[js] = packed; simData[js + 1] = delta; simData[js + 2] = U.azimuth(ax, az); simData[js + 3] = midPacked;
         }
 
-        A.parts.forEach(p => { p.outAttr.needsUpdate = true; });
-        B.parts.forEach(p => { p.inAttr.needsUpdate = true; });
+        A.parts.forEach(p => { p.outAttr.needsUpdate = true; p.pairOutAttr.needsUpdate = true; });
+        B.parts.forEach(p => { p.inAttr.needsUpdate = true; p.pairInAttr.needsUpdate = true; });
+        if (DP.flowSim) DP.flowSim.prepare(simSide, simData);
 
         return end + c.meshRevealLag + c.meshFade + 0.1;
     }
@@ -709,6 +724,6 @@
         uniformsFor,
         createLayout,
         plan,
-        glsl: { pointsVertex, pointsFragment, meshVertex, meshFragment }
+        glsl: { pointsVertex, pointsFragment, meshVertex, meshFragment, simplexNoise, flowGlsl }
     };
 })(window.DP);
