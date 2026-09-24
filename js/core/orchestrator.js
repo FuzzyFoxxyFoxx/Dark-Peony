@@ -87,6 +87,7 @@
     function finishMorph() {
         const m = morph;
         morph = null;
+        if (DP.flowSim) DP.flowSim.stop();
         release(m.from);
         m.to.uniforms.uMorphActive.value = 0;
         current = m.to;
@@ -130,6 +131,7 @@
                 morph.time += dt;
                 morph.from.uniforms.uMorphTime.value = morph.time;
                 morph.to.uniforms.uMorphTime.value = morph.time;
+                if (DP.flowSim) DP.flowSim.step(morph.time);
                 events.emit('morphprogress', { time: morph.time, duration: morph.duration });
                 if (morph.time >= morph.duration) finishMorph();
             }
