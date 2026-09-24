@@ -74,17 +74,26 @@
         attribute vec4 aRuf;
         varying vec3 vNormal, vViewPosition;
         varying vec2 vUv;
-        // Рюши с природным разбросом (та же формула на CPU — ribbonWaveJS): длина волны гуляет
-        // (фаза искажена двумя медленными синусами), на коротких волнах размах меньше, на длинных —
-        // больше, и по длинной волне бежит мелкая рябь. s — фаза, бегущая вниз; x — поперёк, y — из плоскости.
-        vec2 dpRibbonWave(float s, float sd) {
+        // Рюши — кривая Безье по вершинам (эскиз автора; та же формула на CPU — ribbonWaveJS).
+        // Вершины чередуются влево-вправо, у каждой своя высота (хэш номера); расстояние между ними
+        // гуляет (фаза искажена двумя медленными синусами). Между вершинами — дуга Безье с ручками
+        // вдоль ленты длиной 1/3 участка: это ровно smoothstep, вершины круглые, без изломов.
+        // На коротких участках размах меньше. s — фаза, бегущая вниз.
+        float dpBezWave(float s, float sd) {
             float a1 = 0.45 * s + 1.3 * sd, a2 = 0.21 * s + 2.9 * sd;
             float P = s + 1.0 * sin(a1) + 1.4 * sin(a2);
             float k = 1.0 + 0.45 * cos(a1) + 0.294 * cos(a2);          // местная частота: 0.26..1.74
             float f = clamp(pow(k, -1.3), 0.4, 1.6);
-            float sub = 0.18 * (1.0 - smoothstep(0.55, 0.95, k));
-            return vec2(f * sin(P) + sub * sin(2.3 * P + 1.1 + sd),
-                        f * sin(P + 0.5) + sub * sin(2.3 * P + 1.6 + sd));
+            float q = P / 3.14159265 + 0.5;
+            float n = floor(q), t = q - n;
+            float n0 = mod(n, 64.0), n1 = mod(n + 1.0, 64.0);
+            float A0 = (mod(n0, 2.0) < 0.5 ? 1.0 : -1.0) * (0.45 + 0.75 * fract(sin((n0 + sd) * 12.9898) * 43758.5453));
+            float A1 = (mod(n1, 2.0) < 0.5 ? 1.0 : -1.0) * (0.45 + 0.75 * fract(sin((n1 + sd) * 12.9898) * 43758.5453));
+            return f * mix(A0, A1, t * t * (3.0 - 2.0 * t));
+        }
+        // x — поперёк (в плоскости), y — из плоскости (та же кривая со сдвигом фазы).
+        vec2 dpRibbonWave(float s, float sd) {
+            return vec2(dpBezWave(s, sd), dpBezWave(s + 0.5, sd));
         }
     `;
     // uv.x — поперёк ленты (0 прямой край, 1 волнистый), uv.y — вдоль (0 верх, 1 низ).
@@ -324,17 +333,20 @@
         ];
     }
 
-    // Рюши с разной длиной волны — та же формула, что dpRibbonWave в шейдере.
-    function ribbonWaveJS(s, sd) {
+    // Рюши — кривая Безье по вершинам: та же формула, что dpBezWave в шейдере.
+    function bezWaveJS(s, sd) {
         const a1 = 0.45 * s + 1.3 * sd, a2 = 0.21 * s + 2.9 * sd;
         const P = s + 1.0 * Math.sin(a1) + 1.4 * Math.sin(a2);
         const k = 1 + 0.45 * Math.cos(a1) + 0.294 * Math.cos(a2);
         const f = Math.min(1.6, Math.max(0.4, Math.pow(k, -1.3)));
-        const t = Math.min(1, Math.max(0, (k - 0.55) / 0.4));
-        const sub = 0.18 * (1 - t * t * (3 - 2 * t));
-        return [f * Math.sin(P) + sub * Math.sin(2.3 * P + 1.1 + sd),
-                f * Math.sin(P + 0.5) + sub * Math.sin(2.3 * P + 1.6 + sd)];
+        const q = P / Math.PI + 0.5;
+        const n = Math.floor(q), t = q - n;
+        const md = (x, m) => x - m * Math.floor(x / m);
+        const fr = (x) => x - Math.floor(x);
+        const amp = (m) => { const nm = md(m, 64); return (md(nm, 2) < 0.5 ? 1 : -1) * (0.45 + 0.75 * fr(Math.sin((nm + sd) * 12.9898) * 43758.5453)); };
+        return f * (amp(n) + (amp(n + 1) - amp(n)) * t * t * (3 - 2 * t));
     }
+    function ribbonWaveJS(s, sd) { return [bezWaveJS(s, sd), bezWaveJS(s + 0.5, sd)]; }
 
     // У основания волна рюшей длиннее (вдвое), к середине — обычная: фаза растёт медленнее у крепления.
     function ruffleWarp(u) { return u - 0.5 * u * (1 - u) * (1 - u); }
