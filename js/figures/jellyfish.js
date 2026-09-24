@@ -202,13 +202,13 @@
     // Щупальце — кольца, нанизанные на нить: плоскость кольца перпендикулярна нити.
     // aRingC — центр кольца, aTan — касательная нити в покое (dC/dv). Шейдер качает нить и поворачивает
     // каждое кольцо вслед за её текущим изгибом (кратчайший поворот от старой касательной к новой).
-    const tentPars = `uniform float uTime; attribute float aSeed; attribute vec3 aRingC; attribute vec3 aTan;
+    const tentPars = `uniform float uTime; attribute float aSeed; attribute vec3 aRingC; attribute vec3 aTan; attribute float aSwayK;
         varying vec3 vNormal, vViewPosition; varying vec2 vUv;
         vec3 dpTentSway(float v) {
             float whip = pow(v, 1.3);
             float t1 = uTime * 1.2 - v * 7.0 + aSeed * 9.1;
             float t2 = uTime * 0.9 - v * 9.5 + aSeed * 4.3;
-            return vec3(sin(t1) * 0.22 + cos(t2) * 0.10, 0.0, cos(t1 * 0.85) * 0.22 + sin(t2 * 1.1) * 0.10) * whip;
+            return vec3(sin(t1) * 0.22 + cos(t2) * 0.10, 0.0, cos(t1 * 0.85) * 0.22 + sin(t2 * 1.1) * 0.10) * whip * aSwayK;
         }`;
     const tentDisplacement = `
         vUv = uv; vec3 dpRest = position;
@@ -514,7 +514,7 @@
 
     // ---------- ТОНКОЕ ЩУПАЛЬЦЕ (трубка вниз) ----------
     // Кольца перпендикулярны нити (и поворачиваются вслед за её изгибом в шейдере — см. tentDisplacement).
-    function buildTentacle(len, radius, seed, segments, radial, sway) {
+    function buildTentacle(len, radius, seed, segments, radial, sway, swayK = 1) {
         const pts = [];
         for (let s = 0; s <= 40; s++) {
             const t = s / 40;
@@ -524,7 +524,7 @@
                 Math.cos(t * Math.PI * 0.9 + seed * 1.3) * sway * 0.8 * t));
         }
         const path = new THREE.CatmullRomCurve3(pts);
-        const pos = [], nor = [], uvs = [], seeds = [], idx = [], ringC = [], tan = [];
+        const pos = [], nor = [], uvs = [], seeds = [], idx = [], ringC = [], tan = [], swk = [];
         const frames = path.computeFrenetFrames(segments, false);   // параллельный перенос: кольца не перекручиваются
         const L = path.getLength();
         for (let i = 0; i <= segments; i++) {
@@ -542,6 +542,7 @@
                 seeds.push(seed);
                 ringC.push(c.x, c.y, c.z);
                 tan.push(T.x * L, T.y * L, T.z * L);
+                swk.push(swayK);
             }
         }
         for (let i = 0; i < segments; i++) for (let j = 0; j < radial; j++) {
@@ -556,6 +557,7 @@
         geo.setAttribute('aSeed', new THREE.Float32BufferAttribute(seeds, 1));
         geo.setAttribute('aRingC', new THREE.Float32BufferAttribute(ringC, 3));
         geo.setAttribute('aTan', new THREE.Float32BufferAttribute(tan, 3));
+        geo.setAttribute('aSwayK', new THREE.Float32BufferAttribute(swk, 1));   // сила качания (у тычинок слабее)
         return geo;
     }
 
@@ -617,16 +619,17 @@
             });
             tentacles.push({ geo, matrix, kind: 'tentacles' });
         }
-        // «Тычинки» без шариков — короткие тонкие щупальца между лентами.
+        // «Тычинки» без шариков — короткие тонкие щупальца между лентами. Тоньше длинных, кольца чаще
+        // (видимость сохраняется), качаются втрое слабее; шаг по кругу, радиус, высота и длина — с разбросом.
         for (let i = 0; i < RIBBON_COUNT; i++) for (let k = 0; k < STAMENS_PER_GAP; k++) {
             const seed = i * 7.1 + k * 1.93 + 20.5;
-            const angle = ((i + (k + 1) / (STAMENS_PER_GAP + 1)) / RIBBON_COUNT) * Math.PI * 2;
-            const r = innerR * (0.8 + (seededRandom(seed) - 0.5) * 0.12);
-            const len = 0.7 + seededRandom(seed * 2.7) * 0.35;
-            const geo = buildTentacle(len, TUBE_R * 0.8, seed, Math.round(len / RING_STEP), 12, 0.04);
+            const angle = ((i + (k + 1 + (seededRandom(seed * 4.1) - 0.5) * 0.8) / (STAMENS_PER_GAP + 1)) / RIBBON_COUNT) * Math.PI * 2;
+            const r = innerR * (0.8 + (seededRandom(seed) - 0.5) * 0.2);
+            const len = 0.55 + seededRandom(seed * 2.7) * 0.6;
+            const geo = buildTentacle(len, TUBE_R * 0.55, seed, Math.round(len / (RING_STEP * 0.6)), 12, 0.04, 0.33);
             const matrix = matrixOf((pivot, obj) => {
                 pivot.rotation.y = angle;
-                obj.position.set(0, innerY + 0.08, r);
+                obj.position.set(0, innerY + 0.08 - seededRandom(seed * 3.7) * 0.14, r);
                 obj.rotation.x = 0.15;
             });
             tentacles.push({ geo, matrix, kind: 'stamens' });
