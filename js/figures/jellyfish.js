@@ -21,7 +21,7 @@
     const RIBBON_COUNT = 6;       // ленты
     const TENTACLE_COUNT = 12;    // длинные щупальца
     const STAMENS_PER_GAP = 5;    // коротких «тычинок» между соседними лентами
-    const FRINGE_COUNT = 56;      // короткие реснички по краю купола
+    const FRINGE_COUNT = 0;       // короткие реснички по краю купола (выкл.: давали хаос из точек у края)
 
     const ORDER_ANCHOR = new THREE.Vector3(0, 0.95, 0); // вершина купола: распадается последней
     const ORDER_NOISE = 0.3;
@@ -188,7 +188,7 @@
         // (без сдвига фаз край не закручивается штопором, а складывается гармошкой).
         let across = v * W + Math.pow(v, 2.0) * rA * 0.9 * Math.sin(ph);
         let z = Math.pow(v, 1.8) * rA * 0.6 * Math.sin(ph + 0.5);
-        const a = p.twist * u + p.seed * 0.3;                              // лёгкое скручивание вдоль длины
+        const a = p.twist * u;                                             // лёгкое скручивание вдоль длины (у крепления лента строго радиальна)
         const x = across * Math.cos(a) - z * Math.sin(a);
         z = across * Math.sin(a) + z * Math.cos(a);
         return [
@@ -256,7 +256,9 @@
     }
 
     // ---------- ТОНКОЕ ЩУПАЛЬЦЕ (трубка вниз) ----------
-    function buildTentacle(len, radius, seed, segments, radial, sway) {
+    // ringTilt — наклон плоскости кольца к оси трубки: сбоку кольца видны овалами, а не чёрточками;
+    // ось наклона поворачивается от кольца к кольцу.
+    function buildTentacle(len, radius, seed, segments, radial, sway, ringTilt = 0) {
         const pts = [];
         for (let s = 0; s <= 40; s++) {
             const t = s / 40;
@@ -271,10 +273,11 @@
             const v = i / segments;
             const c = path.getPointAt(v);
             const r = radius * Math.max(0.1, Math.pow(1 - v * 0.9, 1.1));
+            const phi = i * 0.9 + seed;
             for (let j = 0; j <= radial; j++) {
                 const th = j / radial * Math.PI * 2;
                 const nx = Math.cos(th), nz = Math.sin(th);
-                pos.push(c.x + nx * r, c.y, c.z + nz * r);
+                pos.push(c.x + nx * r, c.y + Math.cos(th - phi) * r * ringTilt, c.z + nz * r);
                 nor.push(nx, 0, nz);
                 uvs.push(j / radial, v);
                 seeds.push(seed);
@@ -300,7 +303,7 @@
 
         // Два купола: внешний и внутренний поменьше — слои накладываются (add) и дают плотность головы.
         const bell = buildBell(density, 1, 1, 0);
-        const inner = buildBell(density * 0.8, 0.6, 0.75, -0.08);
+        const inner = buildBell(density * 0.8, 0.85, 0.88, -0.06);
         bell.matrix = new THREE.Matrix4();
         inner.matrix = new THREE.Matrix4();
         const bells = [bell, inner];
@@ -318,7 +321,7 @@
                 width: 0.5 + seededRandom(seed * 3.3) * 0.15,
                 ruffleK: 22 + seededRandom(seed * 4.7) * 6,
                 ruffleAmp: 0.14,
-                twist: 0.2 + seededRandom(seed * 5.9) * 0.3,
+                twist: (seededRandom(seed * 5.9) - 0.5) * 0.5,
                 splay: 0.12 + seededRandom(seed * 6.7) * 0.12
             };
             const { pointsGeo, meshGeo } = buildRibbon(p, tier);
@@ -338,7 +341,7 @@
             const angle = (i / TENTACLE_COUNT) * Math.PI * 2 + (seededRandom(seed * 3.3) - 0.5) * 0.3;
             const r = innerR * (0.3 + seededRandom(seed * 5.1) * 0.25);
             const len = 1.9 + seededRandom(seed * 1.9) * 0.5;
-            const geo = buildTentacle(len, TUBE_R, seed, Math.round(len / RING_STEP), 16, 0.3);
+            const geo = buildTentacle(len, TUBE_R * 1.3, seed, Math.round(len / RING_STEP), 16, 0.3, 0.9);
             const matrix = matrixOf((pivot, obj) => {
                 pivot.rotation.y = angle;
                 obj.position.set(0, innerY + 0.3, r);
@@ -350,8 +353,8 @@
             const seed = i * 7.1 + k * 1.93 + 20.5;
             const angle = ((i + (k + 1) / (STAMENS_PER_GAP + 1)) / RIBBON_COUNT) * Math.PI * 2;
             const r = innerR * (0.8 + (seededRandom(seed) - 0.5) * 0.12);
-            const len = 0.45 + seededRandom(seed * 2.7) * 0.3;
-            const geo = buildTentacle(len, TUBE_R * 0.4, seed, Math.round(len / RING_STEP), 12, 0.08);
+            const len = 0.7 + seededRandom(seed * 2.7) * 0.35;
+            const geo = buildTentacle(len, TUBE_R * 0.45, seed, Math.round(len / (RING_STEP * 0.5)), 6, 0.04, 0.6);
             const matrix = matrixOf((pivot, obj) => {
                 pivot.rotation.y = angle;
                 obj.position.set(0, innerY + 0.08, r);
