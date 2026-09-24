@@ -23,7 +23,7 @@
     const TENTACLE_COUNT = 12;    // длинные щупальца
     const STAMENS_PER_GAP = 5;    // коротких «тычинок» между соседними лентами
     // Какие части медузы показывать по умолчанию (доводим по частям; '' — все). ?parts= в адресе важнее.
-    const DEFAULT_PARTS = 'ribbons';
+    const DEFAULT_PARTS = 'bell,skirt,ribbons';
     const FRINGE_COUNT = 0;       // короткие реснички по краю купола (выкл.: давали хаос из точек у края)
 
     const ORDER_ANCHOR = new THREE.Vector3(0, 0.95, 0); // вершина купола: распадается последней
@@ -326,14 +326,16 @@
         const qs = tier.petalSegments / 100;
         const step = 0.019 / FIG_SCALE / qs;
         const segU = Math.round(p.len / step), segV = Math.max(4, Math.round(p.width / step));
-        const mult = tier.petalMultiplier;
+        // Меньше точек на узел и меньший сдвиг, чем у лепестков: лента плоская и видна плашмя,
+        // иначе рядки тонут в шуме и лента выглядит тяжелее лепестков пиона.
+        const mult = Math.max(1, tier.petalMultiplier - 1);
         const pos = [], nor = [], uvs = [], seeds = [], size = [], ruf = [];
         const e = 1e-3;
         let sd = p.seed * 11.3;
         for (let i = 0; i <= segU; i++) for (let j = 0; j <= segV; j++) {
             for (let m = 0; m < mult; m++) {
-                const u = Math.min(1, Math.max(0, (i + (seededRandom(sd += 1.1) - 0.5) * 0.8) / segU));
-                const v = Math.min(1, Math.max(0, (j + (seededRandom(sd += 1.3) - 0.5) * 0.8) / segV));
+                const u = Math.min(1, Math.max(0, (i + (seededRandom(sd += 1.1) - 0.5) * 0.3) / segU));
+                const v = Math.min(1, Math.max(0, (j + (seededRandom(sd += 1.3) - 0.5) * 0.3) / segV));
                 const qr = ribbonPoint(u, v, p);                 // с рюшами — только для нормали (френель)
                 const q = ribbonPoint(u, v, p, false);          // позиция — плоская лента
                 const du = ribbonPoint(Math.min(1, u + e), v, p), dv = ribbonPoint(u, Math.min(1, v + e), p);
@@ -797,7 +799,7 @@
                     vec3 color = mix(vec3(0.04, 0.1, 0.2), vec3(0.7, 0.88, 1.0), 0.45 + 0.6 * vFresnel);
                     // Края светятся сильнее, чем у лепестков пиона: волнистая кромка и немного — прямой край.
                     float edgeGlow = smoothstep(0.55, 1.0, vUv.x) * 3.0 + (1.0 - smoothstep(0.0, 0.12, vUv.x)) * 1.8;
-                    float a = tex.a * vAlpha * 1.2 * (1.0 + edgeGlow);
+                    float a = tex.a * vAlpha * 0.9 * (1.0 + edgeGlow);
                     a = a / (0.45 + a * 2.2) * vDepthK;
                     gl_FragColor = dpMorphColor(color, a, tex.a);
                 }
