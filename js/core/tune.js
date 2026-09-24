@@ -26,6 +26,21 @@
     });
 
     DP.tuneSpec = DP.tuneSpec || [
+        ['Дымная сфера'],
+        ['sphere.leaveSpread', 'распад от краёв, с', 0.2, 5, 0.05],
+        ['sphere.hold', 'шар целиком, с', 0, 4, 0.05],
+        ['sphere.arriveSpread', 'сборка от краёв, с', 0.2, 5, 0.05],
+        ['sphere.jitter', 'разброс частиц, с', 0, 0.6, 0.01],
+        ['sphere.capture', 'подхват шаром, с', 0.1, 3, 0.05],
+        ['sphere.land', 'посадка, с', 0.1, 3, 0.05],
+        ['sphere.twist', 'закрутка до подхвата', 0, 8, 0.05],
+        ['sphere.gravity', 'осыпание', 0, 5, 0.05],
+        ['sphere.sphereR', 'радиус шара', 0.2, 2, 0.01],
+        ['sphere.sphereY', 'высота шара', 0, 1, 0.01],
+        ['sphere.roll', 'клубление', 0, 4, 0.05],
+        ['sphere.rotate', 'вращение вокруг оси', 0, 6, 0.05],
+        ['sphere.noiseK', 'разбросанность (водовороты ×)', 0, 6, 0.05],
+        ['sphere.pull', 'возврат вылетевшего дыма', 0, 5, 0.05],
         ['Кольцо-кисть'],
         ['sweep.descent', 'спуск кольца, с', 0.5, 6, 0.05],
         ['sweep.ease', 'разгон/торможение', 0, 1, 0.01],
@@ -134,7 +149,7 @@
     const loop = { on: DP.params.get('loop') !== '0', pause: parseFloat(DP.params.get('pause') || '1.5') };
     const bar = document.createElement('div');
     bar.innerHTML = '<button data-a="loop"></button><button data-a="now">морфинг сейчас</button>' +
-        '<select data-a="mode"><option value="sweep">кольцо-кисть</option><option value="smoke">дымное кольцо</option><option value="fountain">фонтан</option><option value="vortex">вихрь</option></select>';
+        '<select data-a="mode"><option value="sphere">дымная сфера</option><option value="sweep">кольцо-кисть</option><option value="smoke">дымное кольцо</option><option value="fountain">фонтан</option><option value="vortex">вихрь</option></select>';
     rows.appendChild(bar);
     const bLoop = bar.querySelector('[data-a=loop]'), sMode = bar.querySelector('[data-a=mode]');
     const showLoop = () => { bLoop.textContent = loop.on ? 'цикл: вкл' : 'цикл: выкл'; };

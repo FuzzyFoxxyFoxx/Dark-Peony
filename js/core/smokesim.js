@@ -30,6 +30,7 @@
         uniform vec4 uNoise2;   // изменчивость, доля улетающих, подъём, скорость частиц
         uniform vec4 uLife;     // жизнь от, до, появление (доля), наклон кольца
         uniform vec4 uTimes;    // захват (с), посадка (с), ускорение осыпания, притяжение к сердцевине
+        uniform vec4 uShape;    // форма: 0 — кольцо, 1 — сфера; клубление сферы (вихрь Хилла), -, -
         uniform vec4 uMove;     // движение кольца: скорость центра по высоте, скорость «дыхания» (dR/dt / R), закрутка до захвата, вращение кольца (рад/с)
         ${DP.morph.glsl.simplexNoise}
         float dpHash(float n) { return fract(sin(n * 127.1 + 311.7) * 43758.5453); }
@@ -69,6 +70,23 @@
             v += e * pq.x + up * pq.y;
             return v;
         }
+        // Дымная сфера (координаты кольца, радиус R): вихрь Хилла — внутри шар клубится (вверх по оси, вниз
+        // по краям), снаружи течение гаснет, и частицу мягко тянет обратно к шару; водовороты — те же.
+        vec3 sphereFlow(vec3 p, float t, float pull) {
+            float a = uRing.x;
+            vec3 e = normalize(vec3(p.x, 0.0, p.z) + vec3(1e-5, 0.0, 0.0));
+            vec3 up = vec3(0.0, 1.0, 0.0);
+            float rho = length(p.xz), z = p.y, r = length(p);
+            float k = uShape.y;
+            vec3 v = 2.0 * k * ((rho * z / (a * a)) * e + (1.0 - (2.0 * rho * rho + z * z) / (a * a)) * up);
+            if (r > a) v *= pow(a / r, 3.0);
+            v += cross(up, e) * uRing.w * rho / a;                       // закрутка вокруг оси
+            float ts = t * uNoise2.x;
+            v += uNoise.x * eddy(p * uNoise.y, ts);
+            v += uNoise.z * eddy(p * uNoise.w + vec3(17.0, 3.0, -9.0), ts * 1.7);
+            v -= normalize(p + vec3(1e-5)) * pull * smoothstep(a * 0.9, a * 1.6, r);
+            return v;
+        }
         void main() {
             vec2 uv = gl_FragCoord.xy / uSide;
             vec4 A = texture2D(uA, uv), B = texture2D(uB, uv);
@@ -96,7 +114,7 @@
             // Вращение кольца вокруг оси (вихрь): всё кольцо крутится, быстрее всего на экваторе сферы.
             v += cross(vec3(0.0, 1.0, 0.0), vec3(p.x - uCenter.x, 0.0, p.z - uCenter.z)) * uMove.w * cap * (1.0 - land);
             vec3 q = toRing(p);
-            vec3 vr = ringFlow(q, t, uTimes.w) * uNoise2.w;
+            vec3 vr = (uShape.x > 0.5 ? sphereFlow(q, t, uTimes.w) : ringFlow(q, t, uTimes.w)) * uNoise2.w;
             // Улетающие: часть частиц отрывается от кольца и уходит вверх, рассеиваясь.
             float esc = step(dpHash(seed * 7.3 + 1.1), uNoise2.y) * uNoise2.z * (age > 0.0 ? smoothstep(0.2, 1.0, age / life) : 0.0);
             vr.y += esc;
@@ -114,7 +132,10 @@
                     float r1 = h2(uv + fract(t * 0.137)), r2 = h2(uv * 1.7 + fract(t * 0.291) + 3.1), r3 = h2(uv * 2.3 + fract(t * 0.173) + 7.7);
                     float ph = r1 * 6.2831853, th = r2 * 6.2831853, rr = uRing.y * 0.8 * sqrt(r3);
                     vec3 e = vec3(cos(ph), 0.0, sin(ph));
-                    p = fromRingPos(e * (uRing.x + rr * cos(th)) + vec3(0.0, rr * sin(th), 0.0));
+                    if (uShape.x > 0.5) {   // сфера: рождается в случайной точке шара
+                        float ct = r2 * 2.0 - 1.0, rs = uRing.x * pow(r3, 0.333);
+                        p = fromRingPos(rs * vec3(sqrt(1.0 - ct * ct) * cos(ph), ct, sqrt(1.0 - ct * ct) * sin(ph)));
+                    } else p = fromRingPos(e * (uRing.x + rr * cos(th)) + vec3(0.0, rr * sin(th), 0.0));
                     age = 0.0;
                 }
             }
@@ -177,7 +198,7 @@
                         uSide: { value: 1 }, uTime: { value: 0 }, uDt: { value: 0 }, uReset: { value: 1 },
                         uCenter: { value: new THREE.Vector4() }, uRing: { value: new THREE.Vector4() },
                         uNoise: { value: new THREE.Vector4() }, uNoise2: { value: new THREE.Vector4() },
-                        uLife: { value: new THREE.Vector4() }, uTimes: { value: new THREE.Vector4() }, uMove: { value: new THREE.Vector4() }
+                        uLife: { value: new THREE.Vector4() }, uTimes: { value: new THREE.Vector4() }, uMove: { value: new THREE.Vector4() }, uShape: { value: new THREE.Vector4() }
                     },
                     vertexShader: 'void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }',
                     fragmentShader: simFragment,
@@ -207,7 +228,7 @@
                 u.uMove.value.x = q.dy; u.uMove.value.y = q.dR / Math.max(q.R, 1e-3); u.uMove.value.w = q.w || 0;
             } else {
                 u.uCenter.value.set(r.center.x, r.center.y, r.center.z, r.R / LAB_R);
-                u.uMove.value.x = 0; u.uMove.value.y = 0; u.uMove.value.w = 0;
+                u.uMove.value.x = 0; u.uMove.value.y = 0; u.uMove.value.w = r.w || 0;
             }
         },
 
@@ -216,7 +237,9 @@
             const u = material.uniforms, f = DP.config.morph.smoke;
             const tc = this.timing && this.timing.core != null ? this.timing.core : f.core;
             u.uRing.value.set(LAB_R, tc, f.spin, f.swirl);
-            u.uNoise.value.set(f.noiseAmp, f.noiseScale, f.detailAmp, f.detailScale);
+            const tm0 = this.timing || {}, nk = tm0.noiseK != null ? tm0.noiseK : 1;
+            u.uNoise.value.set(f.noiseAmp * nk, f.noiseScale, f.detailAmp * nk, f.detailScale);
+            u.uShape.value.set(tm0.shape || 0, tm0.roll || 0, 0, 0);
             u.uNoise2.value.set(f.noiseSpeed, f.escape, f.lift, f.speed);
             u.uLife.value.set(f.lifeMin, Math.max(f.lifeMin + 0.01, f.lifeMax), f.fadeIn, f.tilt);
             const tm = this.timing || f;
