@@ -556,10 +556,8 @@
             const orderB = U.clamp(P.pb.order[P.lb], 0, 1);
             const keyB = insideOut ? 1 - orderB : orderB;
             const L = c.leaveStart + c.leaveSpread * orderA;
-            // Разброс времени прилёта — плавная функция места, а не случайность каждой частицы:
-            // соседи летят синхронно, и поверхность сохраняет рисунок (иначе смаз вдоль пути).
-            const smooth = 0.5 * Math.sin(bx * 2.3 + by * 1.1) * Math.sin(bz * 1.9 - by * 1.7);
-            const target = c.arriveStart + c.arriveSpread * keyB + smooth * c.travelJitter;
+            const rnd = U.seededRandom(k * 1.319 + 5.1);
+            const target = c.arriveStart + c.arriveSpread * keyB + (rnd - 0.5) * c.travelJitter;
             const D = U.clamp(target - L, c.minTravel, c.maxTravel);
 
             // Середина пути — НЕПРЕРЫВНОЕ отображение цветка в кольцо: соседи на цветке остаются
