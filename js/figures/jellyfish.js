@@ -607,7 +607,7 @@
             uniforms: Object.assign({ uTime: S.uTime, uRimProf }, morphUniforms),
             vertexShader: `${bellPars} ${G.meshVertex} void main(){ ${bellDisplacement} vDpOrder = aOrder;
                 vec4 mv = modelViewMatrix * vec4(pos, 1.0); vViewPosition = -mv.xyz; vNormal = normalize(normalMatrix * normal); gl_Position = projectionMatrix * mv; }`,
-            fragmentShader: meshFrag('0.55 + 0.35 * vRib', 'varying float vRib;'),
+            fragmentShader: meshFrag('(0.55 + 0.35 * vRib) * (1.0 - smoothstep(0.95, 1.0, vUv.y))', 'varying float vRib;'),
             side: THREE.DoubleSide, transparent: true, depthWrite: false
         }));
         const bellPoints = add(new THREE.ShaderMaterial(pointsBase({
@@ -640,12 +640,14 @@
                 uniform sampler2D uTexture;
                 uniform vec4 uBellLook;
                 varying float vFresnel, vRimW, vRib, vDepthK, vLight;
+                varying vec2 vUv;
                 void main() {
                     vec4 tex = texture2D(uTexture, gl_PointCoord);
                     if (tex.a < 0.01) discard;
                     float lit = mix(1.0, vLight * vLight * 1.6, uBellLook.y);
                     vec3 color = mix(vec3(0.05, 0.12, 0.22), vec3(0.72, 0.88, 1.0), vFresnel * 1.1 + vRib * 0.4 + lit * 0.25);
                     float a = tex.a * (uBellLook.x * lit + 0.12 * vFresnel + uBellLook.z * vRib + 0.05 * vRimW);
+                    a *= 1.0 - smoothstep(0.95, 1.0, vUv.y);   // загиб внутрь: последние 5% профиля — в ноль
                     a = a / (0.45 + a * 2.2) * vDepthK;
                     gl_FragColor = dpMorphColor(color, a, tex.a);
                 }
