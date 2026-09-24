@@ -18,25 +18,27 @@
     const FIG_Y_OFFSET = 0.55;
 
     const RIB_COUNT = 16;         // радиальные каналы купола
-    const RIBBON_COUNT = 5;       // ленты
-    const TENTACLE_COUNT = 12;    // длинные тонкие щупальца
-    const FRINGE_COUNT = 72;      // короткие реснички по краю купола
+    const RIBBON_COUNT = 6;       // ленты
+    const TENTACLE_COUNT = 12;    // длинные щупальца
+    const STAMENS_PER_GAP = 5;    // коротких «тычинок» между соседними лентами
+    const FRINGE_COUNT = 56;      // короткие реснички по краю купола
 
     const ORDER_ANCHOR = new THREE.Vector3(0, 0.95, 0); // вершина купола: распадается последней
     const ORDER_NOISE = 0.3;
     const ORDER_CURVE = 0.6;
 
     // ==========================================
-    // ПРОФИЛЬ КУПОЛА (r, y): вершина → внешняя сторона → скруглённый край → внутренняя чаша → внутренняя вершина
+    // ПРОФИЛЬ КУПОЛА (r, y): вершина → внешняя сторона → скруглённый край, чуть загнутый внутрь
     // ==========================================
+    // Контур незамкнутый: внутренней чаши нет, край лишь чуть загибается внутрь.
     const BELL_PROFILE = [
         [0.00, 0.95], [0.30, 0.92], [0.58, 0.83], [0.85, 0.64], [1.06, 0.38], [1.19, 0.08],
-        [1.22, -0.18], [1.15, -0.36], [1.02, -0.45], [0.90, -0.41], [0.86, -0.28],
-        [0.80, -0.12], [0.64, 0.03], [0.42, 0.14], [0.20, 0.20], [0.00, 0.22]
+        [1.22, -0.18], [1.15, -0.36], [1.02, -0.45], [0.92, -0.42], [0.86, -0.34]
     ];
 
-    function makeBellCurve() {
-        return new THREE.SplineCurve(BELL_PROFILE.map(p => new THREE.Vector2(p[0], p[1])));
+    // sr, sy — масштаб по радиусу и высоте, dy — сдвиг (внутренний купол — уменьшенная копия внешнего).
+    function makeBellCurve(sr, sy, dy) {
+        return new THREE.SplineCurve(BELL_PROFILE.map(p => new THREE.Vector2(p[0] * sr, p[1] * sy + dy)));
     }
 
     // ==========================================
@@ -107,8 +109,8 @@
     function ribAt(theta) { return Math.pow(0.5 + 0.5 * Math.cos(RIB_COUNT * theta), 10); }
 
     // ---------- КУПОЛ ----------
-    function buildBell(density) {
-        const curve = makeBellCurve();
+    function buildBell(density, sr, sy, dy) {
+        const curve = makeBellCurve(sr, sy, dy);
         const lenP = curve.getLength();
 
         // Параметр профиля в самой нижней точке края.
@@ -196,25 +198,29 @@
         ];
     }
 
-    function buildRibbon(p, density) {
-        const h = 1 / Math.sqrt(density);
-        const nU = Math.ceil(p.len * 1.15 / h);
+    // Точки ленты — как у лепестков пиона: сетка по поверхности, у каждой вершины несколько точек
+    // со случайным сдвигом внутри ячейки и лёгким объёмным разбросом (без рядов и полосок).
+    function buildRibbon(p, tier) {
+        const qs = tier.petalSegments / 100;
+        const segU = Math.round(150 * qs * p.len / 1.75), segV = Math.round(46 * qs);
+        const mult = tier.petalMultiplier;
         const pos = [], nor = [], uvs = [], seeds = [], size = [];
         const e = 1e-3;
         let sd = p.seed * 11.3;
-        for (let i = 0; i < nU; i++) {
-            const u = Math.min(1, (i + seededRandom(sd += 1.1)) / nU);
-            const W = p.width * Math.sin(Math.PI * (0.2 + 0.8 * u));
-            const nV = Math.max(1, Math.ceil(W * 1.35 / h));
-            for (let j = 0; j < nV; j++) {
-                const v = Math.min(1, (j + seededRandom(sd += 1.3)) / nV);
+        for (let i = 0; i <= segU; i++) for (let j = 0; j <= segV; j++) {
+            for (let m = 0; m < mult; m++) {
+                const u = Math.min(1, Math.max(0, (i + (seededRandom(sd += 1.1) - 0.5) * 0.8) / segU));
+                const v = Math.min(1, Math.max(0, (j + (seededRandom(sd += 1.3) - 0.5) * 0.8) / segV));
                 const q = ribbonPoint(u, v, p);
                 const du = ribbonPoint(Math.min(1, u + e), v, p), dv = ribbonPoint(u, Math.min(1, v + e), p);
                 const ax = du[0] - q[0], ay = du[1] - q[1], az = du[2] - q[2];
                 const bx = dv[0] - q[0], by = dv[1] - q[1], bz = dv[2] - q[2];
-                let nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
+                const nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
                 const nl = Math.hypot(nx, ny, nz) || 1;
-                pos.push(q[0], q[1], q[2]);
+                const vol = 0.006 + 0.01 * u;
+                pos.push(q[0] + (seededRandom(sd += 0.3) - 0.5) * vol,
+                         q[1] + (seededRandom(sd += 0.3) - 0.5) * vol,
+                         q[2] + (seededRandom(sd += 0.3) - 0.5) * vol * 1.6);
                 nor.push(nx / nl, ny / nl, nz / nl);
                 uvs.push(v, u);
                 seeds.push(p.seed);
@@ -229,15 +235,15 @@
         pointsGeo.setAttribute('aSizeScale', new THREE.Float32BufferAttribute(size, 1));
 
         // Поверхность.
-        const segU = 220, segV = 16;
+        const mU = 220, mV = 16;
         const mPos = [], mUv = [], mSeed = [], idx = [];
-        for (let i = 0; i <= segU; i++) for (let j = 0; j <= segV; j++) {
-            const u = i / segU, v = j / segV;
+        for (let i = 0; i <= mU; i++) for (let j = 0; j <= mV; j++) {
+            const u = i / mU, v = j / mV;
             const q = ribbonPoint(u, v, p);
             mPos.push(q[0], q[1], q[2]); mUv.push(v, u); mSeed.push(p.seed);
         }
-        for (let i = 0; i < segU; i++) for (let j = 0; j < segV; j++) {
-            const a = i * (segV + 1) + j, b = a + segV + 1;
+        for (let i = 0; i < mU; i++) for (let j = 0; j < mV; j++) {
+            const a = i * (mV + 1) + j, b = a + mV + 1;
             idx.push(a, b, a + 1, b, b + 1, a + 1);
         }
         const meshGeo = new THREE.BufferGeometry();
@@ -292,47 +298,72 @@
         const q = Math.pow(tier.petalSegments / 100, 2) * tier.petalMultiplier / 3;
         const density = 16000 * q;
 
-        const bell = buildBell(density);
+        // Два купола: внешний и внутренний поменьше — слои накладываются (add) и дают плотность головы.
+        const bell = buildBell(density, 1, 1, 0);
+        const inner = buildBell(density * 0.8, 0.6, 0.75, -0.08);
         bell.matrix = new THREE.Matrix4();
+        inner.matrix = new THREE.Matrix4();
+        const bells = [bell, inner];
 
+        // Расстановка (вид снизу, эскиз автора): ленты — у края внутреннего купола, между ними — короткие
+        // «тычинки»; длинные щупальца — плотным кольцом ближе к центру, с разбросом по радиусу.
+        const RING_STEP = 0.042 / FIG_SCALE, TUBE_R = 0.05 / FIG_SCALE;
+        const innerR = inner.rimR, innerY = inner.rimY;
         const ribbons = [];
         for (let i = 0; i < RIBBON_COUNT; i++) {
             const seed = i * 3.71 + 0.9;
             const p = {
                 seed,
-                len: 1.55 + seededRandom(seed * 2.1) * 0.4,
-                width: 0.7 + seededRandom(seed * 3.3) * 0.2,
+                len: 1.6 + seededRandom(seed * 2.1) * 0.35,
+                width: 0.5 + seededRandom(seed * 3.3) * 0.15,
                 ruffleK: 22 + seededRandom(seed * 4.7) * 6,
-                ruffleAmp: 0.16,
+                ruffleAmp: 0.14,
                 twist: 0.2 + seededRandom(seed * 5.9) * 0.3,
-                splay: 0.45 + seededRandom(seed * 6.7) * 0.25
+                splay: 0.12 + seededRandom(seed * 6.7) * 0.12
             };
-            const { pointsGeo, meshGeo } = buildRibbon(p, density);
-            const angle = (i / RIBBON_COUNT) * Math.PI * 2 + 0.3;
+            const { pointsGeo, meshGeo } = buildRibbon(p, tier);
+            const angle = (i / RIBBON_COUNT) * Math.PI * 2;
             const matrix = matrixOf((pivot, obj) => {
                 pivot.rotation.y = angle;
-                obj.position.set(0, 0.24, 0.3);
-                obj.rotation.y = -Math.PI / 2;       // поперёк ленты — наружу от оси
+                obj.position.set(0, innerY + 0.22, innerR * 0.72);
+                obj.rotation.y = -Math.PI / 2;       // прямой край к оси, волнистый — наружу
             });
             ribbons.push({ pointsGeo, meshGeo, matrix });
         }
 
         const tentacles = [];
+        // Длинные щупальца — трубки из колец точек, как у пиона (16 точек в кольце, тот же шаг на экране).
         for (let i = 0; i < TENTACLE_COUNT; i++) {
             const seed = i * 2.43 + 1.7;
-            const angle = (i / TENTACLE_COUNT) * Math.PI * 2 + 0.12;
-            const len = 1.8 + seededRandom(seed * 1.9) * 0.5;
-            const geo = buildTentacle(len, 0.035, seed, 130, 8, 0.35);
+            const angle = (i / TENTACLE_COUNT) * Math.PI * 2 + (seededRandom(seed * 3.3) - 0.5) * 0.3;
+            const r = innerR * (0.3 + seededRandom(seed * 5.1) * 0.25);
+            const len = 1.9 + seededRandom(seed * 1.9) * 0.5;
+            const geo = buildTentacle(len, TUBE_R, seed, Math.round(len / RING_STEP), 16, 0.3);
             const matrix = matrixOf((pivot, obj) => {
                 pivot.rotation.y = angle;
-                obj.position.set(0, bell.rimY + 0.04, bell.rimR * 0.96);
+                obj.position.set(0, innerY + 0.3, r);
+            });
+            tentacles.push({ geo, matrix });
+        }
+        // «Тычинки» без шариков — короткие тонкие щупальца между лентами.
+        for (let i = 0; i < RIBBON_COUNT; i++) for (let k = 0; k < STAMENS_PER_GAP; k++) {
+            const seed = i * 7.1 + k * 1.93 + 20.5;
+            const angle = ((i + (k + 1) / (STAMENS_PER_GAP + 1)) / RIBBON_COUNT) * Math.PI * 2;
+            const r = innerR * (0.8 + (seededRandom(seed) - 0.5) * 0.12);
+            const len = 0.45 + seededRandom(seed * 2.7) * 0.3;
+            const geo = buildTentacle(len, TUBE_R * 0.4, seed, Math.round(len / RING_STEP), 12, 0.08);
+            const matrix = matrixOf((pivot, obj) => {
+                pivot.rotation.y = angle;
+                obj.position.set(0, innerY + 0.08, r);
+                obj.rotation.x = 0.15;
             });
             tentacles.push({ geo, matrix });
         }
         for (let i = 0; i < FRINGE_COUNT; i++) {
             const seed = i * 1.37 + 40.2;
             const angle = (i / FRINGE_COUNT) * Math.PI * 2;
-            const geo = buildTentacle(0.18 + seededRandom(seed) * 0.16, 0.02, seed, 14, 4, 0.05);
+            const len = 0.18 + seededRandom(seed) * 0.16;
+            const geo = buildTentacle(len, TUBE_R * 0.5, seed, Math.max(3, Math.round(len / RING_STEP)), 8, 0.05);
             const matrix = matrixOf((pivot, obj) => {
                 pivot.rotation.y = angle;
                 obj.position.set(0, bell.rimY + 0.02, bell.rimR);
@@ -345,7 +376,7 @@
             new THREE.Vector3(0, FIG_Y_OFFSET, 0), new THREE.Quaternion(),
             new THREE.Vector3(FIG_SCALE, FIG_SCALE, FIG_SCALE));
 
-        const data = { bell, ribbons, tentacles, rootMatrix };
+        const data = { bell, bells, ribbons, tentacles, rootMatrix };
         assignOrderAndLayout(data);
         return data;
     }
@@ -361,10 +392,10 @@
 
     function assignOrderAndLayout(data) {
         const v = new THREE.Vector3();
-        const pointSources = [{ geo: data.bell.pointsGeo, matrix: data.bell.matrix }];
+        const pointSources = data.bells.map(b => ({ geo: b.pointsGeo, matrix: b.matrix }));
         data.ribbons.forEach(r => pointSources.push({ geo: r.pointsGeo, matrix: r.matrix }));
         data.tentacles.forEach(t => pointSources.push({ geo: t.geo, matrix: t.matrix }));
-        const meshOnly = [{ geo: data.bell.meshGeo, matrix: data.bell.matrix }];
+        const meshOnly = data.bells.map(b => ({ geo: b.meshGeo, matrix: b.matrix }));
         data.ribbons.forEach(r => meshOnly.push({ geo: r.meshGeo, matrix: r.matrix }));
 
         let dMin = Infinity, dMax = -Infinity;
@@ -416,6 +447,9 @@
         const add = (m) => { list.push(m); return m; };
         const pointsBase = (extra) => Object.assign({}, DP.pointsMaterialConfig, extra);
         const uRimProf = { value: data.bell.sRim };
+        // Затемнение по глубине: дальняя сторона фигуры тусклее ближней — объём читается лучше.
+        const uDepth = { value: new THREE.Vector2(8.1, 0.45) };   // расстояние до центра фигуры, сила
+        const depthVert = 'vDepthK = 1.0 - uDepth.y * smoothstep(-1.2, 1.6, dist - uDepth.x);';
 
         const meshFrag = (alphaExpr, extra) => `
             ${G.meshFragment}
@@ -441,10 +475,12 @@
             side: THREE.DoubleSide, transparent: true, depthWrite: false
         }));
         const bellPoints = add(new THREE.ShaderMaterial(pointsBase({
-            uniforms: Object.assign({ uTime: S.uTime, uRimProf, uTexture: S.uTexture, uViewportScale: S.uViewportScale, uSize: { value: 2.2 } }, morphUniforms),
+            uniforms: Object.assign({ uTime: S.uTime, uRimProf, uDepth, uTexture: S.uTexture, uViewportScale: S.uViewportScale, uSize: { value: 2.2 } }, morphUniforms),
             vertexShader: `
                 ${bellPars}
                 ${G.pointsVertex}
+                uniform vec2 uDepth;
+                varying float vDepthK;
                 uniform float uViewportScale, uSize;
                 attribute float aSizeScale;
                 varying float vFresnel, vRimW;
@@ -453,6 +489,7 @@
                     vec4 mv = viewMatrix * dpMorph(dpRest, pos);
                     gl_Position = projectionMatrix * mv;
                     float dist = max(-mv.z, 0.1);
+                    ${depthVert}
                     vFresnel = pow(clamp(1.0 - abs(dot(normalize(normalMatrix * normal), normalize(-mv.xyz))), 0.0, 1.0), 1.3);
                     vRimW = rimW;
                     gl_PointSize = uSize * uViewportScale * (0.7 + aSizeScale * 0.5) / (0.35 + 0.06 * dist);
@@ -462,20 +499,20 @@
             fragmentShader: `
                 ${G.pointsFragment}
                 uniform sampler2D uTexture;
-                varying float vFresnel, vRimW, vRib;
+                varying float vFresnel, vRimW, vRib, vDepthK;
                 void main() {
                     vec4 tex = texture2D(uTexture, gl_PointCoord);
                     if (tex.a < 0.01) discard;
                     vec3 color = mix(vec3(0.05, 0.12, 0.22), vec3(0.72, 0.88, 1.0), vFresnel * 1.1 + vRib * 0.4);
                     float a = tex.a * (0.02 + 0.09 * vFresnel + 0.07 * vRib + 0.05 * vRimW);
-                    a = a / (0.45 + a * 2.2);
+                    a = a / (0.45 + a * 2.2) * vDepthK;
                     gl_FragColor = dpMorphColor(color, a, tex.a);
                 }
             `
         })));
 
         // ---------- ЛЕНТЫ ----------
-        const ribbonAlpha = 'smoothstep(0.0, 0.09, vUv.y) * (1.0 - 0.6 * smoothstep(0.85, 1.0, vUv.y))';
+        const ribbonAlpha = 'smoothstep(0.04, 0.2, vUv.y) * (1.0 - 0.6 * smoothstep(0.85, 1.0, vUv.y))';
         const ribbonMesh = add(new THREE.ShaderMaterial({
             uniforms: Object.assign({ uTime: S.uTime }, morphUniforms),
             vertexShader: `${ribbonPars} ${G.meshVertex} void main(){ ${ribbonDisplacement} vDpOrder = aOrder;
@@ -483,36 +520,42 @@
             fragmentShader: meshFrag(`0.6 * ${ribbonAlpha}`),
             side: THREE.DoubleSide, transparent: true, depthWrite: false
         }));
+        // Как лепестки пиона: френель, ярче к волнистому краю, та же формула прозрачности.
         const ribbonPoints = add(new THREE.ShaderMaterial(pointsBase({
-            uniforms: Object.assign({ uTime: S.uTime, uTexture: S.uTexture, uViewportScale: S.uViewportScale, uSize: { value: 2.2 } }, morphUniforms),
+            uniforms: Object.assign({ uTime: S.uTime, uDepth, uTexture: S.uTexture, uViewportScale: S.uViewportScale, uSize: { value: 2.2 } }, morphUniforms),
             vertexShader: `
                 ${ribbonPars}
                 ${G.pointsVertex}
+                uniform vec2 uDepth;
+                varying float vDepthK;
                 uniform float uViewportScale, uSize;
                 attribute float aSizeScale;
-                varying float vFresnel;
+                varying float vAlpha, vFresnel;
                 void main() {
                     ${ribbonDisplacement}
                     vec4 mv = viewMatrix * dpMorph(dpRest, pos);
                     gl_Position = projectionMatrix * mv;
                     float dist = max(-mv.z, 0.1);
-                    vFresnel = pow(clamp(1.0 - abs(dot(normalize(normalMatrix * normal), normalize(-mv.xyz))), 0.0, 1.0), 1.3);
+                    ${depthVert}
+                    vec3 N = normalize(normalMatrix * normal);
+                    vFresnel = pow(clamp(1.0 - abs(dot(N, normalize(-mv.xyz))), 0.0, 1.0), 1.3);
                     gl_PointSize = uSize * uViewportScale * (0.7 + aSizeScale * 0.5) / (0.35 + 0.06 * dist);
+                    vAlpha = (0.2 + 0.5 * vFresnel) * ${ribbonAlpha};
                     dpMorphFinish();
                 }
             `,
             fragmentShader: `
                 ${G.pointsFragment}
                 uniform sampler2D uTexture;
-                varying float vFresnel;
+                varying float vAlpha, vFresnel, vDepthK;
                 varying vec2 vUv;
                 void main() {
                     vec4 tex = texture2D(uTexture, gl_PointCoord);
                     if (tex.a < 0.01) discard;
-                    float edge = smoothstep(0.6, 1.0, vUv.x);
-                    vec3 color = mix(vec3(0.05, 0.12, 0.22), vec3(0.72, 0.88, 1.0), vFresnel * 1.1 + edge * 0.3);
-                    float a = tex.a * (0.03 + 0.10 * vFresnel + 0.07 * edge) * ${ribbonAlpha};
-                    a = a / (0.45 + a * 2.2);
+                    vec3 color = mix(vec3(0.04, 0.1, 0.2), vec3(0.7, 0.88, 1.0), vFresnel * 1.1);
+                    float edgeGlow = smoothstep(0.3, 1.0, vUv.x) * 1.5;
+                    float a = tex.a * vAlpha * 0.45 * (1.0 + edgeGlow);
+                    a = a / (0.45 + a * 2.2) * vDepthK;
                     gl_FragColor = dpMorphColor(color, a, tex.a);
                 }
             `
@@ -529,16 +572,19 @@
         }));
         const tentPoints = add(new THREE.ShaderMaterial(pointsBase({
             depthTest: false,
-            uniforms: Object.assign({ uTime: S.uTime, uTexture: S.uTexture, uViewportScale: S.uViewportScale, uSize: { value: 2.0 } }, morphUniforms),
+            uniforms: Object.assign({ uTime: S.uTime, uDepth, uTexture: S.uTexture, uViewportScale: S.uViewportScale, uSize: { value: 2.0 } }, morphUniforms),
             vertexShader: `
                 ${tentPars}
                 ${G.pointsVertex}
+                uniform vec2 uDepth;
+                varying float vDepthK;
                 uniform float uViewportScale, uSize;
                 varying float vFresnel;
                 void main(){
                     ${tentDisplacement}
                     vec4 mv = viewMatrix * dpMorph(dpRest, pos);
                     float dist = max(-mv.z, 0.1);
+                    ${depthVert}
                     gl_PointSize = uSize * uViewportScale * (0.85 / (0.4 + 0.06 * dist));
                     vFresnel = pow(clamp(1.0 - abs(dot(normalize(normalMatrix * normal), normalize(-mv.xyz))), 0.0, 1.0), 1.2);
                     gl_Position = projectionMatrix * mv;
@@ -548,14 +594,14 @@
             fragmentShader: `
                 ${G.pointsFragment}
                 uniform sampler2D uTexture;
-                varying float vFresnel;
+                varying float vFresnel, vDepthK;
                 varying vec2 vUv;
                 void main(){
                     vec4 tex = texture2D(uTexture, gl_PointCoord);
                     if (tex.a < 0.02) discard;
                     float tipGlow = smoothstep(0.1, 0.85, vUv.y) * 1.4;
                     float a = tex.a * (0.12 + tipGlow * 0.2) * ${tentAlpha};
-                    a = a / (0.45 + a * 1.2);
+                    a = a / (0.45 + a * 1.2) * vDepthK;
                     vec3 baseColor = mix(vec3(0.1, 0.22, 0.38), vec3(0.7, 0.85, 1.0), vFresnel * 1.1);
                     gl_FragColor = dpMorphColor(mix(baseColor, vec3(0.4, 0.7, 0.95), smoothstep(0.4, 0.85, vUv.y)), a, tex.a);
                 }
@@ -583,8 +629,10 @@
             root.add(meshRoot, pointsRoot);
             const place = (group, obj, matrix) => { obj.matrixAutoUpdate = false; obj.matrix.copy(matrix); group.add(obj); };
 
-            place(meshRoot, new THREE.Mesh(data.bell.meshGeo, mats.bellMesh), data.bell.matrix);
-            place(pointsRoot, new THREE.Points(data.bell.pointsGeo, mats.bellPoints), data.bell.matrix);
+            data.bells.forEach(b => {
+                place(meshRoot, new THREE.Mesh(b.meshGeo, mats.bellMesh), b.matrix);
+                place(pointsRoot, new THREE.Points(b.pointsGeo, mats.bellPoints), b.matrix);
+            });
             data.ribbons.forEach(r => {
                 place(meshRoot, new THREE.Mesh(r.meshGeo, mats.ribbonMesh), r.matrix);
                 place(pointsRoot, new THREE.Points(r.pointsGeo, mats.ribbonPoints), r.matrix);
