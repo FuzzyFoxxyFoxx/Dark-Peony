@@ -31,6 +31,7 @@
         uMeshMode: { value: 0 },
         uMorphSched: { value: new THREE.Vector4() },  // leaveStart, leaveSpread, arriveStart, arriveSpread
         uMorphSched2: { value: new THREE.Vector4() }, // assembleInvert, meshRevealLag, meshFade, -
+        uWarp: { value: new THREE.Vector4() },        // доля времени на уход, доля на уход+вихрь, доля пути ухода/посадки, -
         uFlowA: { value: new THREE.Vector4() },       // flowAmp, flowFreq, flowMemory (с), flowSpeed
         uFlowB: { value: new THREE.Vector4() },       // -, fieldDelay, poseBlend, precession
         uWave: { value: new THREE.Vector4() },        // waveAmp, waveCount, waveSpeed, waveRadial
@@ -46,9 +47,25 @@
         uSwirlColor: { value: new THREE.Vector3() }
     };
 
+    // Путь частицы (в «исходном» времени) делится на уход [0, a], вихрь [a, 1-a] и посадку [1-a, 1],
+    // где a — участок до выхода на плато вихря. Каждый участок проходится со своей скоростью.
+    // K — во сколько раз сокращается полёт; uIn, uMid — доли реального времени на уход и на вихрь.
+    function warpOf(c) {
+        const a = Math.min(0.45, Math.max(0.05, 0.5 - c.swirlHold));
+        const tIn = a / c.speedIn, tMid = (1 - 2 * a) / c.speedMid, tOut = a / c.speedOut;
+        const K = tIn + tMid + tOut;
+        return { a, K, uIn: tIn / K, uMid: tMid / K };
+    }
+
     function syncConfig() {
         const c = DP.config.morph;
-        shared.uMorphSched.value.set(c.leaveStart, c.leaveSpread, c.arriveStart, c.arriveSpread);
+        // Разные скорости участков пути: уход (speedIn), вихрь (speedMid), посадка (speedOut).
+        const w = warpOf(c);
+        shared.uWarp.value.set(w.uIn, w.uIn + w.uMid, w.a, 0);
+        // Поверхности (MESH) прогорают и проявляются по тем же ускоренным срокам, что и частицы.
+        shared.uMorphSched.value.set(c.leaveStart, c.leaveSpread / c.speedIn,
+            c.leaveStart + w.K * (c.arriveStart - c.leaveStart),
+            c.leaveSpread / c.speedIn + w.K * (c.arriveSpread - c.leaveSpread));
         shared.uMorphSched2.value.set(c.assemble === 'outside-in' ? 0 : 1, c.meshRevealLag, c.meshFade, 0);
         shared.uFlowA.value.set(c.flowAmp, c.flowFreq, c.flowMemory, c.flowSpeed);
         shared.uFlowB.value.set(0, c.fieldDelay, c.poseBlend, c.precession);
@@ -204,6 +221,7 @@
         uniform vec4 uFlowA;
         uniform vec4 uFlowC;
         uniform vec4 uWave;
+        uniform vec4 uWarp;
         uniform vec4 uFlowB;
         uniform vec4 uClumpA;
         uniform vec4 uClumpB;
@@ -228,6 +246,24 @@
         ${simplexNoise}
 
         float dpHash(float n) { return fract(sin(n * 127.1 + 311.7) * 43758.5453); }
+
+        // Реальная доля времени полёта u → доля пути s. Три участка с разной скоростью,
+        // сшитые кубическими кривыми Эрмита (скорость меняется плавно, без рывков на стыках).
+        float dpHermite(float x, float x0, float x1, float y0, float y1, float m0, float m1) {
+            float h = max(x1 - x0, 1e-4);
+            float k = clamp((x - x0) / h, 0.0, 1.0);
+            float k2 = k * k, k3 = k2 * k;
+            return (2.0 * k3 - 3.0 * k2 + 1.0) * y0 + (k3 - 2.0 * k2 + k) * h * m0
+                 + (-2.0 * k3 + 3.0 * k2) * y1 + (k3 - k2) * h * m1;
+        }
+        float dpWarp(float u) {
+            float u1 = uWarp.x, u2 = uWarp.y, a = uWarp.z;
+            float v0 = a / max(u1, 1e-4), v1 = (1.0 - 2.0 * a) / max(u2 - u1, 1e-4), v2 = a / max(1.0 - u2, 1e-4);
+            float m1 = 0.5 * (v0 + v1), m2 = 0.5 * (v1 + v2);
+            if (u < u1) return dpHermite(u, 0.0, u1, 0.0, a, v0, m1);
+            if (u < u2) return dpHermite(u, u1, u2, a, 1.0 - a, m1, m2);
+            return dpHermite(u, u2, 1.0, 1.0 - a, 1.0, m2, v2);
+        }
 
         // Скорость среды в точке x в момент tau: поле водоворотов (∇n1 × ∇n2 — без «ям и бугров»,
         // только завихрения). Поле вращается вместе с вихрем медленнее частиц и меняется во времени.
@@ -259,7 +295,7 @@
             float D = max(mod(m.x, 2048.0) * 0.01, 0.05);
             float arrive = L + D;
             float t = uMorphTime;
-            float s = clamp((t - L) / D, 0.0, 1.0);
+            float s = dpWarp(clamp((t - L) / D, 0.0, 1.0));
 
             // Видимость: уходящая точка живёт до середины пути, прилетающая — после.
             if (outRole) {
@@ -338,7 +374,7 @@
                 for (int i = 0; i < 6; i++) {
                     if (float(i) >= uFlowC.x || uFlowA.x <= 0.0) break;
                     float tau = te - uFlowA.z * (float(i) + 0.5) / uFlowC.x;
-                    float sT = clamp((tau - L) / D, 0.0, 1.0);
+                    float sT = dpWarp(clamp((tau - L) / D, 0.0, 1.0));
                     float gT = sT * sT * (3.0 - 2.0 * sT);
                     float wT = smoothstep(uFlowB.y, 1.0, 2.0 * min(gT, 1.0 - gT));
                     if (wT > 0.0) {
@@ -541,6 +577,7 @@
         const insideOut = c.assemble !== 'outside-in';
         const usedA = new Uint8Array(NA), usedB = new Uint8Array(NB);
         const bb = bounds([A, B]);
+        const warp = warpOf(c);
         let end = 0;
 
         const pairOf = (k) => {
@@ -587,10 +624,13 @@
             const orderA = U.clamp(P.pa.order[P.la], 0, 1);
             const orderB = U.clamp(P.pb.order[P.lb], 0, 1);
             const keyB = insideOut ? 1 - orderB : orderB;
-            const L = c.leaveStart + c.leaveSpread * orderA;
+            const L0 = c.leaveStart + c.leaveSpread * orderA;
             const rnd = U.seededRandom(k * 1.319 + 5.1);
             const target = c.arriveStart + c.arriveSpread * keyB + (rnd - 0.5) * c.travelJitter;
-            const D = U.clamp(target - L, c.minTravel, c.maxTravel);
+            // Расписание считается в исходном времени, затем ускоряется: фронт распада — в speedIn раз,
+            // полёт — по участкам (warp.K).
+            const L = c.leaveStart + c.leaveSpread * orderA / c.speedIn;
+            const D = U.clamp(target - L0, c.minTravel, c.maxTravel) * warp.K;
 
             // Середина пути — НЕПРЕРЫВНОЕ отображение цветка в кольцо: соседи на цветке остаются
             // соседями в вихре, поэтому лепесток на глазах вытягивается в ленту, а не тает в пыль.
