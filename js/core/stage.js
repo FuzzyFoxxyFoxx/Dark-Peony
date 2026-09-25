@@ -140,14 +140,83 @@
         return pts;
     }
     const nHalo = Math.round(bg.stars * bg.halo), nDisk = bg.stars - nHalo;
-    // Диск: кольцо от ядра к краю (плотнее к центру), тонкий по высоте.
+    // Спираль (как Андромеда): угол рукава на радиусе r. Та же форма — у звёзд, облаков и туманности.
+    const armAngle = (r, arm) => arm * Math.PI * 2 / bg.arms + Math.log(Math.max(r, 0.1) / bg.diskIn) * bg.winding;
+    const gauss = (k) => (seededRandom(k) + seededRandom(k * 1.7 + 0.3) + seededRandom(k * 2.9 + 0.7) - 1.5) / 1.5;
+    // Диск: звёзды в основном на рукавах спирали (с разбросом), часть — хаотично; толстый в середине, к краю тоньше.
     const diskStars = starPoints(nDisk, (i) => {
-        const u = seededRandom(i * 1.5) * Math.PI * 2;
-        const r = bg.diskIn + Math.pow(seededRandom(i * 2.3), 0.8) * (bg.diskOut - bg.diskIn);
-        const y = (seededRandom(i * 3.7) + seededRandom(i * 5.1) - 1) * bg.diskThick;
-        return [Math.cos(u) * r, y, Math.sin(u) * r];
+        const r = bg.diskIn + Math.pow(seededRandom(i * 2.3), 0.9) * (bg.diskOut - bg.diskIn);
+        let u;
+        if (seededRandom(i * 6.1 + 0.4) < bg.armShare) u = armAngle(r, Math.floor(seededRandom(i * 1.5) * bg.arms)) + gauss(i * 3.3) * bg.armSpread;
+        else u = seededRandom(i * 1.5) * Math.PI * 2;
+        const thick = bg.diskThick * Math.pow(1 - (r - bg.diskIn) / (bg.diskOut - bg.diskIn), 0.8) + 0.05;
+        return [Math.cos(u) * r, gauss(i * 3.7) * thick, Math.sin(u) * r];
     }, 0);
     galaxy.add(diskStars);
+
+    // Туманность в плоскости пола: процедурная текстура — сотни тонких дымных дуг, закрученных по рукавам,
+    // с мягким свечением; центр пустой (там на референсе чёрная дыра — не рисуем). Вращается вместе с диском.
+    (function createNebula() {
+        const S = 1024, c = document.createElement('canvas');
+        c.width = c.height = S;
+        const g = c.getContext('2d');
+        const NR = bg.nebulaR, half = S / 2, scale = half / NR;   // единицы сцены → пиксели текстуры
+        g.lineCap = 'round';
+        g.shadowColor = 'rgba(200, 225, 255, 1)';
+        for (let i = 0; i < bg.nebulaStrokes; i++) {
+            const r0 = bg.diskIn * 0.8 + Math.pow(seededRandom(i * 1.13 + 0.5), 1.1) * (NR * 0.95 - bg.diskIn * 0.8);
+            const arm = Math.floor(seededRandom(i * 2.71) * bg.arms);
+            const onArm = seededRandom(i * 3.17) < 0.75;
+            const a0 = (onArm ? armAngle(r0, arm) + gauss(i * 4.4) * bg.armSpread * 0.8 : seededRandom(i * 5.3) * Math.PI * 2);
+            const len = 0.15 + Math.pow(seededRandom(i * 6.7), 2) * 1.1;   // длина дуги, рад (больше коротких)
+            const fade = 1 - Math.pow(Math.max(0, r0 - bg.diskIn) / (NR - bg.diskIn), 1.2);
+            const drift = (seededRandom(i * 10.3) - 0.35) * 0.14;          // пряди чуть наматываются по спирали
+            const wob = seededRandom(i * 11.9) * 6.28, wobA = seededRandom(i * 12.7) * 0.012;
+            g.globalAlpha = (0.03 + seededRandom(i * 7.9) * 0.1) * Math.max(0.15, fade);
+            g.lineWidth = 0.6 + seededRandom(i * 8.3) * 2.2;
+            g.shadowBlur = 4 + seededRandom(i * 9.1) * 10;
+            g.strokeStyle = 'rgba(225, 238, 255, 1)';
+            g.beginPath();
+            // дуга, которая чуть «наматывается» по спирали: радиус растёт вместе с углом
+            for (let k = 0; k <= 24; k++) {
+                const t = k / 24, a = a0 + len * t, r = r0 * (1 + drift * t + wobA * Math.sin(wob + t * 9));
+                const x = half + Math.cos(a) * r * scale, y = half + Math.sin(a) * r * scale;
+                if (k === 0) g.moveTo(x, y); else g.lineTo(x, y);
+            }
+            g.stroke();
+        }
+        g.globalAlpha = 1; g.shadowBlur = 0;
+        // мягкое общее свечение кольца
+        const gr = g.createRadialGradient(half, half, bg.diskIn * scale * 0.7, half, half, NR * scale);
+        gr.addColorStop(0, 'rgba(160, 200, 255, 0)'); gr.addColorStop(0.15, 'rgba(160, 200, 255, 0.06)');
+        gr.addColorStop(0.5, 'rgba(160, 200, 255, 0.025)'); gr.addColorStop(1, 'rgba(160, 200, 255, 0)');
+        g.fillStyle = gr; g.fillRect(0, 0, S, S);
+        const tex = new THREE.CanvasTexture(c);
+        const mat = new THREE.ShaderMaterial({
+            uniforms: { uTex: { value: tex }, uAlpha: { value: bg.nebulaAlpha }, uCocoon: cocoon },
+            vertexShader: `
+                varying vec2 vUv; varying float vDepth;
+                void main() { vUv = uv; vec4 mv = modelViewMatrix * vec4(position, 1.0); vDepth = -mv.z; gl_Position = projectionMatrix * mv; }
+            `,
+            fragmentShader: `
+                uniform sampler2D uTex; uniform float uAlpha; uniform float uCocoon;
+                varying vec2 vUv; varying float vDepth;
+                void main() {
+                    vec4 t = texture2D(uTex, vUv);
+                    // туманность тоньше кокона: её дальняя часть видна, ближняя (перед фигурой) мягко гаснет
+                    float k = smoothstep(uCocoon - 3.0, uCocoon, vDepth);
+                    gl_FragColor = vec4(vec3(0.72, 0.84, 1.0), t.a * uAlpha * k);
+                }
+            `,
+            transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide
+        });
+        const mesh = new THREE.Mesh(new THREE.PlaneGeometry(NR * 2, NR * 2), mat);
+        mesh.rotation.x = -Math.PI / 2;
+        mesh.renderOrder = -2;
+        mesh.frustumCulled = false;
+        galaxy.add(mesh);
+        galaxy.userData.nebulaMat = mat;
+    })();
     // Звёздное небо: дальняя сфера вокруг фигуры — её дальняя половина (за коконом) закрывает весь кадр
     // позади фигуры, и сверху, и снизу; вращается медленнее диска (параллакс).
     const haloStars = starPoints(nHalo, (i) => {
@@ -175,9 +244,9 @@
         const geo = new THREE.BufferGeometry();
         const pos = new Float32Array(count * 3), seed = new Float32Array(count);
         for (let i = 0; i < count; i++) {
-            const u = seededRandom(i * 9.1 + 1) * Math.PI * 2;
             const high = seededRandom(i * 3.9 + 5) < bg.cloudHigh;   // немногие облака — выше диска
             const r = bg.diskIn + Math.sqrt(seededRandom(i * 6.7 + 2)) * (bg.diskOut - bg.diskIn);
+            const u = armAngle(r, Math.floor(seededRandom(i * 9.1 + 1) * bg.arms)) + gauss(i * 2.2 + 9) * bg.armSpread;   // облака — вдоль рукавов
             pos[i * 3] = Math.cos(u) * r;
             pos[i * 3 + 1] = high ? 1.5 + seededRandom(i * 4.3 + 3) * bg.haloHigh * 0.6 : (seededRandom(i * 4.3 + 3) - 0.5) * bg.diskThick * 2;
             pos[i * 3 + 2] = Math.sin(u) * r;
@@ -232,6 +301,7 @@
             const b = cfg.background, c = galaxy.userData.cloudMat.uniforms;
             [diskStars, haloStars].forEach(p => { p.material.uniforms.uSize.value = b.starSize; p.material.uniforms.uAlpha.value = b.starAlpha; });
             c.uSize.value = b.cloudSize; c.uAlpha.value = b.cloudAlpha;
+            galaxy.userData.nebulaMat.uniforms.uAlpha.value = b.nebulaAlpha;
             drawHud(Math.max(1, window.innerWidth), Math.max(1, window.innerHeight));
         }
     };
