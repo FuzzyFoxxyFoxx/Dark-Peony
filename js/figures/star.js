@@ -2,10 +2,10 @@
 // DARK PEONY — ФИГУРА «СВЕТИЛО» (планетарная система)
 // ==========================================
 // Части:
-//  • светило — два слоя сферы из точек (рядками, как купол медузы): по поверхности медленно плывут вспышки
-//    и грануляция, край светится (френель); второй слой не даёт центру «провалиться»;
-//  • корона — частицы непрерывно уходят от поверхности радиально (гуще — в лучах-стримерах), слегка
-//    изгибаются и гаснут вдали;
+//  • светило (референсы автора: сфера из светящихся прожилок, частицы по линиям тока, как у Квана) —
+//    частицы в оболочке стянуты на нулевую поверхность шумового поля (ветвящиеся прожилки) и текут вдоль
+//    них; второй слой — частицы на изолиниях плавного поля (линии тока); искры-узлы; светлое ядро;
+//  • лучи — тонкие полосы из частиц бегут от ядра наружу (длинные редкие, короткие частые);
 //  • протуберанцы — арки-петли над поверхностью, плазма течёт вдоль них, петли «дышат»;
 //  • орбиты — тонкие пунктирные эллипсы (небольшие наклоны), за планетой тянется светящийся след;
 //  • планеты — освещены светилом (день/ночь, френель), фактура: кратеры, континенты, полосы;
@@ -22,8 +22,12 @@
     const MULT = 3;                    // точек на узел сетки
     const STAR_SPIN = 0.05;            // вращение узора поверхности и короны, рад/с
 
-    const CORONA_COUNT = 220000;
-    const STREAMERS = 16;              // лучей короны
+    const VEIN_COUNT = 150000;         // частиц в прожилках (крупные + мелкие)
+    const FLOW_COUNT = 60000;          // частиц на линиях тока
+    const SPARK_COUNT = 2500;          // искр-узлов
+    const CORE_COUNT = 22000;          // ядро
+    const RAY_COUNT = 1400;            // лучей
+    const RAY_POINTS = 48;             // частиц в луче
     const LOOP_COUNT = 8;              // протуберанцев
     const LOOP_POINTS = 5000;
 
@@ -34,8 +38,11 @@
         { R: 2.45, incl: -0.14, node: 2.1, phase: 3.4, omega: 0.13,
           planet: { r: 0.2, tex: 'continents', spin: 0.3, seed: 4.7 },
           moon: { R: 0.38, incl: 0.3, node: 1.0, phase: 1.2, omega: 0.7, r: 0.055 } },
-        { R: 3.05, incl: 0.2, node: 4.2, phase: 5.3, omega: 0.085,
-          planet: { r: 0.17, tex: 'bands', spin: 0.35, seed: 7.9 } }
+        { R: 3.4, incl: 0.2, node: 4.2, phase: 5.3, omega: 0.075,
+          planet: { r: 0.17, tex: 'bands', spin: 0.35, seed: 7.9, ring: true } },
+        // крест-накрест с остальными: плоскость почти поперёк, ход — в обратную сторону
+        { R: 2.1, incl: 1.25, node: 0.9, phase: 2.2, omega: -0.16,
+          planet: { r: 0.12, tex: 'ice', spin: 0.3, seed: 12.4 } }
     ];
     const PLANET_AXIS_TILT = 0.4;
 
@@ -69,89 +76,145 @@
         }
     `;
 
-    // Светило: точки на сфере; вспышки и грануляция — шум, привязанный к вращающейся поверхности.
-    const starVertex = (G) => `
+    // Светило. Поле f(p, t) — шум на сфере, медленно живёт. Частица стягивается на уровень L поля
+    // (шаг Ньютона вдоль касательного градиента) и одновременно сдвигается вдоль линии уровня
+    // (касательная = p × ∇f — поток без «ям», как curl-шум у Квана), поэтому течёт по прожилке.
+    // Уровень 0 шумового поля на сфере — ветвящаяся сеть прожилок; уровни плавного поля — линии тока.
+    // aV: x — фаза, y — скорость потока, z — радиус оболочки (доля R), w — уровень L;
+    // aK: x — частота поля, y — толщина нити, z — яркость, w — искра (0/1).
+    const veinVertex = (G) => `
         ${commonPars}
         ${G.pointsVertex}
         uniform float uViewportScale, uSize;
-        attribute float aSizeScale, aLayer;
-        varying float vFresnel, vFlash, vGran, vLayer;
+        attribute vec4 aV, aK;
+        attribute float aSizeScale;
+        varying float vA, vFresnel, vSpark, vShell;
+        float dpVF(vec3 p, float F, float t) { return dpSnoise(p * F + vec3(t * 0.021, t * 0.033, -t * 0.017)); }
+        // значение и градиент (4 вызова шума)
+        vec4 dpVFG(vec3 p, float F, float t) {
+            const float e = 0.015;
+            float f = dpVF(p, F, t);
+            return vec4((dpVF(p + vec3(e, 0.0, 0.0), F, t) - f) / e, (dpVF(p + vec3(0.0, e, 0.0), F, t) - f) / e,
+                        (dpVF(p + vec3(0.0, 0.0, e), F, t) - f) / e, f);
+        }
         void main() {
             vec3 dpRest = position;
-            vec3 n = normalize(position);
             float a = uTime * ${STAR_SPIN.toFixed(3)};
-            vec3 q = vec3(n.x * cos(a) - n.z * sin(a), n.y, n.x * sin(a) + n.z * cos(a));   // поверхность вращается
-            float t = uTime;
-            // крупные вспышки: медленно всплывают и гаснут; мелкая грануляция «кипит»
-            float f = dpSnoise(q * 2.1 + vec3(0.0, t * 0.12, aLayer * 7.3)) * 0.7 + dpSnoise(q * 4.3 - vec3(t * 0.09, 0.0, 0.0)) * 0.3;
-            vFlash = smoothstep(0.1, 0.7, f);
-            vGran = 0.5 + 0.5 * dpSnoise(q * 11.0 + vec3(t * 0.35, aLayer * 3.1, 0.0));
-            vec3 pos = position * (1.0 + 0.012 * (vFlash - 0.3) + 0.006 * vGran);
+            vec3 p = normalize(position);
+            p = vec3(p.x * cos(a) - p.z * sin(a), p.y, p.x * sin(a) + p.z * cos(a));
+            float t = uTime, F = aK.x, L = aV.w;
+            float u = fract(aV.x + t * aV.y);
+            float ds = (u - 0.5) * 0.36 / 3.0;              // путь вдоль нити за цикл жизни частицы (рад)
+            vec3 gt = vec3(0.0);
+            float res = 0.0;
+            for (int i = 0; i < 3; i++) {
+                vec4 fg = dpVFG(p, F, t);
+                gt = fg.xyz - dot(fg.xyz, p) * p;
+                float gg = max(dot(gt, gt), 1e-3);
+                vec3 d = gt * ((fg.w - L) / gg);
+                float dl = length(d);
+                res = dl;
+                if (dl > 0.3) d *= 0.3 / dl;
+                vec3 T = normalize(cross(p, gt) + 1e-5);
+                p = normalize(p - d + T * ds);
+            }
+            // толщина нити: сдвиг поперёк (вдоль градиента)
+            p = normalize(p + normalize(gt + 1e-5) * (aSizeScale - 0.5) * 2.0 * aK.y);
+            vec3 pos = p * aV.z * uStarR;
             vec4 mv = viewMatrix * dpMorph(dpRest, pos);
             gl_Position = projectionMatrix * mv;
             float dist = max(-mv.z, 0.1);
             ${depthVert}
-            vFresnel = pow(clamp(1.0 - abs(dot(normalize(normalMatrix * n), normalize(-mv.xyz))), 0.0, 1.0), 1.5);
-            vLayer = aLayer;
-            gl_PointSize = uSize * uViewportScale * (0.7 + aSizeScale * 0.5) * (1.0 + 0.4 * vFlash) / (0.35 + 0.06 * dist);
+            vFresnel = pow(clamp(1.0 - abs(dot(normalize(normalMatrix * p), normalize(-mv.xyz))), 0.0, 1.0), 1.5);
+            float tw = 0.5 + 0.5 * sin(t * (1.3 + 2.7 * fract(aV.x * 13.7)) + aV.x * 41.0);
+            vSpark = aK.w * tw * tw;
+            vShell = aV.z;
+            vA = aK.z * pow(sin(3.14159265 * u), 0.6) * exp(-res * res / 0.0012);   // не севшие на нить — гаснут (тёмные промежутки)
+            gl_PointSize = uSize * uViewportScale * (0.6 + 0.5 * aSizeScale) * (1.0 + 3.5 * vSpark) / (0.35 + 0.06 * dist);
             dpMorphFinish();
         }
     `;
-    const starFragment = (G) => `
+    const veinFragment = (G) => `
         ${G.pointsFragment}
         uniform sampler2D uTexture;
-        varying float vFresnel, vFlash, vGran, vLayer, vDepthK;
+        varying float vA, vFresnel, vSpark, vShell, vDepthK;
         void main() {
             vec4 tex = texture2D(uTexture, gl_PointCoord);
             if (tex.a < 0.01) discard;
-            // лицевая сторона не проваливается: базовая видимость + вспышки + грануляция; край — френель
-            float a = tex.a * (0.2 + 0.14 * vGran + 0.9 * vFlash + 0.5 * vFresnel) * (vLayer > 0.5 ? 0.8 : 1.0);
-            vec3 color = mix(vec3(0.3, 0.52, 0.8), vec3(0.8, 0.92, 1.0), 0.35 + 0.5 * vFresnel + 0.2 * vGran);
-            color = mix(color, vec3(0.97, 0.99, 1.0), vFlash * 0.8);
-            a = a / (0.45 + a * 2.0) * vDepthK;
+            float a = tex.a * vA * 1.4 * (0.6 + 0.6 * vFresnel) * mix(0.55, 1.0, smoothstep(0.8, 1.0, vShell)) + tex.a * vSpark * 2.0;
+            vec3 color = mix(vec3(0.5, 0.7, 1.0), vec3(0.9, 0.96, 1.0), 0.4 + 0.4 * vFresnel + vSpark);
+            a = a / (0.5 + a * 1.2) * vDepthK;
             gl_FragColor = dpMorphColor(color, a, tex.a);
         }
     `;
 
-    // Корона: частица бежит от поверхности наружу (u 0 → 1) и гаснет; по кругу — снова у поверхности.
-    // aC: x — фаза, y — скорость, z — длина пути, w — изгиб.
-    const coronaVertex = (G) => `
+    // Ядро: светлая сердцевина — частицы в объёме, гуще к центру, мерцают.
+    const coreVertex = (G) => `
         ${commonPars}
         ${G.pointsVertex}
         uniform float uViewportScale, uSize;
-        attribute vec4 aC;
         attribute float aSizeScale;
+        varying float vA;
+        void main() {
+            vec3 dpRest = position;
+            vec4 mv = viewMatrix * dpMorph(dpRest, position);
+            gl_Position = projectionMatrix * mv;
+            float dist = max(-mv.z, 0.1);
+            ${depthVert}
+            // редкие крупные мягкие точки дают свечение, мелкие — искристую сердцевину
+            float big = step(0.94, aSizeScale);
+            vA = (0.55 + mix(0.45, 0.12, big) * sin(uTime * (0.8 + 1.5 * aSizeScale) + aSizeScale * 60.0)) * mix(1.0, 0.35, big)
+               * (1.0 - smoothstep(0.2, 0.85, length(position) / uStarR));
+            gl_PointSize = uSize * uViewportScale * (0.6 + 0.8 * aSizeScale) * (1.0 + 14.0 * big) / (0.35 + 0.06 * dist);
+            dpMorphFinish();
+        }
+    `;
+    const coreFragment = (G) => `
+        ${G.pointsFragment}
+        uniform sampler2D uTexture;
+        varying float vA, vDepthK;
+        void main() {
+            vec4 tex = texture2D(uTexture, gl_PointCoord);
+            if (tex.a < 0.01) discard;
+            gl_FragColor = dpMorphColor(vec3(0.92, 0.97, 1.0), tex.a * vA * 0.22 * vDepthK, tex.a);
+        }
+    `;
+
+    // Луч: полоса из RAY_POINTS частиц на одном направлении; все частицы луча бегут наружу вместе
+    // (фазы подряд) — видна тонкая черта, уходящая от ядра. aR: x — фаза, y — скорость, z — длина пути,
+    // w — яркость; aI — место частицы в черте (0 — хвост, 1 — голова).
+    const rayVertex = (G) => `
+        ${commonPars}
+        ${G.pointsVertex}
+        uniform float uViewportScale, uSize;
+        attribute vec4 aR;
+        attribute float aI;
         varying float vA;
         void main() {
             vec3 dpRest = position;
             vec3 d0 = normalize(position);
             float a = uTime * ${STAR_SPIN.toFixed(3)};
             vec3 d = vec3(d0.x * cos(a) - d0.z * sin(a), d0.y, d0.x * sin(a) + d0.z * cos(a));
-            float u = fract(aC.x + uTime * aC.y);
-            // изгиб: плавное поле, одинаковое для соседей — лучи колышутся, а не рассыпаются
-            vec3 np = d * 1.6 + vec3(0.0, uTime * 0.05, 0.0);
-            vec3 defl = vec3(dpSnoise(np), dpSnoise(np + vec3(5.2, 1.3, 2.8)), dpSnoise(np + vec3(9.1, 4.7, 7.3)));
-            d = normalize(d + defl * aC.w * u);
-            vec3 pos = d * (uStarR * 1.01 + pow(u, 1.25) * aC.z);
+            float u = fract(aR.x + uTime * aR.y);
+            float r = uStarR * (0.35 + (u * 1.15 + aI * 0.22) * aR.z);
+            vec3 pos = d * r;
             vec4 mv = viewMatrix * dpMorph(dpRest, pos);
             gl_Position = projectionMatrix * mv;
             float dist = max(-mv.z, 0.1);
             ${depthVert}
-            vA = smoothstep(0.0, 0.06, u) * pow(1.0 - u, 1.6) * dpBehindStar(mv.xyz);
-            gl_PointSize = uSize * uViewportScale * (0.6 + aSizeScale * 0.6) / (0.4 + 0.06 * dist);
+            vA = aR.w * sin(3.14159265 * u) * (0.3 + 0.7 * aI) * smoothstep(0.6, 1.0, r / uStarR);
+            gl_PointSize = uSize * uViewportScale * (0.85 / (0.4 + 0.06 * dist));
             dpMorphFinish();
         }
     `;
-    const coronaFragment = (G) => `
+    const rayFragment = (G) => `
         ${G.pointsFragment}
         uniform sampler2D uTexture;
-        uniform float uAlpha;
         varying float vA, vDepthK;
         void main() {
             vec4 tex = texture2D(uTexture, gl_PointCoord);
             if (tex.a < 0.01) discard;
-            float a = tex.a * vA * uAlpha * vDepthK;
-            gl_FragColor = dpMorphColor(mix(vec3(0.45, 0.66, 0.95), vec3(0.85, 0.94, 1.0), vA), a, tex.a);
+            gl_FragColor = dpMorphColor(vec3(0.85, 0.94, 1.0), tex.a * vA * 1.4 * vDepthK, tex.a);
         }
     `;
 
@@ -247,6 +310,7 @@
         uniform vec4 uOrbit2;            // x — угловая скорость, y — вращение вокруг оси
         uniform vec4 uParent;            // орбита родителя (для спутника): R, наклон, узел, фаза
         uniform float uParentOmega;      // скорость родителя; < 0 — родителя нет
+        uniform float uBodyR;            // радиус тела (для кольца: что закрыто планетой и что в её тени)
         vec3 dpBodyCenter(float t) {
             vec3 c = dpOrbitPos(uOrbit.x, uOrbit.y, uOrbit.z, uOrbit.w + uOrbit2.x * t);
             if (uParentOmega >= 0.0) c += dpOrbitPos(uParent.x, uParent.y, uParent.z, uParent.w + uParentOmega * t);
@@ -284,8 +348,19 @@
             float facing = dot(normalize(normalMatrix * n), normalize(-mv.xyz));
             vFresnel = pow(clamp(1.0 - abs(facing), 0.0, 1.0), 1.4);
             vTex = aTex;
-            // тело непрозрачное: задняя половина не видна (иначе фактура двух сторон смешивается в кашу)
-            vDepthK *= dpBehindStar(mv.xyz) * smoothstep(-0.08, 0.15, facing);
+            if (aTex.y > 1.5) {
+                // кольцо: видно целиком, кроме части за диском планеты; освещено, если не в тени планеты
+                vec3 cv = (viewMatrix * modelMatrix * vec4(c, 1.0)).xyz;
+                float behind = step(mv.z, cv.z) * (1.0 - smoothstep(uBodyR * 0.95, uBodyR * 1.05, length(mv.xy * (cv.z / mv.z) - cv.xy)));
+                vec3 toStar = normalize(-c);
+                float shadow = step(0.0, -dot(l, toStar)) * (1.0 - smoothstep(uBodyR * 0.9, uBodyR * 1.1, length(l - dot(l, toStar) * toStar)));
+                vDay = 1.0 - 0.85 * shadow;
+                vFresnel = 0.0;
+                vDepthK *= dpBehindStar(mv.xyz) * (1.0 - behind);
+            } else {
+                // тело непрозрачное: задняя половина не видна (иначе фактура двух сторон смешивается в кашу)
+                vDepthK *= dpBehindStar(mv.xyz) * smoothstep(-0.08, 0.15, facing);
+            }
             gl_PointSize = uSize * uViewportScale * (0.7 + aSizeScale * 0.5) / (0.35 + 0.06 * dist);
             dpMorphFinish();
         }
@@ -299,6 +374,11 @@
             vec4 tex = texture2D(uTexture, gl_PointCoord);
             if (tex.a < 0.01) discard;
             // ночная сторона тусклее, но фактура читается всегда (иначе планета перед светилом — пустой круг)
+            if (vTex.y > 1.5) {                       // кольцо: тонкие полосы, тусклее планеты
+                float ar = tex.a * vTex.x * (0.25 + 0.75 * vDay) * 0.55 * vDepthK;
+                gl_FragColor = dpMorphColor(vec3(0.75, 0.88, 1.0), ar, tex.a);
+                return;
+            }
             float lit = 0.42 + 0.58 * vDay;
             float a = tex.a * (lit * (0.02 + 0.8 * pow(vTex.x, 1.5) + 1.0 * vTex.y) + 0.3 * vFresnel * (0.3 + 0.7 * vDay));
             vec3 color = mix(vec3(0.25, 0.45, 0.75), vec3(0.85, 0.94, 1.0), 0.3 + 0.5 * vTex.x * vDay + 0.4 * vFresnel);
@@ -373,6 +453,11 @@
             const coast = Math.exp(-Math.pow((n - 0.53) / 0.025, 2));
             return [land, coast];                                  // океан почти прозрачный — читаются материки
         }
+        if (kind === 'ice') {                           // лёд: светлая корка с сетью трещин
+            const n = fbm3(x * 3 + seed, y * 3, z * 3, 4);
+            const crack = Math.exp(-Math.pow((n - 0.5) / 0.02, 2));
+            return [0.45 + 0.3 * fbm3(x * 6, y * 6 + seed, z * 6, 2), crack];
+        }
         const w = fbm3(x * 2.5 + seed, y * 1.2, z * 2.5, 3);
         const b = 0.5 + 0.5 * Math.sin(y * 9 + w * 5 + seed);
         return [Math.pow(b, 2), Math.pow(b, 8) * 0.7];
@@ -397,47 +482,69 @@
     function buildGeometry(tier) {
         const q = Math.pow(tier.petalSegments / 100, 2) * tier.petalMultiplier / 3;   // плотность относительно high
 
-        // ---------- СВЕТИЛО: два слоя ----------
-        const sp = [], sl = [], ss = [];
-        [[STAR_R, 0], [STAR_R * 0.95, 1]].forEach(([R, layer]) => spherePoints(R, q * (layer ? 0.8 : 1), (x, y, z, r) => {
-            sp.push(x * R, y * R, z * R); sl.push(layer); ss.push(r);
-        }));
-        const starGeo = new THREE.BufferGeometry();
-        starGeo.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3));
-        starGeo.setAttribute('aLayer', new THREE.Float32BufferAttribute(sl, 1));
-        starGeo.setAttribute('aSizeScale', new THREE.Float32BufferAttribute(ss, 1));
-
-        // ---------- КОРОНА ----------
-        const streamers = [];
-        for (let k = 0; k < STREAMERS; k++) streamers.push({ d: randomDir(k * 5.3 + 2), w: 0.08 + seededRandom(k * 3.1) * 0.14, len: 1.3 + seededRandom(k * 7.7) * 1.3 });
-        const nC = Math.round(CORONA_COUNT * q);
-        const cp = new Float32Array(nC * 3), cc = new Float32Array(nC * 4), cs = new Float32Array(nC);
-        const tmp = new THREE.Vector3();
-        for (let i = 0; i < nC; i++) {
-            let d, len;
-            if (seededRandom(i * 1.31 + 5) < 0.55) {     // в луче: разброс вокруг оси луча
-                const S = streamers[Math.floor(seededRandom(i * 2.07 + 6) * STREAMERS)];
-                const t1 = new THREE.Vector3().crossVectors(S.d, Math.abs(S.d.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0)).normalize();
-                const t2 = new THREE.Vector3().crossVectors(S.d, t1);
-                d = S.d.clone().addScaledVector(t1, gauss(i * 3.3 + 7) * S.w).addScaledVector(t2, gauss(i * 4.1 + 8) * S.w).normalize();
-                len = S.len * (0.6 + 0.6 * seededRandom(i * 5.7 + 9));
-            } else {
-                d = randomDir(i * 6.3 + 10);
-                len = 0.45 + 0.65 * seededRandom(i * 7.1 + 11);
-            }
-            const u0 = seededRandom(i * 8.9 + 12);
-            tmp.copy(d).multiplyScalar(STAR_R * 1.01 + Math.pow(u0, 1.25) * len);
-            cp[i * 3] = tmp.x; cp[i * 3 + 1] = tmp.y; cp[i * 3 + 2] = tmp.z;
-            cc[i * 4] = u0;
-            cc[i * 4 + 1] = (0.08 + 0.08 * seededRandom(i * 9.7 + 13)) * (1.2 / (len + 0.3));   // путь ≈ 6–12 с
-            cc[i * 4 + 2] = len;
-            cc[i * 4 + 3] = 0.15 + 0.3 * seededRandom(i * 10.3 + 14);
-            cs[i] = seededRandom(i * 11.9 + 15);
+        // ---------- СВЕТИЛО: прожилки, линии тока, искры ----------
+        // Положение в покое — случайная точка оболочки (шейдер стягивает её на нить); для раскладки морфинга
+        // этого достаточно: частица уходит с видимого места (cur), а садится на нить за последние доли секунды.
+        const nV = Math.round(VEIN_COUNT * q), nF = Math.round(FLOW_COUNT * q), nS = Math.round(SPARK_COUNT * q);
+        const nAll = nV + nF + nS;
+        const vp = new Float32Array(nAll * 3), va = new Float32Array(nAll * 4), vk = new Float32Array(nAll * 4), vs = new Float32Array(nAll);
+        for (let i = 0; i < nAll; i++) {
+            const kind = i < nV ? 0 : i < nV + nF ? 1 : 2;       // 0 — прожилка, 1 — линия тока, 2 — искра
+            const d = randomDir(i * 1.91 + 101);
+            const major = seededRandom(i * 2.33 + 102) < 0.62;    // крупные прожилки / мелкие ветки
+            // оболочка: в основном у поверхности, часть — глубже (объём, тусклее)
+            const shell = kind === 1 ? 0.97 + 0.03 * seededRandom(i * 3.1 + 103)
+                : 1 - Math.pow(seededRandom(i * 3.7 + 104), 3) * 0.4;
+            const lv = kind === 1 ? Math.round((seededRandom(i * 4.3 + 105) - 0.5) * 12) / 10 : 0;
+            vp[i * 3] = d.x * shell * STAR_R; vp[i * 3 + 1] = d.y * shell * STAR_R; vp[i * 3 + 2] = d.z * shell * STAR_R;
+            va[i * 4] = seededRandom(i * 5.9 + 106);
+            va[i * 4 + 1] = 0.08 + 0.07 * seededRandom(i * 6.7 + 107);
+            va[i * 4 + 2] = shell; va[i * 4 + 3] = lv;
+            vk[i * 4] = kind === 1 ? 1.1 : (major ? 1.7 : 3.4);
+            vk[i * 4 + 1] = kind === 1 ? 0.004 : (major ? 0.012 : 0.006);
+            vk[i * 4 + 2] = kind === 1 ? 0.35 : (major ? 1.0 : 0.6);
+            vk[i * 4 + 3] = kind === 2 ? 1 : 0;
+            vs[i] = seededRandom(i * 7.3 + 108);
         }
-        const coronaGeo = new THREE.BufferGeometry();
-        coronaGeo.setAttribute('position', new THREE.BufferAttribute(cp, 3));
-        coronaGeo.setAttribute('aC', new THREE.BufferAttribute(cc, 4));
-        coronaGeo.setAttribute('aSizeScale', new THREE.BufferAttribute(cs, 1));
+        const veinGeo = new THREE.BufferGeometry();
+        veinGeo.setAttribute('position', new THREE.BufferAttribute(vp, 3));
+        veinGeo.setAttribute('aV', new THREE.BufferAttribute(va, 4));
+        veinGeo.setAttribute('aK', new THREE.BufferAttribute(vk, 4));
+        veinGeo.setAttribute('aSizeScale', new THREE.BufferAttribute(vs, 1));
+
+        // ---------- ЯДРО ----------
+        const nCore = Math.round(CORE_COUNT * q);
+        const cp = new Float32Array(nCore * 3), cs = new Float32Array(nCore);
+        for (let i = 0; i < nCore; i++) {
+            const d = randomDir(i * 2.71 + 201), r = STAR_R * 0.85 * Math.pow(seededRandom(i * 3.13 + 202), 1.7);
+            cp[i * 3] = d.x * r; cp[i * 3 + 1] = d.y * r; cp[i * 3 + 2] = d.z * r;
+            cs[i] = seededRandom(i * 4.7 + 203);
+        }
+        const coreGeo = new THREE.BufferGeometry();
+        coreGeo.setAttribute('position', new THREE.BufferAttribute(cp, 3));
+        coreGeo.setAttribute('aSizeScale', new THREE.BufferAttribute(cs, 1));
+
+        // ---------- ЛУЧИ ----------
+        const nR = Math.round(RAY_COUNT * Math.sqrt(q)), nRP = nR * RAY_POINTS;
+        const rp = new Float32Array(nRP * 3), ra = new Float32Array(nRP * 4), ri = new Float32Array(nRP);
+        for (let k = 0; k < nR; k++) {
+            const d = randomDir(k * 3.77 + 301);
+            const long = seededRandom(k * 1.37 + 302) < 0.12;       // редкие длинные яркие лучи
+            const len = long ? 1.6 + seededRandom(k * 2.9 + 303) * 1.4 : 0.5 + seededRandom(k * 2.9 + 303) * 0.7;
+            const ph = seededRandom(k * 4.1 + 304), sp = (0.05 + 0.06 * seededRandom(k * 5.3 + 305)) / (0.4 + len * 0.3);
+            const br = long ? 0.7 + 0.3 * seededRandom(k * 6.1 + 306) : 0.2 + 0.3 * seededRandom(k * 6.1 + 306);
+            for (let j = 0; j < RAY_POINTS; j++) {
+                const i = k * RAY_POINTS + j, aI = j / (RAY_POINTS - 1);
+                const r = STAR_R * (0.35 + (ph * 1.15 + aI * 0.22) * len);
+                rp[i * 3] = d.x * r; rp[i * 3 + 1] = d.y * r; rp[i * 3 + 2] = d.z * r;
+                ra[i * 4] = ph; ra[i * 4 + 1] = sp; ra[i * 4 + 2] = len; ra[i * 4 + 3] = br;
+                ri[i] = aI;
+            }
+        }
+        const rayGeo = new THREE.BufferGeometry();
+        rayGeo.setAttribute('position', new THREE.BufferAttribute(rp, 3));
+        rayGeo.setAttribute('aR', new THREE.BufferAttribute(ra, 4));
+        rayGeo.setAttribute('aI', new THREE.BufferAttribute(ri, 1));
 
         // ---------- ПРОТУБЕРАНЦЫ ----------
         const nL = Math.round(LOOP_POINTS * q);
@@ -487,7 +594,7 @@
 
         // ---------- ПЛАНЕТЫ И СПУТНИК ----------
         const bodies = [];
-        const makeBody = (r, kind, seed, center, orbit, parent) => {
+        const makeBody = (r, kind, seed, center, orbit, parent, ring) => {
             const craters = [];
             if (kind === 'craters') for (let k = 0; k < 26; k++) { const d = randomDir(seed * 31 + k * 2.9); craters.push([d.x, d.y, d.z, 0.12 + Math.pow(seededRandom(seed * 17 + k), 2) * 0.35]); }
             const P = [], L = [], T = [], S = [];
@@ -497,6 +604,19 @@
                 P.push(center[0] + w[0], center[1] + w[1], center[2] + w[2]);
                 L.push(l[0], l[1], l[2]); T.push(tx[0], tx[1]); S.push(rs);
             });
+            if (ring) {
+                // кольцо, как у Сатурна: плоскость экватора планеты, несколько полос с щелями
+                const nRing = Math.round(26000 * q);
+                for (let i = 0; i < nRing; i++) {
+                    let rr, band, k = 0;
+                    do { k++; rr = r * (1.45 + seededRandom(i * 1.7 + k * 0.37 + seed) * 1.05); const x = rr / r; band = 0.5 + 0.25 * Math.sin(x * 23 + seed) + 0.15 * Math.sin(x * 61 + seed * 2) + 0.1 * Math.sin(x * 137); }
+                    while (k < 20 && (seededRandom(i * 2.3 + k * 0.53 + seed * 3) > band || (rr > r * 2.02 && rr < r * 2.1)));   // полосы и щель Кассини
+                    const a = seededRandom(i * 3.9 + seed * 5) * Math.PI * 2;
+                    const l = [Math.cos(a) * rr, (seededRandom(i * 4.7) - 0.5) * r * 0.012, Math.sin(a) * rr], w = bodyLocal(l);
+                    P.push(center[0] + w[0], center[1] + w[1], center[2] + w[2]);
+                    L.push(l[0], l[1], l[2]); T.push(band, 2); S.push(seededRandom(i * 5.1));
+                }
+            }
             const geo = new THREE.BufferGeometry();
             geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
             geo.setAttribute('aLocal', new THREE.Float32BufferAttribute(L, 3));
@@ -507,7 +627,7 @@
         };
         ORBITS.forEach((O) => {
             const c = orbitPos(O.R, O.incl, O.node, O.phase);
-            makeBody(O.planet.r, O.planet.tex, O.planet.seed, c, { R: O.R, incl: O.incl, node: O.node, phase: O.phase, omega: O.omega, spin: O.planet.spin }, null);
+            makeBody(O.planet.r, O.planet.tex, O.planet.seed, c, { R: O.R, incl: O.incl, node: O.node, phase: O.phase, omega: O.omega, spin: O.planet.spin }, null, O.planet.ring);
             if (O.moon) {
                 const M = O.moon, m = orbitPos(M.R, M.incl, M.node, M.phase);
                 makeBody(M.r, 'plain', 11.1, [c[0] + m[0], c[1] + m[1], c[2] + m[2]],
@@ -517,7 +637,7 @@
 
         const starMesh = new THREE.SphereGeometry(STAR_R, 64, 48);
         const rootMatrix = new THREE.Matrix4().makeTranslation(0, FIG_Y_OFFSET, 0);
-        const data = { starGeo, coronaGeo, loopGeo, orbits, bodies, starMesh, rootMatrix };
+        const data = { veinGeo, coreGeo, rayGeo, loopGeo, orbits, bodies, starMesh, rootMatrix };
         assignOrderAndLayout(data);
         return data;
     }
@@ -528,7 +648,7 @@
     function assignOrderAndLayout(data) {
         const v = new THREE.Vector3();
         const dist = (x, y, z) => Math.hypot(x, y, z) + ORDER_NOISE * (Math.sin(x * 1.7 + y * 0.9) * Math.sin(z * 1.9 - y * 1.3) + 0.5 * Math.sin(x * 3.1 - z * 2.7 + y * 2.3));
-        const pointGeos = [data.starGeo, data.coronaGeo, data.loopGeo].concat(data.orbits.map(o => o.geo), data.bodies.map(b => b.geo));
+        const pointGeos = [data.veinGeo, data.coreGeo, data.rayGeo, data.loopGeo].concat(data.orbits.map(o => o.geo), data.bodies.map(b => b.geo));
         const meshGeos = [data.starMesh].concat(data.bodies.map(b => b.meshGeo));
         let dMin = Infinity, dMax = -Infinity;
         pointGeos.forEach(g => { const p = g.attributes.position; for (let i = 0; i < p.count; i++) { const d = dist(p.getX(i), p.getY(i), p.getZ(i)); if (d < dMin) dMin = d; if (d > dMax) dMax = d; } });
@@ -570,15 +690,17 @@
             uniforms: Object.assign({}, common, extra, morphUniforms), vertexShader: vs(G), fragmentShader: fs(G)
         })));
 
-        const star = pts(starVertex, starFragment, { uSize: { value: 2.2 } });
-        const corona = pts(coronaVertex, coronaFragment, { uSize: { value: 2.0 }, uAlpha: { value: 1.4 } });
+        const veins = pts(veinVertex, veinFragment, { uSize: { value: 1.7 } });
+        const core = pts(coreVertex, coreFragment, { uSize: { value: 2.2 } });
+        const rays = pts(rayVertex, rayFragment, { uSize: { value: 1.6 } });
         const loops = pts(loopVertex, loopFragment, { uSize: { value: 2.0 } });
         const orbits = data.orbits.map(o => pts(orbitVertex, orbitFragment, { uSize: { value: 2.0 }, uPlanet: { value: new THREE.Vector4(o.O.phase, o.O.omega, 0, 0) } }));
         const bodyUniforms = (b) => ({
             uOrbit: { value: new THREE.Vector4(b.orbit.R, b.orbit.incl, b.orbit.node, b.orbit.phase) },
             uOrbit2: { value: new THREE.Vector4(b.orbit.omega, b.orbit.spin, 0, 0) },
             uParent: { value: b.parent ? new THREE.Vector4(b.parent.R, b.parent.incl, b.parent.node, b.parent.phase) : new THREE.Vector4() },
-            uParentOmega: { value: b.parent ? b.parent.omega : -1 }
+            uParentOmega: { value: b.parent ? b.parent.omega : -1 },
+            uBodyR: { value: b.r }
         });
         const bodies = data.bodies.map(b => pts(bodyVertex, bodyFragment, Object.assign({ uSize: { value: 1.9 } }, bodyUniforms(b))));
 
@@ -612,7 +734,7 @@
             fragmentShader: meshFrag, transparent: true, depthWrite: false
         })));
 
-        return { list, star, corona, loops, orbits, bodies, starMesh, bodyMeshes };
+        return { list, veins, core, rays, loops, orbits, bodies, starMesh, bodyMeshes };
     }
 
     // ==========================================
@@ -634,8 +756,9 @@
 
             meshRoot.add(new THREE.Mesh(data.starMesh, mats.starMesh));
             data.bodies.forEach((b, i) => meshRoot.add(new THREE.Mesh(b.meshGeo, mats.bodyMeshes[i])));
-            pointsRoot.add(new THREE.Points(data.starGeo, mats.star));
-            pointsRoot.add(new THREE.Points(data.coronaGeo, mats.corona));
+            pointsRoot.add(new THREE.Points(data.coreGeo, mats.core));
+            pointsRoot.add(new THREE.Points(data.veinGeo, mats.veins));
+            pointsRoot.add(new THREE.Points(data.rayGeo, mats.rays));
             pointsRoot.add(new THREE.Points(data.loopGeo, mats.loops));
             data.orbits.forEach((o, i) => pointsRoot.add(new THREE.Points(o.geo, mats.orbits[i])));
             data.bodies.forEach((b, i) => pointsRoot.add(new THREE.Points(b.geo, mats.bodies[i])));
