@@ -641,7 +641,7 @@
             if (tex.a < 0.01) discard;
             // ночная сторона тусклее, но фактура читается всегда (иначе планета перед светилом — пустой круг)
             if (vTex.y > 1.5) {                       // кольцо: тонкие полосы, тусклее планеты
-                float ar = tex.a * vTex.x * (0.25 + 0.75 * vDay) * 0.55 * vDepthK;
+                float ar = tex.a * vTex.x * (0.25 + 0.75 * vDay) * 0.65 * vDepthK;
                 gl_FragColor = dpMorphColor(vec3(0.75, 0.88, 1.0), ar, tex.a);
                 return;
             }
@@ -728,7 +728,7 @@
         }
         const w = fbm3(x * 2.5 + seed, y * 1.2, z * 2.5, 3);
         const b = 0.5 + 0.5 * Math.sin(y * 9 + w * 5 + seed);
-        return [Math.pow(b, 2), Math.pow(b, 8) * 0.7];
+        return [0.32 + 0.5 * Math.pow(b, 2), Math.pow(b, 8) * 0.25];   // тёмные полосы проглядывают, светлые — мягче
     }
 
     // Протуберанец в покое (= dpLoop).
@@ -907,16 +907,30 @@
                 L.push(l[0], l[1], l[2]); T.push(tx[0], tx[1]); S.push(rs);
             });
             if (ring) {
-                // кольцо, как у Сатурна: плоскость экватора планеты, несколько полос с щелями
-                const nRing = Math.round(26000 * q);
-                for (let i = 0; i < nRing; i++) {
-                    let rr, band, k = 0;
-                    do { k++; rr = r * (1.45 + seededRandom(i * 1.7 + k * 0.37 + seed) * 1.05); const x = rr / r; band = 0.5 + 0.25 * Math.sin(x * 23 + seed) + 0.15 * Math.sin(x * 61 + seed * 2) + 0.1 * Math.sin(x * 137); }
-                    while (k < 20 && (seededRandom(i * 2.3 + k * 0.53 + seed * 3) > band || (rr > r * 2.02 && rr < r * 2.1)));   // полосы и щель Кассини
-                    const a = seededRandom(i * 3.9 + seed * 5) * Math.PI * 2;
-                    const l = [Math.cos(a) * rr, (seededRandom(i * 4.7) - 0.5) * r * 0.012, Math.sin(a) * rr], w = bodyLocal(l);
-                    P.push(center[0] + w[0], center[1] + w[1], center[2] + w[2]);
-                    L.push(l[0], l[1], l[2]); T.push(band, 2); S.push(seededRandom(i * 5.1));
+                // Кольцо — рядками-окружностями, как ядро светила: бороздки; яркость рядков неровная (несколько
+                // частот + случайный разброс), щели разной ширины, лёгкая неоднородность по кругу, почти без толщины.
+                const r0 = r * 1.38, r1 = r * 2.45, hr = 0.0036 / Math.sqrt(q), hc = 0.0032 / Math.sqrt(q);
+                const nRow = Math.round((r1 - r0) / hr);
+                for (let i = 0; i <= nRow; i++) {
+                    const u = i / nRow;
+                    let b = 0.55 + 0.2 * Math.sin(u * 23 + seed) + 0.12 * Math.sin(u * 57 + seed * 2.3) + 0.08 * Math.sin(u * 131 + 1.7)
+                          + (seededRandom(seed * 7 + i * 1.31) - 0.5) * 0.45;
+                    if (u > 0.58 && u < 0.64) b *= 0.05;                               // крупная щель
+                    if (u > 0.86 && u < 0.875) b *= 0.15;                              // узкая щель
+                    if (seededRandom(seed * 3 + i * 2.17) < 0.08) b *= 0.2;            // случайные тонкие щели
+                    b *= Math.pow(Math.sin(Math.PI * Math.min(1, u * 1.05)), 0.35) * (1 - 0.35 * u);   // края мягче, к внешнему краю тусклее
+                    if (b < 0.03) continue;
+                    const rr0 = r0 + (r1 - r0) * u, n = Math.round(2 * Math.PI * rr0 / hc);
+                    for (let j = 0; j < n; j++) {
+                        const sd = seed * 1e4 + i * 997 + j;
+                        if (seededRandom(sd * 0.29) < 0.15) continue;                  // не сплошная линия
+                        const a = (j + (seededRandom(sd * 0.53) - 0.5) * 0.8) / n * Math.PI * 2;
+                        const rr = rr0 + (seededRandom(sd * 0.37) - 0.5) * 0.3 * hr;
+                        const az = 0.82 + 0.18 * Math.sin(a * 3 + i * 0.21 + seed) * Math.sin(a * 5 - seed);   // неоднородность по кругу
+                        const l = [Math.cos(a) * rr, (seededRandom(sd * 0.71) - 0.5) * r * 0.01, Math.sin(a) * rr], w = bodyLocal(l);
+                        P.push(center[0] + w[0], center[1] + w[1], center[2] + w[2]);
+                        L.push(l[0], l[1], l[2]); T.push(Math.min(1.2, b * az), 2); S.push(seededRandom(sd * 0.91));
+                    }
                 }
             }
             const geo = new THREE.BufferGeometry();
