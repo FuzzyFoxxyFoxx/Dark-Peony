@@ -56,13 +56,28 @@
     // анимация и морфинг не «перепрыгивают» вперёд.
     const MAX_DT = 1 / 15;
     let time = 0;
+
+    // Вращение фигуры при морфинге (поверх обычного медленного вращения сцены): в начале фигура плавно
+    // раскручивается в сторону вихря, в конце докручивается по инерции и плавно замирает.
+    // Сторона та же, что у вихря и у обычного вращения (угол вокруг Y растёт).
+    let spinT = -1, spinD = 0, spinAngle = 0;
+    orchestrator.on('morphstart', (e) => { spinT = 0; spinD = e.duration; });
+    function spinStep(dt) {
+        if (spinT < 0) return;
+        const c = cfg.morph.figureSpin, U = DP.util;
+        spinT += dt;
+        const w = c.max * U.smoothstep(0, c.rise, spinT) * (1 - U.smoothstep(c.fallStart * spinD, spinD + c.fallEnd, spinT));
+        spinAngle += w * dt;
+        if (spinT > spinD + c.fallEnd) spinT = -1;
+    }
     let last = null;
     const manual = DP.params.has('manual'); // для автотестов: время двигает DP.debug.step()
 
     function tick(dt, draw = true) {
         time += dt;
         DP.shared.uTime.value = time;
-        DP.stage.figureStage.rotation.y = time * cfg.stageRotationSpeed;
+        spinStep(dt);
+        DP.stage.figureStage.rotation.y = time * cfg.stageRotationSpeed + spinAngle;
         orchestrator.update(time, dt);
         if (draw) DP.stage.render(dt);
     }
