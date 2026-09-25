@@ -394,6 +394,9 @@
     })();
     DP.background = {
         galaxy, halo,
+        // Фон (галактика, звёзды, облака) можно спрятать — чтобы рассматривать фигуру (?bg=0, кнопка на панели ?tune).
+        get visible() { return galaxy.visible; },
+        setVisible(v) { galaxyTilt.visible = halo.visible = galaxy.visible = !!v; },
         // Применить значения из DP.config.background / hud на ходу (панель ?tune).
         sync() {
             const b = cfg.background, c = galaxy.userData.cloudMat.uniforms;
@@ -404,6 +407,7 @@
             drawHud(Math.max(1, window.innerWidth), Math.max(1, window.innerHeight));
         }
     };
+    if (DP.params.get('bg') === '0') DP.background.setVisible(false);
     // Кокон — по центру фигур: всё фоновое, что ближе к камере, чем центр фигуры (+ запас), не рисуется.
     cocoon.value = camera.position.distanceTo(new THREE.Vector3(0, -0.48, 0)) + bg.cocoonMargin;
 

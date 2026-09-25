@@ -62,6 +62,8 @@
         ['@starCore.alpha', 'яркость', 0, 2, 0.01],
         ['@starCore.noiseScale', 'масштаб мигания', 0.1, 5, 0.05],
         ['@starCore.speed', 'скорость мигания', 0, 2, 0.01],
+        ['@starCore.blinkSoft', 'мигание: мягкость границы', 0.01, 1.5, 0.01],
+        ['@starCore.blinkLevel', 'мигание: доля пустот', -1, 1, 0.01],
         ['Фон: галактика и круги (сразу)'],
         ['@background.starSize', 'звёзды: размер', 1, 30, 0.5],
         ['@background.starAlpha', 'звёзды: яркость', 0, 3, 0.05],
@@ -244,7 +246,7 @@
     addSec('Цикл');
     const loop = { on: DP.params.get('loop') !== '0', pause: parseFloat(DP.params.get('pause') || '1.5') };
     const bar = document.createElement('div');
-    bar.innerHTML = '<button data-a="loop"></button><button data-a="now">морфинг сейчас</button>' +
+    bar.innerHTML = '<button data-a="loop"></button><button data-a="now">морфинг сейчас</button><button data-a="bg"></button>' +
         '<select data-a="mode"><option value="disk">диск (чистый вихрь)</option><option value="sphere">дымная сфера</option><option value="sweep">кольцо-кисть</option><option value="smoke">дымное кольцо</option><option value="fountain">фонтан</option><option value="vortex">вихрь</option></select>';
     rows.appendChild(bar);
     const bLoop = bar.querySelector('[data-a=loop]'), sMode = bar.querySelector('[data-a=mode]');
@@ -253,6 +255,10 @@
     bar.querySelector('[data-a=now]').onclick = () => DP.morphNext();
     sMode.value = M.mode; sMode.onchange = () => { M.mode = sMode.value; };
     showLoop();
+    const bBg = bar.querySelector('[data-a=bg]');
+    const showBg = () => { bBg.textContent = DP.background && DP.background.visible ? 'фон: вкл' : 'фон: выкл'; };
+    bBg.onclick = () => { if (DP.background) DP.background.setVisible(!DP.background.visible); showBg(); };
+    showBg();
     addSlider('пауза между морфингами, с', 0, 10, 0.1, () => loop.pause, v => { loop.pause = v; });
     DP.timeScale = parseFloat(DP.params.get('slow') || '1');
     addSlider('скорость времени (замедление)', 0.05, 2, 0.05, () => DP.timeScale, v => { DP.timeScale = v; });

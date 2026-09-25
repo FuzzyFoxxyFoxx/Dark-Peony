@@ -49,7 +49,7 @@
     // Какие части показывать (доводим по частям, как медузу; '' — все). ?parts= в адресе важнее.
     // star — светило (дымная сфера), veins — прежние прожилки, core — ядро, corona — лучи, loops — протуберанцы,
     // orbits — орбиты, planets — планеты и спутник.
-    const DEFAULT_PARTS = 'star,corona';
+    const DEFAULT_PARTS = 'star';      // сейчас автор настраивает ядро и дым со всполохами
 
     // Дымная сфера (метод Квана, как дымное кольцо в lab/smoke.html): частицы на видеокарте, их несут
     // водовороты двух масштабов (∇n1 × ∇n2 — поле без стоков), мягкая пружина держит частицы в оболочке
@@ -71,8 +71,8 @@
         emitDrag: 0.5,     // эмиттер увлекает поток за собой (шлейфы)
         emitSize: 0.28,    // размер зоны эмиттера (доля радиуса)
         flare: 0.2,        // доля частиц-всполохов: рождаются в узких источниках-языках и уходят наружу
-        flareLift: 1.3,    // скорость ухода всполохов
-        flareZone: 0.12,   // ширина языка у основания (доля радиуса)
+        flareLift: 0.51,   // скорость ухода всполохов
+        flareZone: 0.11,   // ширина языка у основания (доля радиуса)
         flareAlpha: 2.0,   // яркость всполохов относительно дыма
         lifeMin: 1.1, lifeMax: 2.9,
         fadeIn: 0.61, fadeOut: 0.45,
@@ -83,10 +83,12 @@
     // Ядро: сфера точек внутри дымной оболочки, без флуктуаций; точки мигают по очень крупному шуму
     // (размер от нуля до полного).
     DP.config.starCore = Object.assign({
-        radius: 0.62,      // доля радиуса дымной оболочки
-        size: 2.8, alpha: 1.1,
-        noiseScale: 1.1,   // масштаб шума мигания (меньше — крупнее пятна)
-        speed: 0.3         // скорость мигания
+        radius: 0.96,      // доля радиуса дымной оболочки (значения — подобраны автором)
+        size: 2.2, alpha: 2.0,
+        noiseScale: 1.25,  // масштаб шума мигания (меньше — крупнее пятна)
+        speed: 0.54,       // скорость мигания
+        blinkSoft: 0.6,    // мягкость границы между точками и пустотами (больше — плавнее градиент)
+        blinkLevel: 0.1    // доля пустот: порог шума (больше — пустот больше)
     }, DP.config.starCore || {});
 
     const ORDER_NOISE = 0.25;
@@ -198,14 +200,17 @@
         ${G.pointsVertex}
         uniform float uViewportScale;
         uniform vec4 uCore;
+        uniform vec2 uBlink;       // x — порог (доля пустот), y — мягкость границы
         attribute float aSizeScale;
-        varying float vFresnel;
+        varying float vFresnel, vSz;
         void main() {
             vec3 dpRest = position;
             vec3 n = normalize(position);
             vec3 pos = n * uStarR * uCore.x;
             float tw = dpSnoise(n * uCore.z + vec3(uTime * uCore.w, -uTime * uCore.w * 0.7, uTime * uCore.w * 0.4));
-            float sz = smoothstep(-0.15, 0.4, tw);
+            float sz = smoothstep(uBlink.x - uBlink.y, uBlink.x + uBlink.y, tw);
+            sz = sz * sz * (3.0 - 2.0 * sz);                 // ещё и плавный вход/выход
+            vSz = sz;                                        // точка и уменьшается, и гаснет — граница мягче
             vec4 mv = viewMatrix * dpMorph(dpRest, pos);
             gl_Position = projectionMatrix * mv;
             float dist = max(-mv.z, 0.1);
@@ -219,12 +224,12 @@
         ${G.pointsFragment}
         uniform sampler2D uTexture;
         uniform float uCoreAlpha;
-        varying float vFresnel, vDepthK;
+        varying float vFresnel, vDepthK, vSz;
         void main() {
             vec4 tex = texture2D(uTexture, gl_PointCoord);
             if (tex.a < 0.01) discard;
             vec3 c = mix(vec3(0.7, 0.85, 1.0), vec3(0.95, 0.98, 1.0), vFresnel);
-            gl_FragColor = dpMorphColor(c, tex.a * uCoreAlpha * (0.6 + 0.4 * vFresnel) * vDepthK, tex.a);
+            gl_FragColor = dpMorphColor(c, tex.a * uCoreAlpha * (0.6 + 0.4 * vFresnel) * vSz * vDepthK, tex.a);
         }
     `;
 
@@ -990,7 +995,7 @@
     // ==========================================
     // ДЫМНАЯ СФЕРА: симуляция на видеокарте (своя у каждого экземпляра)
     // ==========================================
-    const coreVec = new THREE.Vector4();
+    const coreVec = new THREE.Vector4(), blinkVec = new THREE.Vector2();
     function createSmokeSim(data) {
         const renderer = DP.stage.renderer, caps = renderer.capabilities, ext = renderer.extensions;
         const vtf = caps.maxVertexTextures > 0;
@@ -1083,6 +1088,7 @@
                     const m = new THREE.ShaderMaterial(Object.assign({}, DP.pointsMaterialConfig, {
                         uniforms: Object.assign({ uTime: S.uTime, uDepth: { value: new THREE.Vector2(8.1, 0.4) }, uStarR: { value: STAR_R },
                                                   uTexture: S.uTexture, uViewportScale: S.uViewportScale, uCore,
+                                                  uBlink: { get value() { return blinkVec.set(C.blinkLevel, Math.max(0.01, C.blinkSoft)); } },
                                                   uCoreAlpha: { get value() { return C.alpha; } } }, DP.morph.uniformsFor(ctx.uniforms)),
                         vertexShader: coreSphereVertex(G), fragmentShader: coreSphereFragment(G)
                     }));
