@@ -47,9 +47,30 @@
     const PLANET_AXIS_TILT = 0.4;
 
     // Какие части показывать (доводим по частям, как медузу; '' — все). ?parts= в адресе важнее.
-    // star — светило (прожилки, линии тока, искры, ядро), corona — лучи, loops — протуберанцы,
+    // star — светило (дымная сфера), veins — прежние прожилки, core — ядро, corona — лучи, loops — протуберанцы,
     // orbits — орбиты, planets — планеты и спутник.
     const DEFAULT_PARTS = 'star,corona';
+
+    // Дымная сфера (метод Квана, как дымное кольцо в lab/smoke.html): частицы на видеокарте, их несут
+    // водовороты двух масштабов (∇n1 × ∇n2 — поле без стоков), мягкая пружина держит частицы в оболочке
+    // радиуса светила; жизнь частицы — появление, угасание, рост (как в Particular). Ползунки — панель ?tune.
+    DP.config.starSmoke = Object.assign({
+        speed: 1.0,        // скорость течения
+        noiseAmp: 0.25,    // крупное завихрение вдоль сферы: сила
+        noiseScale: 1.2,   // крупное: частота (больше — мельче)
+        detailAmp: 0.06,   // мелкое завихрение: сила
+        detailScale: 5.0,
+        gather: 0.1,       // объёмные водовороты: сгущают нити в пряди (много — слипается в комки)
+        noiseSpeed: 0.35,  // изменчивость водоворотов во времени
+        spring: 4.0,       // сила, возвращающая частицу к радиусу оболочки
+        radial: 0.5,       // свобода по радиусу для объёмных водоворотов (завитки за край)
+        spin: 0.08,        // вращение всей сферы, рад/с
+        lifeMin: 1.5, lifeMax: 4.0,
+        fadeIn: 0.15, fadeOut: 0.45,
+        grow: 1.6,         // во сколько раз частица крупнее к концу жизни
+        size: 2.2,
+        alpha: 0.2
+    }, DP.config.starSmoke || {});
 
     const ORDER_NOISE = 0.25;
     const ORDER_CURVE = 0.6;
@@ -220,6 +241,98 @@
             vec4 tex = texture2D(uTexture, gl_PointCoord);
             if (tex.a < 0.01) discard;
             gl_FragColor = dpMorphColor(vec3(0.85, 0.94, 1.0), tex.a * vA * 1.4 * vDepthK, tex.a);
+        }
+    `;
+
+    // ---------- ДЫМНАЯ СФЕРА: симуляция (пиксель = частица: xyz + возраст) ----------
+    const smokeSimFrag = (N) => `
+        precision highp float;
+        uniform sampler2D uPos, uInfo;
+        uniform float uTime, uDt, uR;
+        uniform vec4 uNoise;   // крупные: сила, частота; мелкие: сила, частота
+        uniform vec4 uShell;   // пружина, свобода по радиусу, вращение, изменчивость
+        uniform vec4 uLife;    // жизнь от, до, скорость течения, -
+        uniform float uGather; // сила «собирающих» водоворотов
+        ${DP.morph.glsl.simplexNoise}
+        vec3 eddy(vec3 q, float t) {
+            vec3 g1 = dpSnoiseGrad(q + vec3(0.0, -t, 0.0)).xyz;
+            vec3 g2 = dpSnoiseGrad(q + vec3(31.4, 7.1 + 0.5 * t, 5.3)).xyz;
+            return cross(g1, g2);
+        }
+        float h(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+        vec3 flow(vec3 p, float t) {
+            float ts = t * uShell.w;
+            float r = max(length(p), 1e-4);
+            vec3 n = p / r;
+            // Завихрение вдоль сферы: n × ∇ψ — на сфере без стоков, дым не слипается в комки, а тянется в нити.
+            vec3 g1 = dpSnoiseGrad(p * uNoise.y + vec3(0.0, -ts, 0.0)).xyz;
+            vec3 g2 = dpSnoiseGrad(p * uNoise.w + vec3(17.0, 3.0 + ts * 1.7, -9.0)).xyz;
+            vec3 v = uNoise.x * cross(n, g1) + uNoise.z * cross(n, g2);
+            // Немного объёмных водоворотов: сгущают нити в пряди и выбивают завитки за край (свобода по радиусу).
+            vec3 e = eddy(p * uNoise.y * 1.3 + vec3(5.1, -2.7, 8.3), ts * 1.3);
+            e -= n * dot(e, n) * (1.0 - uShell.y);
+            v += uGather * e;
+            v += n * (uR - r) * uShell.x;                          // пружина к радиусу оболочки
+            v += cross(vec3(0.0, 1.0, 0.0), p) * uShell.z;         // вращение сферы
+            return v;
+        }
+        void main() {
+            vec2 uv = gl_FragCoord.xy / vec2(${N}.0);
+            vec4 P = texture2D(uPos, uv);
+            vec4 I = texture2D(uInfo, uv);
+            float life = mix(uLife.x, uLife.y, I.x);
+            float age = P.w + uDt;
+            vec3 p = P.xyz;
+            if (age > life) {
+                // смерть → рождение в случайной точке оболочки
+                float h1 = h(uv + fract(uTime * 0.137)), h2 = h(uv * 1.7 + fract(uTime * 0.291) + 3.1), h3 = h(uv * 2.3 + fract(uTime * 0.173) + 7.7);
+                float z = h1 * 2.0 - 1.0, a = h2 * 6.2831853, s = sqrt(1.0 - z * z);
+                p = vec3(s * cos(a), z, s * sin(a)) * uR * (1.0 + (h3 - 0.5) * 0.04);
+                age = 0.0;
+            } else {
+                float vd = uDt * uLife.z;
+                vec3 v1 = flow(p, uTime);
+                vec3 v2 = flow(p + v1 * vd * 0.5, uTime + uDt * 0.5);
+                p += v2 * vd;
+            }
+            gl_FragColor = vec4(p, age);
+        }
+    `;
+    const smokeVertex = (G) => `
+        ${commonPars}
+        ${G.pointsVertex}
+        uniform float uViewportScale;
+        uniform sampler2D uSmokePos, uSmokeInfo;
+        uniform vec4 uSmokeLife;   // жизнь от, до
+        uniform vec4 uSmokeLook;   // появление, угасание, рост, размер
+        attribute vec2 aRef;
+        varying float vA, vK;
+        void main() {
+            vec3 dpRest = position;
+            vec4 P = texture2D(uSmokePos, aRef);
+            float life = mix(uSmokeLife.x, uSmokeLife.y, texture2D(uSmokeInfo, aRef).x);
+            float k = clamp(P.w / life, 0.0, 1.0);
+            vA = smoothstep(0.0, uSmokeLook.x, k) * (1.0 - smoothstep(1.0 - uSmokeLook.y, 1.0, k));
+            vK = k;
+            vec4 mv = viewMatrix * dpMorph(dpRest, P.xyz);
+            gl_Position = projectionMatrix * mv;
+            float dist = max(-mv.z, 0.1);
+            ${depthVert}
+            gl_PointSize = uSmokeLook.w * uViewportScale * mix(1.0, uSmokeLook.z, k * k) / (0.35 + 0.06 * dist);
+            if (vA < 0.001) gl_PointSize = 0.0;
+            dpMorphFinish();
+        }
+    `;
+    const smokeFragment = (G) => `
+        ${G.pointsFragment}
+        uniform sampler2D uTexture;
+        uniform float uAlpha;
+        varying float vA, vK, vDepthK;
+        void main() {
+            vec4 tex = texture2D(uTexture, gl_PointCoord);
+            if (tex.a < 0.01) discard;
+            vec3 c = mix(vec3(0.88, 0.95, 1.0), vec3(0.55, 0.72, 0.98), vK);   // старый дым холоднее
+            gl_FragColor = dpMorphColor(c, tex.a * vA * uAlpha * vDepthK, tex.a);
         }
     `;
 
@@ -517,6 +630,23 @@
         veinGeo.setAttribute('aK', new THREE.BufferAttribute(vk, 4));
         veinGeo.setAttribute('aSizeScale', new THREE.BufferAttribute(vs, 1));
 
+        // ---------- ДЫМНАЯ СФЕРА: частицы (сторона текстуры N) ----------
+        const SN = tier.petalSegments >= 100 ? 512 : tier.petalSegments >= 80 ? 384 : 256;
+        const smokeRef = new Float32Array(SN * SN * 2), smokePos = new Float32Array(SN * SN * 3);
+        const smokeInit = new Float32Array(SN * SN * 4), smokeInfo = new Float32Array(SN * SN * 4);
+        for (let i = 0; i < SN * SN; i++) {
+            smokeRef[i * 2] = ((i % SN) + 0.5) / SN; smokeRef[i * 2 + 1] = (Math.floor(i / SN) + 0.5) / SN;
+            const d = randomDir(i * 1.37 + 501), rr = STAR_R * (1 + (seededRandom(i * 2.9 + 502) - 0.5) * 0.04);
+            smokePos[i * 3] = d.x * rr; smokePos[i * 3 + 1] = d.y * rr; smokePos[i * 3 + 2] = d.z * rr;
+            for (let k = 0; k < 4; k++) smokeInfo[i * 4 + k] = seededRandom(i * 3.7 + k * 1.3 + 503);
+            smokeInit[i * 4] = smokePos[i * 3]; smokeInit[i * 4 + 1] = smokePos[i * 3 + 1]; smokeInit[i * 4 + 2] = smokePos[i * 3 + 2];
+            smokeInit[i * 4 + 3] = seededRandom(i * 4.9 + 504) * 2.0;     // разные фазы жизни
+        }
+        const smokeGeo = new THREE.BufferGeometry();
+        smokeGeo.setAttribute('position', new THREE.BufferAttribute(smokePos, 3));
+        smokeGeo.setAttribute('aRef', new THREE.BufferAttribute(smokeRef, 2));
+        const smoke = { N: SN, init: smokeInit, info: smokeInfo };
+
         // ---------- ЯДРО ----------
         const nCore = Math.round(CORE_COUNT * q);
         const cp = new Float32Array(nCore * 3), cs = new Float32Array(nCore);
@@ -642,7 +772,7 @@
 
         const starMesh = new THREE.SphereGeometry(STAR_R, 64, 48);
         const rootMatrix = new THREE.Matrix4().makeTranslation(0, FIG_Y_OFFSET, 0);
-        const data = { veinGeo, coreGeo, rayGeo, loopGeo, orbits, bodies, starMesh, rootMatrix };
+        const data = { smokeGeo, smoke, veinGeo, coreGeo, rayGeo, loopGeo, orbits, bodies, starMesh, rootMatrix };
         assignOrderAndLayout(data);
         return data;
     }
@@ -653,7 +783,7 @@
     function assignOrderAndLayout(data) {
         const v = new THREE.Vector3();
         const dist = (x, y, z) => Math.hypot(x, y, z) + ORDER_NOISE * (Math.sin(x * 1.7 + y * 0.9) * Math.sin(z * 1.9 - y * 1.3) + 0.5 * Math.sin(x * 3.1 - z * 2.7 + y * 2.3));
-        const pointGeos = [data.veinGeo, data.coreGeo, data.rayGeo, data.loopGeo].concat(data.orbits.map(o => o.geo), data.bodies.map(b => b.geo));
+        const pointGeos = [data.smokeGeo, data.veinGeo, data.coreGeo, data.rayGeo, data.loopGeo].concat(data.orbits.map(o => o.geo), data.bodies.map(b => b.geo));
         const meshGeos = [data.starMesh].concat(data.bodies.map(b => b.meshGeo));
         let dMin = Infinity, dMax = -Infinity;
         pointGeos.forEach(g => { const p = g.attributes.position; for (let i = 0; i < p.count; i++) { const d = dist(p.getX(i), p.getY(i), p.getZ(i)); if (d < dMin) dMin = d; if (d > dMax) dMax = d; } });
@@ -743,6 +873,67 @@
     }
 
     // ==========================================
+    // ДЫМНАЯ СФЕРА: симуляция на видеокарте (своя у каждого экземпляра)
+    // ==========================================
+    function createSmokeSim(data) {
+        const renderer = DP.stage.renderer, caps = renderer.capabilities, ext = renderer.extensions;
+        const vtf = caps.maxVertexTextures > 0;
+        let type = THREE.FloatType;
+        if (caps.isWebGL2) { if (!ext.has('EXT_color_buffer_float')) type = THREE.HalfFloatType; }
+        else if (!ext.has('WEBGL_color_buffer_float')) type = ext.has('EXT_color_buffer_half_float') ? THREE.HalfFloatType : null;
+        if (!vtf || !type) return null;                       // нет рендера в float-текстуры → прежние прожилки
+        const N = data.smoke.N;
+        if (!data.smoke.initTex) {
+            data.smoke.initTex = new THREE.DataTexture(data.smoke.init, N, N, THREE.RGBAFormat, THREE.FloatType); data.smoke.initTex.needsUpdate = true;
+            data.smoke.infoTex = new THREE.DataTexture(data.smoke.info, N, N, THREE.RGBAFormat, THREE.FloatType); data.smoke.infoTex.needsUpdate = true;
+        }
+        const rt = () => new THREE.WebGLRenderTarget(N, N, { type, format: THREE.RGBAFormat, minFilter: THREE.NearestFilter,
+            magFilter: THREE.NearestFilter, depthBuffer: false, stencilBuffer: false });
+        const targets = [rt(), rt()];
+        const simMat = new THREE.ShaderMaterial({
+            uniforms: { uPos: { value: data.smoke.initTex }, uInfo: { value: data.smoke.infoTex }, uTime: { value: 0 }, uDt: { value: 0 },
+                        uR: { value: STAR_R }, uGather: { value: 0 }, uNoise: { value: new THREE.Vector4() }, uShell: { value: new THREE.Vector4() }, uLife: { value: new THREE.Vector4() } },
+            vertexShader: 'void main(){ gl_Position = vec4(position.xy, 0.0, 1.0); }',
+            fragmentShader: smokeSimFrag(N), depthTest: false, depthWrite: false
+        });
+        const scene = new THREE.Scene(), cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), simMat); quad.frustumCulled = false; scene.add(quad);
+        let cur = 0, first = true, simTime = 0;
+        const life = { value: new THREE.Vector4() }, look = { value: new THREE.Vector4() }, pos = { value: data.smoke.initTex };
+        function sync() {
+            const S = DP.config.starSmoke, u = simMat.uniforms;
+            u.uNoise.value.set(S.noiseAmp, S.noiseScale, S.detailAmp, S.detailScale);
+            u.uShell.value.set(S.spring, S.radial, S.spin, S.noiseSpeed);
+            u.uGather.value = S.gather;
+            u.uLife.value.set(S.lifeMin, Math.max(S.lifeMin + 0.01, S.lifeMax), S.speed, 0);
+            life.value.copy(u.uLife.value);
+            look.value.set(S.fadeIn, S.fadeOut, S.grow, S.size);
+        }
+        function step(dt) {
+            if (dt <= 0) return;
+            sync();
+            const prev = renderer.getRenderTarget();
+            const n = Math.min(4, Math.max(1, Math.ceil(dt / (1 / 60))));
+            for (let i = 0; i < n; i++) {
+                const u = simMat.uniforms;
+                u.uPos.value = first ? data.smoke.initTex : targets[cur].texture;
+                u.uDt.value = dt / n; u.uTime.value = simTime;
+                renderer.setRenderTarget(targets[1 - cur]);
+                renderer.render(scene, cam);
+                cur = 1 - cur; first = false; simTime += dt / n;
+            }
+            renderer.setRenderTarget(prev);
+            pos.value = targets[cur].texture;
+        }
+        for (let i = 0; i < 90; i++) step(1 / 30);                // прогрев: структура дыма сразу сложилась
+        return {
+            step, uniforms: { uSmokePos: pos, uSmokeInfo: { value: data.smoke.infoTex }, uSmokeLife: life, uSmokeLook: look,
+                              uAlpha: { get value() { return DP.config.starSmoke.alpha; } } },
+            dispose() { targets.forEach(t => t.dispose()); simMat.dispose(); }
+        };
+    }
+
+    // ==========================================
     // РЕГИСТРАЦИЯ
     // ==========================================
     DP.figures.register({
@@ -761,11 +952,23 @@
 
             const partsParam = DP.params.get('parts') || DEFAULT_PARTS;
             const show = (k) => !partsParam || partsParam.split(',').indexOf(k) >= 0;
+            let sim = null;
             if (show('star')) {
                 meshRoot.add(new THREE.Mesh(data.starMesh, mats.starMesh));
-                pointsRoot.add(new THREE.Points(data.coreGeo, mats.core));
-                pointsRoot.add(new THREE.Points(data.veinGeo, mats.veins));
+                sim = createSmokeSim(data);
+                if (sim) {
+                    const G = DP.morph.glsl, S = DP.shared;
+                    const m = new THREE.ShaderMaterial(Object.assign({}, DP.pointsMaterialConfig, {
+                        uniforms: Object.assign({ uTime: S.uTime, uDepth: { value: new THREE.Vector2(8.1, 0.4) }, uStarR: { value: STAR_R },
+                                                  uTexture: S.uTexture, uViewportScale: S.uViewportScale }, sim.uniforms, DP.morph.uniformsFor(ctx.uniforms)),
+                        vertexShader: smokeVertex(G), fragmentShader: smokeFragment(G)
+                    }));
+                    mats.list.push(m);
+                    pointsRoot.add(new THREE.Points(data.smokeGeo, m));
+                } else pointsRoot.add(new THREE.Points(data.veinGeo, mats.veins));   // нет float-текстур
             }
+            if (show('veins')) pointsRoot.add(new THREE.Points(data.veinGeo, mats.veins));
+            if (show('core')) pointsRoot.add(new THREE.Points(data.coreGeo, mats.core));
             if (show('corona')) pointsRoot.add(new THREE.Points(data.rayGeo, mats.rays));
             if (show('loops')) pointsRoot.add(new THREE.Points(data.loopGeo, mats.loops));
             if (show('orbits')) data.orbits.forEach((o, i) => pointsRoot.add(new THREE.Points(o.geo, mats.orbits[i])));
@@ -774,7 +977,11 @@
                 pointsRoot.add(new THREE.Points(b.geo, mats.bodies[i]));
             });
 
-            return { root, meshRoot, pointsRoot, layout: data.layout, dispose() { mats.list.forEach(m => m.dispose()); } };
+            return {
+                root, meshRoot, pointsRoot, layout: data.layout,
+                update(time, dt) { if (sim && root.visible) sim.step(dt); },
+                dispose() { mats.list.forEach(m => m.dispose()); if (sim) sim.dispose(); }
+            };
         }
     });
 })(window.DP);

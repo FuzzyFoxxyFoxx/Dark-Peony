@@ -17,7 +17,7 @@
         const [r, p] = rootOf(path), ks = p.split('.'), last = ks.pop();
         const o = ks.reduce((a, k) => a[k], r);
         o[last] = v;
-        if (path[0] === '@' && DP.background) DP.background.sync();   // фон меняется сразу
+        if (path[0] === '@' && DP.background) DP.background.sync();   // фон и дымная сфера светила меняются сразу
     };
 
     // Значения из адреса применяются всегда (даже без ?tune): ссылкой можно поделиться.
@@ -29,6 +29,24 @@
     });
 
     DP.tuneSpec = DP.tuneSpec || [
+        ['Светило: дымная сфера (сразу)'],
+        ['@starSmoke.speed', 'скорость течения', 0, 4, 0.01],
+        ['@starSmoke.noiseAmp', 'завихрение по сфере: сила', 0, 1.5, 0.01],
+        ['@starSmoke.noiseScale', 'завихрение: частота', 0.2, 6, 0.05],
+        ['@starSmoke.detailAmp', 'мелкое завихрение: сила', 0, 1, 0.01],
+        ['@starSmoke.detailScale', 'мелкие: частота', 1, 12, 0.05],
+        ['@starSmoke.gather', 'объёмные водовороты (пряди)', 0, 1.5, 0.01],
+        ['@starSmoke.noiseSpeed', 'изменчивость', 0, 2, 0.01],
+        ['@starSmoke.spring', 'держит оболочку', 0, 10, 0.05],
+        ['@starSmoke.radial', 'свобода по радиусу', 0, 1, 0.01],
+        ['@starSmoke.spin', 'вращение сферы', -1, 1, 0.01],
+        ['@starSmoke.lifeMin', 'жизнь от, с', 0.3, 10, 0.1],
+        ['@starSmoke.lifeMax', 'жизнь до, с', 0.3, 15, 0.1],
+        ['@starSmoke.fadeIn', 'появление (доля)', 0.01, 0.8, 0.01],
+        ['@starSmoke.fadeOut', 'угасание (доля)', 0.01, 0.95, 0.01],
+        ['@starSmoke.grow', 'рост к концу', 0.2, 5, 0.05],
+        ['@starSmoke.size', 'размер частиц', 0.3, 6, 0.05],
+        ['@starSmoke.alpha', 'яркость частиц', 0.005, 0.6, 0.005],
         ['Фон: галактика и круги (сразу)'],
         ['@background.starSize', 'звёзды: размер', 1, 30, 0.5],
         ['@background.starAlpha', 'звёзды: яркость', 0, 3, 0.05],
