@@ -98,23 +98,33 @@
         galaxyTilt.rotation.x = (lo + hi) / 2;
     })();
     galaxyTilt.add(galaxy);
+    galaxy.scale.setScalar(bg.scale);   // крупнее (автор, +40%); наклон «пола» считается по исходному размеру — угол прежний
     scene.add(galaxyTilt, halo);
     const cocoon = { value: 8.5 };      // глубина (от камеры), ближе которой фона нет; задаётся по центру фигуры
     const cocoonGlsl = `
         uniform float uCocoon;
         float dpCocoon(float depth) { return smoothstep(uCocoon, uCocoon + 1.5, depth); }
     `;
-    function starMaterial() {
+    // Тёмная середина галактики (автор): в центре всегда фигура, и точки галактики там мешают — туманность, звёзды
+    // и пыль диска, облака плавно гаснут к центру (радиусы — в единицах диска, до масштаба bg.scale).
+    const hole = { value: new THREE.Vector2(bg.holeIn, bg.holeOut) };
+    const holeGlsl = `
+        uniform vec2 uHole;
+        float dpHole(vec3 p) { float r = length(p.xz); float k = smoothstep(uHole.x, uHole.y, r); return k * k * (3.0 - 2.0 * k); }
+    `;
+    function starMaterial(holeOn) {
         return new THREE.ShaderMaterial(Object.assign({}, DP.pointsMaterialConfig, {
             uniforms: {
                 uTexture: DP.shared.uTexture, uViewportScale: DP.shared.uViewportScale,
-                uSize: { value: bg.starSize }, uAlpha: { value: bg.starAlpha }, uTime: DP.shared.uTime, uCocoon: cocoon
+                uSize: { value: bg.starSize }, uAlpha: { value: bg.starAlpha }, uTime: DP.shared.uTime, uCocoon: cocoon,
+                uHole: hole, uHoleOn: { value: holeOn ? 1 : 0 }
             },
             vertexShader: `
-                uniform float uViewportScale, uSize, uTime;
+                uniform float uViewportScale, uSize, uTime, uHoleOn;
                 attribute float aSizeScale, aPhase, aFree;
                 varying float vAlpha;
                 ${cocoonGlsl}
+                ${holeGlsl}
                 void main() {
                     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
                     gl_Position = projectionMatrix * mvPosition;
@@ -123,6 +133,7 @@
                     gl_PointSize = uSize * uViewportScale * (0.6 + 1.6 * aSizeScale * aSizeScale) / (0.4 + 0.08 * min(dist, 9.0));
                     float tw = 0.55 + 0.45 * sin(uTime * (0.6 + 1.3 * fract(aPhase * 3.1)) + aPhase);   // мерцание
                     vAlpha = (0.35 + 0.65 * aSizeScale) * tw * max(dpCocoon(dist), aFree);   // aFree = 1: звезда рукава, кокон не действует
+                    vAlpha *= mix(1.0, dpHole(position), uHoleOn);                          // диск — с тёмной серединой, «небо» — нет
                     if (vAlpha < 0.002) gl_PointSize = 0.0;
                 }
             `,
@@ -139,7 +150,7 @@
             `
         }));
     }
-    function starPoints(count, place, salt) {
+    function starPoints(count, place, salt, holeOn) {
         const geo = new THREE.BufferGeometry();
         const pos = new Float32Array(count * 3), scales = new Float32Array(count), phases = new Float32Array(count), free = new Float32Array(count);
         for (let i = 0; i < count; i++) {
@@ -152,7 +163,7 @@
         geo.setAttribute('aSizeScale', new THREE.BufferAttribute(scales, 1));
         geo.setAttribute('aPhase', new THREE.BufferAttribute(phases, 1));
         geo.setAttribute('aFree', new THREE.BufferAttribute(free, 1));
-        const pts = new THREE.Points(geo, starMaterial());
+        const pts = new THREE.Points(geo, starMaterial(holeOn));
         pts.frustumCulled = false;
         return pts;
     }
@@ -184,7 +195,7 @@
         else u = seededRandom(i * 1.5) * Math.PI * 2;
         const thick = bg.diskThick * Math.pow(1 - (r - bg.diskIn) / (bg.diskOut - bg.diskIn), 0.8) + 0.05;
         return [Math.cos(u) * r, gauss(i * 3.7) * thick, Math.sin(u) * r, onArm ? 1 : 0];   // звёзды рукавов видны и перед фигурой
-    }, 0);
+    }, 0, true);
     galaxy.add(diskStars);
 
     // Туманность в плоскости пола: мягкая спиральная туманность без штрихов (автор: «царапины на пластинке» не нужны).
@@ -235,18 +246,21 @@
         g.putImageData(img, 0, 0);
         const tex = new THREE.CanvasTexture(c);
         const mat = new THREE.ShaderMaterial({
-            uniforms: { uTex: { value: tex }, uAlpha: { value: bg.nebulaAlpha }, uCocoon: cocoon },
+            uniforms: { uTex: { value: tex }, uAlpha: { value: bg.nebulaAlpha }, uCocoon: cocoon, uHole: hole, uNR: { value: NR } },
             vertexShader: `
                 varying vec2 vUv; varying float vDepth;
                 void main() { vUv = uv; vec4 mv = modelViewMatrix * vec4(position, 1.0); vDepth = -mv.z; gl_Position = projectionMatrix * mv; }
             `,
             fragmentShader: `
-                uniform sampler2D uTex; uniform float uAlpha; uniform float uCocoon;
+                uniform sampler2D uTex; uniform float uAlpha; uniform float uCocoon, uNR;
                 varying vec2 vUv; varying float vDepth;
+                ${holeGlsl}
                 void main() {
                     vec4 t = texture2D(uTex, vUv);
                     // туманность тоньше кокона: её дальняя часть видна, ближняя (перед фигурой) мягко гаснет
                     float k = smoothstep(uCocoon - 3.0, uCocoon, vDepth);
+                    vec2 q = (vUv - 0.5) * 2.0 * uNR;
+                    k *= dpHole(vec3(q.x, 0.0, q.y));                   // тёмная середина
                     gl_FragColor = vec4(vec3(0.72, 0.84, 1.0), t.a * uAlpha * k);
                 }
             `,
@@ -286,17 +300,18 @@
         geo.setAttribute('aBright', new THREE.BufferAttribute(br, 1));
         const mat = new THREE.ShaderMaterial(Object.assign({}, DP.pointsMaterialConfig, {
             uniforms: { uTexture: DP.shared.uTexture, uViewportScale: DP.shared.uViewportScale,
-                        uSize: { value: bg.dustSize }, uAlpha: { value: bg.dustAlpha } },
+                        uSize: { value: bg.dustSize }, uAlpha: { value: bg.dustAlpha }, uHole: hole },
             vertexShader: `
                 uniform float uViewportScale, uSize;
                 attribute float aBright;
                 varying float vA;
+                ${holeGlsl}
                 void main() {
                     vec4 mv = modelViewMatrix * vec4(position, 1.0);
                     gl_Position = projectionMatrix * mv;
                     float dist = max(-mv.z, 0.1);
                     gl_PointSize = uSize * uViewportScale * (0.85 / (0.4 + 0.06 * min(dist, 8.0)));   // как точка лепестка
-                    vA = aBright;   // пыль рукавов — без кокона (автор): видна и перед фигурой
+                    vA = aBright * dpHole(position);   // пыль рукавов — без кокона (автор); середина тёмная
                     if (vA < 0.002) gl_PointSize = 0.0;
                 }
             `,
@@ -354,12 +369,13 @@
         geo.setAttribute('aSeed', new THREE.BufferAttribute(seed, 1));
         const mat = new THREE.ShaderMaterial({
             uniforms: { uTex: { value: tex }, uTime: DP.shared.uTime, uViewportScale: DP.shared.uViewportScale,
-                        uSize: { value: bg.cloudSize }, uAlpha: { value: bg.cloudAlpha }, uCocoon: cocoon },
+                        uSize: { value: bg.cloudSize }, uAlpha: { value: bg.cloudAlpha }, uCocoon: cocoon, uHole: hole },
             vertexShader: `
                 uniform float uTime, uViewportScale, uSize;
                 attribute float aSeed;
                 varying float vA; varying float vRot;
                 ${cocoonGlsl}
+                ${holeGlsl}
                 void main() {
                     vec3 p = position;
                     p.x += sin(uTime * 0.05 + aSeed * 12.0) * 0.4;   // облака медленно плывут
@@ -368,7 +384,7 @@
                     gl_Position = projectionMatrix * mv;
                     float dist = max(-mv.z, 0.1);
                     gl_PointSize = uSize * uViewportScale * (0.7 + 0.8 * aSeed) / (0.4 + 0.08 * dist);
-                    vA = (0.5 + 0.5 * sin(uTime * (0.07 + 0.08 * aSeed) + aSeed * 20.0)) * dpCocoon(dist);   // медленно «дышат»
+                    vA = (0.5 + 0.5 * sin(uTime * (0.07 + 0.08 * aSeed) + aSeed * 20.0)) * dpCocoon(dist) * dpHole(position);   // медленно «дышат»
                     vRot = aSeed * 6.2831853 + uTime * 0.02 * (aSeed - 0.5);
                     if (vA < 0.002) gl_PointSize = 0.0;
                 }
@@ -404,6 +420,7 @@
             c.uSize.value = b.cloudSize; c.uAlpha.value = b.cloudAlpha;
             galaxy.userData.nebulaMat.uniforms.uAlpha.value = b.nebulaAlpha;
             dust.material.uniforms.uSize.value = b.dustSize; dust.material.uniforms.uAlpha.value = b.dustAlpha;
+            hole.value.set(b.holeIn, Math.max(b.holeIn + 0.01, b.holeOut)); galaxy.scale.setScalar(b.scale);
             drawHud(Math.max(1, window.innerWidth), Math.max(1, window.innerHeight));
         }
     };
