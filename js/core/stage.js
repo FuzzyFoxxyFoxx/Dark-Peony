@@ -256,6 +256,7 @@
         figureStage.updateMatrixWorld(true);
         DP.morph.shared.uStageMatrix.value.copy(figureStage.matrixWorld);
         DP.morph.shared.uStageMatrixInv.value.copy(figureStage.matrixWorld).invert();
+        if (!contextLost && DP.smokeSim) DP.smokeSim.renderShadow();   // самозатенение дыма (перед кадром)
         if (!contextLost) renderer.render(scene, camera);
     }
 

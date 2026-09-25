@@ -58,7 +58,11 @@
         uSmokeTex: { value: null },
         uSmokeA: { value: new THREE.Vector4() },      // включён, сторона текстуры, жизнь от, жизнь до
         uSmokeB: { value: new THREE.Vector4() },      // появление (доля), угасание (доля), рост к концу, захват кольцом (с)
-        uSmokeC: { value: new THREE.Vector4() }       // посадка (с), -, -, -
+        uSmokeC: { value: new THREE.Vector4() },      // посадка (с), -, -, -
+        // Самозатенение дыма (js/core/smokesim.js): плотность дыма «со стороны света» по 4 слоям глубины.
+        uShadowTex: { value: null },
+        uShadowLight: { value: new THREE.Matrix4() },
+        uShadowInfo: { value: new THREE.Vector4() }  // включено, сила, -, -
     };
 
     // Путь частицы (в «исходном» времени) делится на уход [0, a], вихрь [a, 1-a] и посадку [1-a, 1],
@@ -313,6 +317,9 @@
         uniform vec4 uSmokeA;
         uniform vec4 uSmokeB;
         uniform vec4 uSmokeC;
+        uniform sampler2D uShadowTex;
+        uniform mat4 uShadowLight;
+        uniform vec4 uShadowInfo;
         varying float vDpW;
         varying float vDpWA;
         varying float vDpGlow;
@@ -402,6 +409,17 @@
                 float fl = st.w < 0.0 ? 1.0 : smoothstep(0.0, uSmokeB.x, k) * (1.0 - smoothstep(1.0 - uSmokeB.y, 1.0, k));
                 vDpFade *= mix(1.0, fl, ringW);
                 smokeSize = mix(1.0, uSmokeB.z, k * k * ringW);
+                // Самозатенение: сколько дыма между частицей и светом (слои ближе к свету — целиком,
+                // свой слой — наполовину). Частица в глубине темнее, освещённые кромки — яркие.
+                if (uShadowInfo.x > 0.5) {
+                    vec4 lc = uShadowLight * (uStageMatrix * vec4(p, 1.0));
+                    vec4 S = texture2D(uShadowTex, lc.xy * 0.5 + 0.5);
+                    float dz = clamp(lc.z * 0.5 + 0.5, 0.0, 0.9999) * 4.0;
+                    float occ = S.x * step(1.0, dz) + S.y * step(2.0, dz) + S.z * step(3.0, dz)
+                              + dot(S, vec4(equal(vec4(floor(dz)), vec4(0.0, 1.0, 2.0, 3.0)))) * fract(dz) * 0.5;
+                    // Освещённые кромки ярче прежнего, глубина темнеет до 30% (не в черноту).
+                    vDpFade *= mix(1.0, 0.3 + 1.1 * exp(-uShadowInfo.y * occ), w);
+                }
             } else if (uFountA.x > 0.5) {
                 // ФОНТАН: частица осыпается вниз по центральному столбу, у дна уходит наружу, поднимается
                 // по стенке сферы, переходит через верх и падает сверху на своё место (петли, как силовые
@@ -678,6 +696,7 @@
     function plan(A, B) {
         const c = DP.config.morph;
         shared.uSmokeA.value.x = 0;
+        shared.uShadowInfo.value.x = 0;
         DP.morph.tiltWindow = (c.mode === 'sweep' || c.mode === 'sphere') ? [0, 1] : [0.15, 0.75];
         const smokeOk = DP.smokeSim && DP.smokeSim.supported();
         if (c.mode === 'sphere' && smokeOk) return planSphere(A, B);
@@ -1228,6 +1247,7 @@
             { capture: f.capture, land: f.land, gravity: f.gravity, pull: f.pull, twist: f.twist, shape: 1, roll: f.roll, noiseK: f.noiseK,
               respawn: f.respawn, twistRamp: f.twistRamp, spiral: f.spiral,
               eddy: [f.eddyBig, f.eddyBigScale, f.eddySmall, f.eddySmallScale, f.eddySpeed] });
+        DP.smokeSim.setShadow(f.shadow, center, Math.max(R, 0.5 * (bb.y1 - bb.y0)) * 1.6);
         // Вид частиц в полёте — свой у сферы: мельче и ярче, пряди читаются нитями, а не туманом.
         shared.uSwirlA.value.set(f.flightSize, c.swirlSizeMin, f.flightAlpha, c.swirlVisible);
         shared.uSwirlB.value.set(c.leaveGlow, c.swirlBlend, c.swirlTint, f.flightLook);
