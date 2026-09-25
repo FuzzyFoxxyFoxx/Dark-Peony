@@ -112,7 +112,7 @@
             },
             vertexShader: `
                 uniform float uViewportScale, uSize, uTime;
-                attribute float aSizeScale, aPhase;
+                attribute float aSizeScale, aPhase, aFree;
                 varying float vAlpha;
                 ${cocoonGlsl}
                 void main() {
@@ -122,7 +122,7 @@
                     // крупные звёзды редкие; за коконом звёзды не мельчают сильнее, чем на расстоянии ~9 (иначе пропадают)
                     gl_PointSize = uSize * uViewportScale * (0.6 + 1.6 * aSizeScale * aSizeScale) / (0.4 + 0.08 * min(dist, 9.0));
                     float tw = 0.55 + 0.45 * sin(uTime * (0.6 + 1.3 * fract(aPhase * 3.1)) + aPhase);   // мерцание
-                    vAlpha = (0.35 + 0.65 * aSizeScale) * tw * dpCocoon(dist);
+                    vAlpha = (0.35 + 0.65 * aSizeScale) * tw * max(dpCocoon(dist), aFree);   // aFree = 1: звезда рукава, кокон не действует
                     if (vAlpha < 0.002) gl_PointSize = 0.0;
                 }
             `,
@@ -141,16 +141,17 @@
     }
     function starPoints(count, place, salt) {
         const geo = new THREE.BufferGeometry();
-        const pos = new Float32Array(count * 3), scales = new Float32Array(count), phases = new Float32Array(count);
+        const pos = new Float32Array(count * 3), scales = new Float32Array(count), phases = new Float32Array(count), free = new Float32Array(count);
         for (let i = 0; i < count; i++) {
             const p = place(i);
-            pos[i * 3] = p[0]; pos[i * 3 + 1] = p[1]; pos[i * 3 + 2] = p[2];
+            pos[i * 3] = p[0]; pos[i * 3 + 1] = p[1]; pos[i * 3 + 2] = p[2]; free[i] = p[3] || 0;
             scales[i] = seededRandom(i * 4.1 + salt);
             phases[i] = seededRandom(i * 7.3 + salt) * 6.2831853;
         }
         geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
         geo.setAttribute('aSizeScale', new THREE.BufferAttribute(scales, 1));
         geo.setAttribute('aPhase', new THREE.BufferAttribute(phases, 1));
+        geo.setAttribute('aFree', new THREE.BufferAttribute(free, 1));
         const pts = new THREE.Points(geo, starMaterial());
         pts.frustumCulled = false;
         return pts;
@@ -178,11 +179,11 @@
     // Диск: звёзды в основном на рукавах спирали (с разбросом), часть — хаотично; толстый в середине, к краю тоньше.
     const diskStars = starPoints(nDisk, (i) => {
         const r = bg.diskIn + Math.pow(seededRandom(i * 2.3), 0.9) * (bg.diskOut - bg.diskIn);
-        let u;
-        if (seededRandom(i * 6.1 + 0.4) < bg.armShare) { const k = pickArm(seededRandom(i * 1.5)); u = armAngle(r, k) + gauss(i * 3.3) * bg.armSpread * ARMS[k].width; }
+        let u, onArm = seededRandom(i * 6.1 + 0.4) < bg.armShare;
+        if (onArm) { const k = pickArm(seededRandom(i * 1.5)); u = armAngle(r, k) + gauss(i * 3.3) * bg.armSpread * ARMS[k].width; }
         else u = seededRandom(i * 1.5) * Math.PI * 2;
         const thick = bg.diskThick * Math.pow(1 - (r - bg.diskIn) / (bg.diskOut - bg.diskIn), 0.8) + 0.05;
-        return [Math.cos(u) * r, gauss(i * 3.7) * thick, Math.sin(u) * r];
+        return [Math.cos(u) * r, gauss(i * 3.7) * thick, Math.sin(u) * r, onArm ? 1 : 0];   // звёзды рукавов видны и перед фигурой
     }, 0);
     galaxy.add(diskStars);
 
@@ -278,18 +279,17 @@
         geo.setAttribute('aBright', new THREE.BufferAttribute(br, 1));
         const mat = new THREE.ShaderMaterial(Object.assign({}, DP.pointsMaterialConfig, {
             uniforms: { uTexture: DP.shared.uTexture, uViewportScale: DP.shared.uViewportScale,
-                        uSize: { value: bg.dustSize }, uAlpha: { value: bg.dustAlpha }, uCocoon: cocoon },
+                        uSize: { value: bg.dustSize }, uAlpha: { value: bg.dustAlpha } },
             vertexShader: `
                 uniform float uViewportScale, uSize;
                 attribute float aBright;
                 varying float vA;
-                ${cocoonGlsl}
                 void main() {
                     vec4 mv = modelViewMatrix * vec4(position, 1.0);
                     gl_Position = projectionMatrix * mv;
                     float dist = max(-mv.z, 0.1);
                     gl_PointSize = uSize * uViewportScale * (0.85 / (0.4 + 0.06 * min(dist, 8.0)));   // как точка лепестка
-                    vA = aBright * dpCocoon(dist);
+                    vA = aBright;   // пыль рукавов — без кокона (автор): видна и перед фигурой
                     if (vA < 0.002) gl_PointSize = 0.0;
                 }
             `,
