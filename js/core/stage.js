@@ -156,14 +156,30 @@
         return pts;
     }
     const nHalo = Math.round(bg.stars * bg.halo), nDisk = bg.stars - nHalo;
-    // Спираль (как Андромеда): угол рукава на радиусе r. Та же форма — у звёзд, облаков и туманности.
-    const armAngle = (r, arm) => arm * Math.PI * 2 / bg.arms + Math.log(Math.max(r, 0.1) / bg.diskIn) * bg.winding;
+    // Спираль: рукава неравные (автор: «натуралистичность и рандомайз») — у каждого свой сдвиг угла, закрутка,
+    // ширина, сила и длина хвоста, лёгкая волнистость. Тот же список — у туманности, звёзд, пыли и облаков.
+    const ARMS = [];
+    for (let k = 0; k < bg.arms; k++) {
+        const rnd = (m) => seededRandom(k * 13.7 + m * 3.1 + bg.armSeed);
+        ARMS.push({
+            phase: (k + (rnd(1) - 0.5) * 0.7) * Math.PI * 2 / bg.arms,
+            wind: bg.winding * (0.75 + 0.5 * rnd(2)),
+            width: 0.65 + 0.7 * rnd(3),
+            power: k < 2 ? 1 : 0.7 + 0.25 * rnd(4),                 // два главных рукава, остальные чуть слабее
+            tail: bg.nebulaR * (0.65 + 0.45 * rnd(5)),             // где рукав сходит на нет
+            wob: rnd(6) * 6.28
+        });
+    }
+    const armPower = ARMS.reduce((a, b) => a + b.power, 0);
+    const pickArm = (u) => { let x = u * armPower; for (let k = 0; k < ARMS.length; k++) { x -= ARMS[k].power; if (x <= 0) return k; } return ARMS.length - 1; };
+    const armAngle = (r, k) => { const A = ARMS[k % ARMS.length], rr = Math.max(r, 0.25);
+        return A.phase + Math.log(rr / bg.diskIn) * A.wind + 0.18 * Math.sin(rr * 1.1 + A.wob); };
     const gauss = (k) => (seededRandom(k) + seededRandom(k * 1.7 + 0.3) + seededRandom(k * 2.9 + 0.7) - 1.5) / 1.5;
     // Диск: звёзды в основном на рукавах спирали (с разбросом), часть — хаотично; толстый в середине, к краю тоньше.
     const diskStars = starPoints(nDisk, (i) => {
         const r = bg.diskIn + Math.pow(seededRandom(i * 2.3), 0.9) * (bg.diskOut - bg.diskIn);
         let u;
-        if (seededRandom(i * 6.1 + 0.4) < bg.armShare) u = armAngle(r, Math.floor(seededRandom(i * 1.5) * bg.arms)) + gauss(i * 3.3) * bg.armSpread;
+        if (seededRandom(i * 6.1 + 0.4) < bg.armShare) { const k = pickArm(seededRandom(i * 1.5)); u = armAngle(r, k) + gauss(i * 3.3) * bg.armSpread * ARMS[k].width; }
         else u = seededRandom(i * 1.5) * Math.PI * 2;
         const thick = bg.diskThick * Math.pow(1 - (r - bg.diskIn) / (bg.diskOut - bg.diskIn), 0.8) + 0.05;
         return [Math.cos(u) * r, gauss(i * 3.7) * thick, Math.sin(u) * r];
@@ -188,27 +204,30 @@
         };
         const fbm = (x, y, oct) => { let s = 0, w = 0.5, n = 0; for (let o = 0; o < oct; o++) { s += vnoise(x, y) * w; n += w; x = x * 2.03 + 17.1; y = y * 2.03 + 5.3; w *= 0.5; } return s / n; };
         const img = g.createImageData(S, S), D = img.data;
-        const sigma = bg.armSpread * 0.85;
+        const sigma = bg.armSpread * 0.7;
         for (let py = 0; py < S; py++) for (let px = 0; px < S; px++) {
             const x = (px + 0.5 - half) / scale, y = (py + 0.5 - half) / scale;
             const r = Math.hypot(x, y);
             if (r >= NR) continue;
             const th = Math.atan2(y, x);
-            // близость к рукаву (гауссиана по углу, рукав шире к краю)
+            // близость к рукавам: гауссиана по углу; у каждого рукава своя ширина (гуляет по длине), сила и хвост
             let arm = 0;
-            for (let k = 0; k < bg.arms; k++) {
-                const d = DP.util.wrapPi(th - armAngle(r, k)), sg = sigma * (0.8 + 0.4 * r / NR);
-                arm = Math.max(arm, Math.exp(-(d * d) / (sg * sg)));
+            for (let k = 0; k < ARMS.length; k++) {
+                const A = ARMS[k], d = DP.util.wrapPi(th - armAngle(r, k));
+                const sg = sigma * A.width * (0.75 + 0.45 * r / NR) * (0.8 + 0.25 * Math.sin(r * 1.7 + A.wob * 2));
+                const tail = 1 - DP.util.smoothstep(A.tail * 0.45, A.tail, r);
+                arm = Math.max(arm, Math.exp(-(d * d) / (sg * sg)) * A.power * tail);
             }
             // раскрученные координаты: в них рукава прямые, облака потом закручиваются вместе с ними
-            const un = -Math.log(Math.max(r, 0.1) / bg.diskIn) * bg.winding, cu = Math.cos(un), su = Math.sin(un);
+            const un = -Math.log(Math.max(r, 0.25) / bg.diskIn) * bg.winding, cu = Math.cos(un), su = Math.sin(un);
             const qx = (x * cu - y * su) * 0.9, qy = (x * su + y * cu) * 0.9;
             const wx = fbm(qx + 3.1, qy + 7.7, 3), wy = fbm(qx - 5.2, qy + 1.3, 3);     // искажение — клубы, а не пятна
             const n = fbm(qx + 2.2 * wx, qy + 2.2 * wy, 5);
-            const cloud = Math.max(0, n - 0.28) / 0.72;
-            // огибающая по радиусу: мягкий подъём от середины, к краю сходит на нет
-            const env = DP.util.smoothstep(bg.diskIn * 0.35, bg.diskIn * 1.1, r) * Math.pow(1 - r / NR, 1.3);
-            const dens = env * (0.18 + 0.82 * arm) * Math.pow(cloud, 1.4) * 1.9;
+            const cloud = Math.max(0, n - 0.22) / 0.78;
+            // ярче к центру, к хвостам слабее; рукава закручиваются почти до ядра; слабое ядро (bg.nebulaCore)
+            const env = DP.util.smoothstep(0.15, bg.diskIn * 0.7, r) * Math.pow(1 - r / NR, 1.5) * (1 + 1.2 * Math.exp(-r / bg.diskIn));
+            const core = bg.nebulaCore * Math.exp(-(r * r) / (bg.diskIn * bg.diskIn * 0.35)) * (0.6 + 0.4 * n);
+            const dens = env * (0.12 + 0.88 * arm) * Math.pow(cloud, 1.25) * 2.6 + core;
             D[(py * S + px) * 4 + 3] = Math.min(255, dens * 255);
         }
         g.putImageData(img, 0, 0);
@@ -237,6 +256,57 @@
         mesh.frustumCulled = false;
         galaxy.add(mesh);
         galaxy.userData.nebulaMat = mat;
+    })();
+    // Звёздная пыль: много мелких звёзд размером с точку лепестка пиона — вдоль рукавов, с толщиной (к центру
+    // толще), поэтому при вращении виден параллакс: галактика — объём, а не картинка на плоскости.
+    const dust = (function createDust() {
+        const n = Math.round(bg.dust * (DP.quality === 'low' ? 0.4 : DP.quality === 'medium' ? 0.7 : 1));
+        const R = bg.dustR, geo = new THREE.BufferGeometry();
+        const pos = new Float32Array(n * 3), br = new Float32Array(n);
+        for (let i = 0; i < n; i++) {
+            const onArm = seededRandom(i * 1.37 + 71) < 0.8;
+            const r = 0.25 + Math.pow(seededRandom(i * 2.11 + 72), 1.5) * (R - 0.25);   // гуще к центру
+            let u;
+            if (onArm) { const k = pickArm(seededRandom(i * 3.07 + 73)); u = armAngle(r, k) + gauss(i * 4.3 + 74) * bg.armSpread * 0.55 * ARMS[k].width; }
+            else u = seededRandom(i * 5.9 + 75) * Math.PI * 2;
+            const thick = bg.dustThick * (0.25 + Math.exp(-r / (bg.diskIn * 1.2)));
+            const rr = r + gauss(i * 6.1 + 76) * 0.12;
+            pos[i * 3] = Math.cos(u) * rr; pos[i * 3 + 1] = gauss(i * 7.7 + 77) * thick; pos[i * 3 + 2] = Math.sin(u) * rr;
+            br[i] = (0.25 + 0.75 * Math.pow(seededRandom(i * 8.3 + 78), 2)) * (onArm ? 1 : 0.5) * (1 - 0.7 * r / R);
+        }
+        geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        geo.setAttribute('aBright', new THREE.BufferAttribute(br, 1));
+        const mat = new THREE.ShaderMaterial(Object.assign({}, DP.pointsMaterialConfig, {
+            uniforms: { uTexture: DP.shared.uTexture, uViewportScale: DP.shared.uViewportScale,
+                        uSize: { value: bg.dustSize }, uAlpha: { value: bg.dustAlpha }, uCocoon: cocoon },
+            vertexShader: `
+                uniform float uViewportScale, uSize;
+                attribute float aBright;
+                varying float vA;
+                ${cocoonGlsl}
+                void main() {
+                    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+                    gl_Position = projectionMatrix * mv;
+                    float dist = max(-mv.z, 0.1);
+                    gl_PointSize = uSize * uViewportScale * (0.85 / (0.4 + 0.06 * min(dist, 8.0)));   // как точка лепестка
+                    vA = aBright * dpCocoon(dist);
+                    if (vA < 0.002) gl_PointSize = 0.0;
+                }
+            `,
+            fragmentShader: `
+                uniform sampler2D uTexture; uniform float uAlpha;
+                varying float vA;
+                void main() {
+                    vec4 tex = texture2D(uTexture, gl_PointCoord);
+                    if (tex.a < 0.01) discard;
+                    gl_FragColor = vec4(vec3(0.75, 0.87, 1.0), tex.a * vA * uAlpha);
+                }
+            `
+        }));
+        const pts = new THREE.Points(geo, mat);
+        pts.frustumCulled = false;
+        galaxy.add(pts);
+        return pts;
     })();
     // Звёздное небо: дальняя сфера вокруг фигуры — её дальняя половина (за коконом) закрывает весь кадр
     // позади фигуры, и сверху, и снизу; вращается медленнее диска (параллакс).
@@ -267,7 +337,7 @@
         for (let i = 0; i < count; i++) {
             const high = seededRandom(i * 3.9 + 5) < bg.cloudHigh;   // немногие облака — выше диска
             const r = bg.diskIn + Math.sqrt(seededRandom(i * 6.7 + 2)) * (bg.diskOut - bg.diskIn);
-            const u = armAngle(r, Math.floor(seededRandom(i * 9.1 + 1) * bg.arms)) + gauss(i * 2.2 + 9) * bg.armSpread;   // облака — вдоль рукавов
+            const u = armAngle(r, pickArm(seededRandom(i * 9.1 + 1))) + gauss(i * 2.2 + 9) * bg.armSpread;   // облака — вдоль рукавов
             pos[i * 3] = Math.cos(u) * r;
             pos[i * 3 + 1] = high ? 1.5 + seededRandom(i * 4.3 + 3) * bg.haloHigh * 0.6 : (seededRandom(i * 4.3 + 3) - 0.5) * bg.diskThick * 2;
             pos[i * 3 + 2] = Math.sin(u) * r;
@@ -323,6 +393,7 @@
             [diskStars, haloStars].forEach(p => { p.material.uniforms.uSize.value = b.starSize; p.material.uniforms.uAlpha.value = b.starAlpha; });
             c.uSize.value = b.cloudSize; c.uAlpha.value = b.cloudAlpha;
             galaxy.userData.nebulaMat.uniforms.uAlpha.value = b.nebulaAlpha;
+            dust.material.uniforms.uSize.value = b.dustSize; dust.material.uniforms.uAlpha.value = b.dustAlpha;
             drawHud(Math.max(1, window.innerWidth), Math.max(1, window.innerHeight));
         }
     };
