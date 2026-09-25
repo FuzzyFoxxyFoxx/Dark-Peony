@@ -78,16 +78,18 @@
         fadeIn: 0.61, fadeOut: 0.45,
         grow: 1.75,        // во сколько раз частица крупнее к концу жизни
         size: 1.6,
-        alpha: 0.33
+        alpha: 0.33,
+        fresnel: 0.8       // френель дыма: у края сферы ярче (0 — выкл.)
     }, DP.config.starSmoke || {});
     // Ядро: сфера точек внутри дымной оболочки, без флуктуаций; точки мигают по очень крупному шуму
     // (размер от нуля до полного).
     DP.config.starCore = Object.assign({
         radius: 0.96,      // доля радиуса дымной оболочки (значения — подобраны автором)
-        size: 2.2, alpha: 2.0,
+        size: 2.2, alpha: 1.53,
+        fresnel: 1.0,      // френель ядра: край ярче центра (0 — выкл.)
         noiseScale: 1.25,  // масштаб шума мигания (меньше — крупнее пятна)
         speed: 0.54,       // скорость мигания
-        blinkSoft: 0.6,    // мягкость границы между точками и пустотами (больше — плавнее градиент)
+        blinkSoft: 1.29,   // мягкость границы между точками и пустотами (больше — плавнее градиент)
         blinkLevel: 0.1    // доля пустот: порог шума (больше — пустот больше)
     }, DP.config.starCore || {});
 
@@ -223,13 +225,15 @@
     const coreSphereFragment = (G) => `
         ${G.pointsFragment}
         uniform sampler2D uTexture;
-        uniform float uCoreAlpha;
+        uniform float uCoreAlpha, uCoreFres;
         varying float vFresnel, vDepthK, vSz;
         void main() {
             vec4 tex = texture2D(uTexture, gl_PointCoord);
             if (tex.a < 0.01) discard;
             vec3 c = mix(vec3(0.7, 0.85, 1.0), vec3(0.95, 0.98, 1.0), vFresnel);
-            gl_FragColor = dpMorphColor(c, tex.a * uCoreAlpha * (0.6 + 0.4 * vFresnel) * vSz * vDepthK, tex.a);
+            // френель: край сферы ярче центра — объём (uCoreFres: 0 — ровно, 1 — как у лепестков, больше — сильнее)
+            float fr = mix(1.0, 0.25 + 1.6 * vFresnel, uCoreFres);
+            gl_FragColor = dpMorphColor(c, tex.a * uCoreAlpha * fr * vSz * vDepthK, tex.a);
         }
     `;
 
@@ -415,6 +419,7 @@
         uniform vec4 uSmokeLook;   // появление, угасание, рост, размер
         uniform vec4 uSmokeLook2;  // x — яркость всполохов
         attribute vec2 aRef;
+        uniform float uSmokeFres;
         varying float vA, vK;
         void main() {
             vec3 dpRest = position;
@@ -430,6 +435,9 @@
             gl_Position = projectionMatrix * mv;
             float dist = max(-mv.z, 0.1);
             ${depthVert}
+            // френель дыма: частицы у края сферы (радиус поперёк взгляда) ярче — сферичность
+            float fz = abs(dot(normalize(normalMatrix * normalize(P.xyz + 1e-5)), normalize(-mv.xyz)));
+            vA *= mix(1.0, 0.3 + 1.4 * pow(1.0 - fz, 1.5), uSmokeFres);
             gl_PointSize = uSmokeLook.w * uViewportScale * mix(1.0, uSmokeLook.z, k * k) / (0.35 + 0.06 * dist);
             if (vA < 0.001) gl_PointSize = 0.0;
             dpMorphFinish();
@@ -635,15 +643,17 @@
 
     // Сфера из точек рядками: параллели × меридианы (у полюсов меридианов меньше), MULT точек на узел
     // со сдвигом ±0.4 ячейки — как у купола медузы.
-    function spherePoints(R, q, cb) {
-        const h = STEP / Math.sqrt(q);
-        const nS = Math.max(6, Math.ceil(Math.PI * R / h));
+    // hRow/hCol — шаг между параллелями и вдоль параллели (по умолчанию одинаковый STEP); у ядра параллели реже,
+    // как рядки у лепестков пиона (вдоль лепестка ≈0.025–0.03, поперёк ≈0.02) — рядки читаются.
+    function spherePoints(R, q, cb, hRow = STEP, hCol = STEP, jRow = 0.8) {
+        const h = hCol / Math.sqrt(q), hR = hRow / Math.sqrt(q);
+        const nS = Math.max(6, Math.ceil(Math.PI * R / hR));
         let sd = R * 13.1;
         for (let i = 0; i <= nS; i++) {
             const th0 = (i / nS) * Math.PI;
             const nT = Math.max(6, Math.round(2 * Math.PI * R * Math.sin(th0) / h));
             for (let j = 0; j < nT; j++) for (let m = 0; m < MULT; m++) {
-                const th = Math.min(Math.PI, Math.max(0, (i + (seededRandom(sd += 1.1) - 0.5) * 0.8) / nS * Math.PI));
+                const th = Math.min(Math.PI, Math.max(0, (i + (seededRandom(sd += 1.1) - 0.5) * jRow) / nS * Math.PI));
                 const ph = (j + (seededRandom(sd += 1.3) - 0.5) * 0.8) / nT * Math.PI * 2;
                 cb(Math.sin(th) * Math.sin(ph), Math.cos(th), Math.sin(th) * Math.cos(ph), seededRandom(sd += 0.9));
             }
@@ -762,7 +772,7 @@
         // ---------- ЯДРО-СФЕРА ----------
         const csP = [], csS = [];
         const coreR = STAR_R * DP.config.starCore.radius;
-        spherePoints(coreR, q, (x, y, z, rs) => { csP.push(x * coreR, y * coreR, z * coreR); csS.push(rs); });
+        spherePoints(coreR, q, (x, y, z, rs) => { csP.push(x * coreR, y * coreR, z * coreR); csS.push(rs); }, 0.03, 0.02, 0.3);   // поперёк параллели разброс меньше (±0.15) — параллели читаются линиями
         const coreSphereGeo = new THREE.BufferGeometry();
         coreSphereGeo.setAttribute('position', new THREE.Float32BufferAttribute(csP, 3));
         coreSphereGeo.setAttribute('aSizeScale', new THREE.Float32BufferAttribute(csS, 1));
@@ -1054,7 +1064,7 @@
         const read = () => { const buf = new Float32Array(N * N * 4); renderer.readRenderTargetPixels(targets[cur], 0, 0, N, N, buf); return buf; };
         DP.starSmokeSim = { read, get N() { return N; } };
         return {
-            step, uniforms: { uSmokePos: pos, uSmokeInfo: { value: data.smoke.infoTex }, uSmokeLife: life, uSmokeLook: look, uSmokeLook2: look2,
+            step, uniforms: { uSmokePos: pos, uSmokeInfo: { value: data.smoke.infoTex }, uSmokeLife: life, uSmokeLook: look, uSmokeLook2: look2, uSmokeFres: { get value() { return DP.config.starSmoke.fresnel; } },
                               uAlpha: { get value() { return DP.config.starSmoke.alpha; } } },
             dispose() { targets.forEach(t => t.dispose()); simMat.dispose(); }
         };
@@ -1089,7 +1099,7 @@
                         uniforms: Object.assign({ uTime: S.uTime, uDepth: { value: new THREE.Vector2(8.1, 0.4) }, uStarR: { value: STAR_R },
                                                   uTexture: S.uTexture, uViewportScale: S.uViewportScale, uCore,
                                                   uBlink: { get value() { return blinkVec.set(C.blinkLevel, Math.max(0.01, C.blinkSoft)); } },
-                                                  uCoreAlpha: { get value() { return C.alpha; } } }, DP.morph.uniformsFor(ctx.uniforms)),
+                                                  uCoreAlpha: { get value() { return C.alpha; } }, uCoreFres: { get value() { return C.fresnel; } } }, DP.morph.uniformsFor(ctx.uniforms)),
                         vertexShader: coreSphereVertex(G), fragmentShader: coreSphereFragment(G)
                     }));
                     mats.list.push(m);
