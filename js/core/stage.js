@@ -229,7 +229,8 @@
             const env = DP.util.smoothstep(0.15, bg.diskIn * 0.7, r) * Math.pow(1 - r / NR, 1.5) * (1 + 1.2 * Math.exp(-r / bg.diskIn));
             const core = bg.nebulaCore * Math.exp(-(r * r) / (bg.diskIn * bg.diskIn * 0.35)) * (0.6 + 0.4 * n);
             const dens = env * (0.12 + 0.88 * arm) * Math.pow(cloud, 1.25) * 2.6 + core;
-            D[(py * S + px) * 4 + 3] = Math.min(255, dens * 255);
+            // мягкий «потолок»: плотные места рукавов не выгорают в белое (автор)
+            D[(py * S + px) * 4 + 3] = 255 * bg.nebulaCap * (1 - Math.exp(-dens / bg.nebulaCap));
         }
         g.putImageData(img, 0, 0);
         const tex = new THREE.CanvasTexture(c);
@@ -268,12 +269,18 @@
             const onArm = seededRandom(i * 1.37 + 71) < 0.8;
             const r = 0.25 + Math.pow(seededRandom(i * 2.11 + 72), 1.5) * (R - 0.25);   // гуще к центру
             let u;
-            if (onArm) { const k = pickArm(seededRandom(i * 3.07 + 73)); u = armAngle(r, k) + gauss(i * 4.3 + 74) * bg.armSpread * 0.55 * ARMS[k].width; }
+            if (onArm) {
+                // распыление вдоль рукава (автор: на 20–30% сильнее, мягче переход от пустоты к скоплению):
+                // основной разброс × dustSpread, у трети звёзд — вдвое шире («хвост» разброса)
+                const k = pickArm(seededRandom(i * 3.07 + 73)), wide = seededRandom(i * 9.7 + 79) < 0.33 ? 2 : 1;
+                u = armAngle(r, k) + gauss(i * 4.3 + 74) * bg.armSpread * 0.55 * bg.dustSpread * wide * ARMS[k].width;
+            }
             else u = seededRandom(i * 5.9 + 75) * Math.PI * 2;
             const thick = bg.dustThick * (0.25 + Math.exp(-r / (bg.diskIn * 1.2)));
-            const rr = r + gauss(i * 6.1 + 76) * 0.12;
+            const rr = r + gauss(i * 6.1 + 76) * 0.12 * bg.dustSpread * 1.4;
             pos[i * 3] = Math.cos(u) * rr; pos[i * 3 + 1] = gauss(i * 7.7 + 77) * thick; pos[i * 3 + 2] = Math.sin(u) * rr;
-            br[i] = (0.25 + 0.75 * Math.pow(seededRandom(i * 8.3 + 78), 2)) * (onArm ? 1 : 0.5) * (1 - 0.7 * r / R);
+            br[i] = (0.25 + 0.75 * Math.pow(seededRandom(i * 8.3 + 78), 2)) * (onArm ? 1 : 0.5) * (1 - 0.7 * r / R)
+                  * (0.5 + seededRandom(i * 10.9 + 80));   // яркость гуляет ±50%
         }
         geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
         geo.setAttribute('aBright', new THREE.BufferAttribute(br, 1));
