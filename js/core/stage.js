@@ -81,15 +81,21 @@
     const bg = cfg.background;
     const galaxy = new THREE.Group();   // диск + туманности (вращается вокруг своей оси)
     const halo = new THREE.Group();     // звёзды над диском (вращаются медленнее)
-    // Плоскость галактики наклонена так, чтобы её горизонт (точка схода) был на `horizon` высоты экрана сверху
-    // (автор: на линии, делящей верхнюю половину пополам). Угол — из направления взгляда камеры и её поля зрения.
+    // Плоскость галактики наклонена так, чтобы её видимый дальний край был на `horizon` высоты экрана сверху
+    // (автор: на линии, делящей верхнюю половину пополам; угол утверждён).
     const galaxyTilt = new THREE.Group();
     galaxyTilt.position.set(0, bg.diskY, 0);
     (function placeHorizon() {
-        const look = new THREE.Vector3(0, -0.48, 0).sub(camera.position).normalize();
-        const pitch = Math.asin(-look.y);                                   // камера смотрит вниз на pitch
-        const up = Math.atan((1 - 2 * bg.horizon) * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
-        galaxyTilt.rotation.x = -(pitch - up);                              // дальний край плоскости опущен
+        // угол подбирается так, чтобы дальний край звёздного диска (diskOut) был на `horizon` высоты экрана сверху
+        camera.updateMatrixWorld(); camera.updateProjectionMatrix();
+        const p = new THREE.Vector3(), screenY = (a) => {
+            galaxyTilt.rotation.x = a; galaxyTilt.updateMatrixWorld(true);
+            p.set(0, 0, -bg.diskOut).applyMatrix4(galaxyTilt.matrixWorld).project(camera);
+            return (1 - p.y) / 2;
+        };
+        let lo = -1.4, hi = 0.5;                                            // выше угол — выше дальний край
+        for (let i = 0; i < 50; i++) { const m = (lo + hi) / 2; if (screenY(m) > bg.horizon) lo = m; else hi = m; }
+        galaxyTilt.rotation.x = (lo + hi) / 2;
     })();
     galaxyTilt.add(galaxy);
     scene.add(galaxyTilt, halo);
@@ -164,43 +170,48 @@
     }, 0);
     galaxy.add(diskStars);
 
-    // Туманность в плоскости пола: процедурная текстура — сотни тонких дымных дуг, закрученных по рукавам,
-    // с мягким свечением; центр пустой (там на референсе чёрная дыра — не рисуем). Вращается вместе с диском.
+    // Туманность в плоскости пола: мягкая спиральная туманность без штрихов (автор: «царапины на пластинке» не нужны).
+    // Плотность считается попиксельно: рукава спирали (та же armAngle, что у звёзд) × облачный фрактальный шум.
+    // Шум берётся в «раскрученной» системе координат — облака вытягиваются вдоль рукавов. Вращается вместе с диском.
     (function createNebula() {
-        const S = 1024, c = document.createElement('canvas');
+        const S = 512, c = document.createElement('canvas');
         c.width = c.height = S;
         const g = c.getContext('2d');
         const NR = bg.nebulaR, half = S / 2, scale = half / NR;   // единицы сцены → пиксели текстуры
-        g.lineCap = 'round';
-        g.shadowColor = 'rgba(200, 225, 255, 1)';
-        for (let i = 0; i < bg.nebulaStrokes; i++) {
-            const r0 = bg.diskIn * 0.8 + Math.pow(seededRandom(i * 1.13 + 0.5), 1.1) * (NR * 0.95 - bg.diskIn * 0.8);
-            const arm = Math.floor(seededRandom(i * 2.71) * bg.arms);
-            const onArm = seededRandom(i * 3.17) < 0.75;
-            const a0 = (onArm ? armAngle(r0, arm) + gauss(i * 4.4) * bg.armSpread * 0.8 : seededRandom(i * 5.3) * Math.PI * 2);
-            const len = 0.15 + Math.pow(seededRandom(i * 6.7), 2) * 1.1;   // длина дуги, рад (больше коротких)
-            const fade = 1 - Math.pow(Math.max(0, r0 - bg.diskIn) / (NR - bg.diskIn), 1.2);
-            const drift = (seededRandom(i * 10.3) - 0.35) * 0.14;          // пряди чуть наматываются по спирали
-            const wob = seededRandom(i * 11.9) * 6.28, wobA = seededRandom(i * 12.7) * 0.012;
-            g.globalAlpha = (0.03 + seededRandom(i * 7.9) * 0.1) * Math.max(0.15, fade);
-            g.lineWidth = 0.6 + seededRandom(i * 8.3) * 2.2;
-            g.shadowBlur = 4 + seededRandom(i * 9.1) * 10;
-            g.strokeStyle = 'rgba(225, 238, 255, 1)';
-            g.beginPath();
-            // дуга, которая чуть «наматывается» по спирали: радиус растёт вместе с углом
-            for (let k = 0; k <= 24; k++) {
-                const t = k / 24, a = a0 + len * t, r = r0 * (1 + drift * t + wobA * Math.sin(wob + t * 9));
-                const x = half + Math.cos(a) * r * scale, y = half + Math.sin(a) * r * scale;
-                if (k === 0) g.moveTo(x, y); else g.lineTo(x, y);
+        // сглаженный шум по решётке + фрактал (несколько октав)
+        const hash = (x, y) => { const h = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return h - Math.floor(h); };
+        const vnoise = (x, y) => {
+            const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+            const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+            const a = hash(ix, iy), b = hash(ix + 1, iy), c2 = hash(ix, iy + 1), d = hash(ix + 1, iy + 1);
+            return a + (b - a) * ux + (c2 - a) * uy + (a - b - c2 + d) * ux * uy;
+        };
+        const fbm = (x, y, oct) => { let s = 0, w = 0.5, n = 0; for (let o = 0; o < oct; o++) { s += vnoise(x, y) * w; n += w; x = x * 2.03 + 17.1; y = y * 2.03 + 5.3; w *= 0.5; } return s / n; };
+        const img = g.createImageData(S, S), D = img.data;
+        const sigma = bg.armSpread * 0.85;
+        for (let py = 0; py < S; py++) for (let px = 0; px < S; px++) {
+            const x = (px + 0.5 - half) / scale, y = (py + 0.5 - half) / scale;
+            const r = Math.hypot(x, y);
+            if (r >= NR) continue;
+            const th = Math.atan2(y, x);
+            // близость к рукаву (гауссиана по углу, рукав шире к краю)
+            let arm = 0;
+            for (let k = 0; k < bg.arms; k++) {
+                const d = DP.util.wrapPi(th - armAngle(r, k)), sg = sigma * (0.8 + 0.4 * r / NR);
+                arm = Math.max(arm, Math.exp(-(d * d) / (sg * sg)));
             }
-            g.stroke();
+            // раскрученные координаты: в них рукава прямые, облака потом закручиваются вместе с ними
+            const un = -Math.log(Math.max(r, 0.1) / bg.diskIn) * bg.winding, cu = Math.cos(un), su = Math.sin(un);
+            const qx = (x * cu - y * su) * 0.9, qy = (x * su + y * cu) * 0.9;
+            const wx = fbm(qx + 3.1, qy + 7.7, 3), wy = fbm(qx - 5.2, qy + 1.3, 3);     // искажение — клубы, а не пятна
+            const n = fbm(qx + 2.2 * wx, qy + 2.2 * wy, 5);
+            const cloud = Math.max(0, n - 0.28) / 0.72;
+            // огибающая по радиусу: мягкий подъём от середины, к краю сходит на нет
+            const env = DP.util.smoothstep(bg.diskIn * 0.35, bg.diskIn * 1.1, r) * Math.pow(1 - r / NR, 1.3);
+            const dens = env * (0.18 + 0.82 * arm) * Math.pow(cloud, 1.4) * 1.9;
+            D[(py * S + px) * 4 + 3] = Math.min(255, dens * 255);
         }
-        g.globalAlpha = 1; g.shadowBlur = 0;
-        // мягкое общее свечение кольца
-        const gr = g.createRadialGradient(half, half, bg.diskIn * scale * 0.7, half, half, NR * scale);
-        gr.addColorStop(0, 'rgba(160, 200, 255, 0)'); gr.addColorStop(0.15, 'rgba(160, 200, 255, 0.06)');
-        gr.addColorStop(0.5, 'rgba(160, 200, 255, 0.025)'); gr.addColorStop(1, 'rgba(160, 200, 255, 0)');
-        g.fillStyle = gr; g.fillRect(0, 0, S, S);
+        g.putImageData(img, 0, 0);
         const tex = new THREE.CanvasTexture(c);
         const mat = new THREE.ShaderMaterial({
             uniforms: { uTex: { value: tex }, uAlpha: { value: bg.nebulaAlpha }, uCocoon: cocoon },
