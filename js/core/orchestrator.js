@@ -78,7 +78,19 @@
     function startMorph(name, resolve) {
         const from = current;
         const to = instantiate(name);
-        const duration = DP.morph.plan(from.instance.layout, to.instance.layout);
+        let duration;
+        try { duration = DP.morph.plan(from.instance.layout, to.instance.layout); }
+        catch (e) {
+            // Ошибка подготовки — не оставляем две фигуры друг на друге: показываем новую без морфинга.
+            console.error('DP.morph.plan:', e);
+            release(from);
+            current = to;
+            setTilt(to.tilt);
+            applyVisibility();
+            events.emit('morphend', { figure: name });
+            resolve && resolve(name);
+            return;
+        }
 
         from.uniforms.uMorphActive.value = 1; from.uniforms.uMorphRole.value = 0; from.uniforms.uMorphTime.value = 0;
         to.uniforms.uMorphActive.value = 1;   to.uniforms.uMorphRole.value = 1;   to.uniforms.uMorphTime.value = 0;
@@ -106,6 +118,27 @@
             if (q.name) startMorph(q.name, q.resolve);
         }
     }
+
+    // Заранее (в фоне) подготовить морфинг в следующую по кругу фигуру: тяжёлая сортировка точек
+    // считается фоновым потоком, пока фигура спокойно вращается, — старт морфинга без замирания.
+    let prewarmTimer = null;
+    function prewarmNext() {
+        clearTimeout(prewarmTimer);
+        prewarmTimer = setTimeout(() => {
+            if (!current || morph || !DP.morph.prewarm) return;
+            const list = DP.figures.list();
+            const next = list[(list.indexOf(current.name) + 1) % list.length];
+            const def = registry[next];
+            if (!def || !def.getLayout) return;
+            try {
+                const layout = def.getLayout({ quality: DP.quality, qualityTier: DP.QUALITY_TIERS[DP.quality] });
+                DP.morph.prewarm(current.instance.layout, layout);
+                if (DP.morph.planAhead) DP.morph.planAhead(current.instance.layout, layout);
+            } catch (e) { console.warn('DP.prewarm:', e); }
+        }, 400);
+    }
+    events.on('show', prewarmNext);
+    events.on('morphend', prewarmNext);
 
     DP.orchestrator = {
         on: events.on.bind(events),

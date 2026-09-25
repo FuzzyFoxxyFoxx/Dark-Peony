@@ -729,6 +729,8 @@
     // ==========================================
     DP.figures.register({
         name: 'peony',
+        // Раскладка точек без создания экземпляра — для заблаговременной подготовки морфинга.
+        getLayout(ctx) { return (cache[ctx.quality] || (cache[ctx.quality] = buildGeometry(ctx.qualityTier))).layout; },
         createInstance(ctx) {
             const tier = ctx.qualityTier;
             const data = cache[ctx.quality] || (cache[ctx.quality] = buildGeometry(tier));

@@ -973,6 +973,8 @@
     DP.figures.register({
         name: 'jellyfish',
         stageTilt: -1.25,     // наклон сцены: смотрим снизу (~26°) — кольца щупалец видны овалами, как у пиона
+        // Раскладка точек без создания экземпляра — для заблаговременной подготовки морфинга.
+        getLayout(ctx) { return (cache[ctx.quality] || (cache[ctx.quality] = buildGeometry(ctx.qualityTier))).layout; },
         createInstance(ctx) {
             const data = cache[ctx.quality] || (cache[ctx.quality] = buildGeometry(ctx.qualityTier));
             const mats = createMaterials(ctx, data);

@@ -228,6 +228,21 @@
         },
 
         // n — сторона текстуры; dA: xyz фигуры A + отрыв L; dB: xyz фигуры B + длительность D; dS: seed.
+        // Заранее загрузить данные пар в видеокарту (пока фигура спокойно вращается) — старт без замирания.
+        stage(n, dA, dB, dS) {
+            if (!this.supported()) return;
+            if (n !== side) {
+                if (targets) targets.forEach(t => t.dispose());
+                side = n;
+                targets = [makeTarget(n, support.type), makeTarget(n, support.type)];
+            }
+            [texA, texB, texS].forEach(t => t && t.dispose());
+            texA = dataTex(dA, n); texB = dataTex(dB, n); texS = dataTex(dS, n);
+            const r = DP.stage.renderer;
+            [texA, texB, texS].forEach(t => r.initTexture(t));
+            this.staged = { n, dA, dB, dS };
+        },
+
         // ring: { center, R } — неподвижное кольцо, или { at(t) → {y, R, dy, dR} } — кольцо едет и дышит.
         // timing: { capture, land, gravity, pull, twist } — вместо значений DP.config.morph.smoke.
         prepare(n, dA, dB, dS, ring, timing) {
@@ -237,8 +252,12 @@
                 side = n;
                 targets = [makeTarget(n, support.type), makeTarget(n, support.type)];
             }
-            [texA, texB, texS].forEach(t => t && t.dispose());
-            texA = dataTex(dA, n); texB = dataTex(dB, n); texS = dataTex(dS, n);
+            const st = this.staged;
+            if (!(st && st.n === n && st.dA === dA && st.dB === dB && st.dS === dS)) {
+                [texA, texB, texS].forEach(t => t && t.dispose());
+                texA = dataTex(dA, n); texB = dataTex(dB, n); texS = dataTex(dS, n);
+            }
+            this.staged = null;
             if (!material) {
                 material = new THREE.ShaderMaterial({
                     uniforms: {
