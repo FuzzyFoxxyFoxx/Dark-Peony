@@ -293,6 +293,85 @@
             shared.uSmokeTex.value = targets[cur].texture;
         },
 
-        stop() { shared.uSmokeA.value.x = 0; }
+        stop() { shared.uSmokeA.value.x = 0; shared.uShadowInfo.value.x = 0; },
+
+        // ---------- самозатенение (как в The Spirit): плотность дыма «со стороны света» ----------
+        // Точки пар рисуются ортографической камерой света в маленькую текстуру; канал = слой глубины
+        // (R — ближе всего к свету … A — дальше всего). Шейдер фигуры читает её (DP.morph: uShadowTex).
+        setShadow(k, center, radius) {
+            shared.uShadowInfo.value.set(k > 0 ? 1 : 0, k, 0, 0);
+            this.shadowCenter = center; this.shadowR = radius;
+            if (!(k > 0) || !targets) return;
+            if (!this.shadowRT) {
+                this.shadowRT = new THREE.WebGLRenderTarget(256, 256, { type: support.type === THREE.FloatType ? THREE.HalfFloatType : support.type,
+                    format: THREE.RGBAFormat, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false, stencilBuffer: false });
+                // HalfFloat не везде рисуется — тогда полная точность.
+                const r = DP.stage.renderer, prev = r.getRenderTarget();
+                r.setRenderTarget(this.shadowRT);
+                const gl = r.getContext();
+                if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+                    this.shadowRT.dispose();
+                    this.shadowRT = new THREE.WebGLRenderTarget(256, 256, { type: support.type, format: THREE.RGBAFormat,
+                        minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: false, stencilBuffer: false });
+                }
+                r.setRenderTarget(prev);
+                this.lightCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+                this.shadowMat = new THREE.ShaderMaterial({
+                    uniforms: { uState: { value: null }, uStage: shared.uStageMatrix, uLight: { value: new THREE.Matrix4() } },
+                    vertexShader: `
+                        uniform sampler2D uState; uniform mat4 uStage, uLight;
+                        attribute vec2 aRef; varying float vSlab;
+                        void main() {
+                            vec4 st = texture2D(uState, aRef);
+                            if (st.x == 0.0 && st.y == 0.0 && st.z == 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; return; }
+                            vec4 c = uLight * (uStage * vec4(st.xyz, 1.0));
+                            gl_Position = c; gl_PointSize = 2.0;
+                            vSlab = clamp(c.z * 0.5 + 0.5, 0.0, 0.9999) * 4.0;
+                        }`,
+                    fragmentShader: `
+                        varying float vSlab;
+                        void main() { gl_FragColor = vec4(equal(vec4(floor(vSlab)), vec4(0.0, 1.0, 2.0, 3.0))); }`,
+                    blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+                    blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor, blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneFactor,
+                    depthTest: false, depthWrite: false, transparent: true
+                });
+                this.shadowScene = new THREE.Scene();
+            }
+            if (this.shadowSide !== side) {
+                if (this.shadowPts) { this.shadowScene.remove(this.shadowPts); this.shadowPts.geometry.dispose(); }
+                const ref = new Float32Array(side * side * 2);
+                for (let i = 0; i < side * side; i++) { ref[i * 2] = ((i % side) + 0.5) / side; ref[i * 2 + 1] = (Math.floor(i / side) + 0.5) / side; }
+                const g = new THREE.BufferGeometry();
+                g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(side * side * 3), 3));
+                g.setAttribute('aRef', new THREE.BufferAttribute(ref, 2));
+                this.shadowPts = new THREE.Points(g, this.shadowMat);
+                this.shadowPts.frustumCulled = false;
+                this.shadowScene.add(this.shadowPts);
+                this.shadowSide = side;
+            }
+            shared.uShadowTex.value = this.shadowRT.texture;
+        },
+
+        renderShadow() {
+            if (shared.uShadowInfo.value.x < 0.5 || shared.uSmokeA.value.x < 0.5 || !this.shadowRT || !targets) return;
+            const r = DP.stage.renderer, R = this.shadowR;
+            // Свет сверху-спереди-слева, неподвижен в мире; сцена вращается под ним.
+            const c = this.shadowCenter.clone().applyMatrix4(shared.uStageMatrix.value);
+            const cam = this.lightCam;
+            cam.left = -R; cam.right = R; cam.top = R; cam.bottom = -R; cam.near = R * 0.5; cam.far = R * 3.5;
+            cam.position.copy(c).add(new THREE.Vector3(-0.35, 1, 0.45).normalize().multiplyScalar(R * 2));
+            cam.lookAt(c); cam.updateProjectionMatrix(); cam.updateMatrixWorld();
+            this.shadowMat.uniforms.uLight.value.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+            shared.uShadowLight.value.copy(this.shadowMat.uniforms.uLight.value);
+            this.shadowMat.uniforms.uState.value = targets[cur].texture;
+            const prev = r.getRenderTarget(), prevClear = r.autoClear, cc = r.getClearColor(new THREE.Color()), ca = r.getClearAlpha();
+            r.setRenderTarget(this.shadowRT);
+            r.setClearColor(0x000000, 0); r.clear(true, false, false);
+            r.autoClear = false;
+            r.render(this.shadowScene, cam);
+            r.autoClear = prevClear;
+            r.setClearColor(cc, ca);
+            r.setRenderTarget(prev);
+        }
     };
 })(window.DP);
