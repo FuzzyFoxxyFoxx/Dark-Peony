@@ -45,6 +45,28 @@
           planet: { r: 0.12, tex: 'ice', spin: 0.3, seed: 12.4 } }
     ];
     const PLANET_AXIS_TILT = 0.4;
+    // Планеты при появлении фигуры — максимально равноудалены (автор): фазы подбираются так, чтобы наименьшее
+    // расстояние между любыми двумя планетами было как можно больше (в пространстве — от ракурса не зависит;
+    // сцена всё равно вращается). Поиск по сетке фаз, несколько проходов «по одной планете».
+    (function spreadPlanets() {
+        const pos = (O, ph) => {
+            const x = O.R * Math.cos(ph), z0 = O.R * Math.sin(ph);
+            const y = -z0 * Math.sin(O.incl), z = z0 * Math.cos(O.incl);
+            return [x * Math.cos(O.node) + z * Math.sin(O.node), y, -x * Math.sin(O.node) + z * Math.cos(O.node)];
+        };
+        const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+        const P = ORBITS.map(O => pos(O, O.phase));
+        for (let pass = 0; pass < 6; pass++) ORBITS.forEach((O, k) => {
+            let best = O.phase, bestD = -1;
+            for (let i = 0; i < 180; i++) {
+                const ph = i / 180 * Math.PI * 2, p = pos(O, ph);
+                let d = Infinity;
+                P.forEach((q, m) => { if (m !== k) d = Math.min(d, dist(p, q)); });
+                if (d > bestD) { bestD = d; best = ph; }
+            }
+            O.phase = best; P[k] = pos(O, best);
+        });
+    })();
 
     // «Атом»: орбиты астероидов вокруг светила под разными углами; на каждой — n астероидов, расставленных
     // равномерно (на одной орбите они не сходятся); у орбит свои радиус, скорость и направление — вразнобой.
@@ -1071,7 +1093,22 @@
             fragmentShader: meshFrag, transparent: true, depthWrite: false
         })));
 
-        return { list, veins, core, rays, loops, orbits, bodies, starMesh, bodyMeshes };
+        // «Пристёгивание» к моменту появления: время общее (идёт с загрузки страницы), поэтому при каждом появлении
+        // фигуры фазы сдвигаются на −ω·T — в этот момент тела стоят на своих местах (как в покое), дальше летят.
+        const phases = [];
+        const addPhase = (vec, key, base, omega) => phases.push({ vec, key, base, omega });
+        data.orbits.forEach((o, i) => {
+            const U = orbits[i].uniforms;
+            addPhase(U.uPlanet.value, 'x', o.O.phase, o.O.omega);
+            if (o.parent) addPhase(U.uParent.value, 'w', o.parent.phase, o.parent.omega);
+        });
+        data.bodies.forEach((b, i) => [bodies[i], bodyMeshes[i]].forEach(m => {
+            addPhase(m.uniforms.uOrbit.value, 'w', b.orbit.phase, b.orbit.omega);
+            if (b.parent) addPhase(m.uniforms.uParent.value, 'w', b.parent.phase, b.parent.omega);
+        }));
+        const anchor = (T) => phases.forEach(p => { p.vec[p.key] = p.base - p.omega * T; });
+
+        return { list, veins, core, rays, loops, orbits, bodies, starMesh, bodyMeshes, anchor };
     }
 
     // ==========================================
@@ -1200,9 +1237,14 @@
                 pointsRoot.add(new THREE.Points(b.geo, mats.bodies[i]));
             });
 
+            let lastT = -1e9;
             return {
                 root, meshRoot, pointsRoot, layout: data.layout,
-                update(time, dt) { if (sim && root.visible) sim.step(dt); },
+                update(time, dt) {
+                    if (time - lastT > 0.25) mats.anchor(time);          // фигура только что появилась — тела на своих местах
+                    lastT = time;
+                    if (sim && root.visible) sim.step(dt);
+                },
                 dispose() { mats.list.forEach(m => m.dispose()); if (sim) sim.dispose(); }
             };
         }
