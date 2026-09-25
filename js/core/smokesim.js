@@ -390,6 +390,7 @@
         // (R — ближе всего к свету … A — дальше всего). Шейдер фигуры читает её (DP.morph: uShadowTex).
         setShadow(k, center, radius) {
             shared.uShadowInfo.value.set(k > 0 ? 1 : 0, k, 0, 0);
+            this.shadowK = k; this.shadowFade = 1;
             this.shadowCenter = center; this.shadowR = radius;
             if (!(k > 0) || !targets) return;
             if (!this.shadowRT) {
@@ -454,6 +455,10 @@
             this.shadowMat.uniforms.uLight.value.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
             shared.uShadowLight.value.copy(this.shadowMat.uniforms.uLight.value);
             this.shadowMat.uniforms.uState.value = targets[cur].texture;
+            // Постепенное угасание теней в конце морфинга: рисуем всё меньше точек (нагрузка падает плавно).
+            const fade = this.shadowFade == null ? 1 : this.shadowFade;
+            this.shadowPts.geometry.setDrawRange(0, Math.floor(side * side * fade));
+            shared.uShadowInfo.value.y = this.shadowK * fade;
             const prev = r.getRenderTarget(), prevClear = r.autoClear, cc = r.getClearColor(new THREE.Color()), ca = r.getClearAlpha();
             r.setRenderTarget(this.shadowRT);
             r.setClearColor(0x000000, 0); r.clear(true, false, false);

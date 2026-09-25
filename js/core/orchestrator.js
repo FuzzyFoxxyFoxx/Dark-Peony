@@ -116,8 +116,13 @@
         events.emit('morphstart', { from: from.name, to: name, duration });
     }
 
+    // Когда нагрузка на видеокарту резко падает, кадры из её очереди вышли бы на экран быстрее, чем посчитаны,
+    // — фигура на миг «проскочила» бы вперёд. Дожидаемся, пока видеокарта дорисует очередь: кадры идут ровно.
+    function drainGPU() { try { DP.stage.renderer.getContext().finish(); } catch (e) { /* не страшно */ } }
+
     function finishMorph() {
         const m = morph;
+        drainGPU();
         morph = null;
         if (DP.flowSim) DP.flowSim.stop();
         if (DP.smokeSim) DP.smokeSim.stop();
@@ -193,8 +198,9 @@
                 // последняя частица села — симуляция и тени больше не нужны (в режиме точек).
                 const ph = DP.morph.phases;
                 if (ph && pointsMode) {
-                    if (morph.time > ph.hideFrom && morph.from.instance.root.visible) morph.from.instance.root.visible = false;
-                    if (morph.time > ph.simEnd && DP.smokeSim && !morph.simStopped) { morph.simStopped = true; DP.smokeSim.pause(); }
+                    if (morph.time > ph.hideFrom && morph.from.instance.root.visible) { morph.from.instance.root.visible = false; drainGPU(); }
+                    if (DP.smokeSim) DP.smokeSim.shadowFade = 1 - DP.util.smoothstep(ph.simEnd - 0.6, ph.simEnd, morph.time);   // тени гаснут постепенно
+                    if (morph.time > ph.simEnd && DP.smokeSim && !morph.simStopped) { morph.simStopped = true; DP.smokeSim.pause(); drainGPU(); }
                 }
                 if (DP.smokeSim && !morph.simStopped) DP.smokeSim.step(morph.time);
                 const tw = DP.morph.tiltWindow || [0.15, 0.75];   // «кольцо-кисть»: наклон меняется медленно, весь переход
