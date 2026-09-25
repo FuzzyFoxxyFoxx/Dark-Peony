@@ -112,6 +112,10 @@
             rT = mix(rT, lr, uDisk2.w);
             v += e * (rT - r) * uDisk2.x;
             v.y += (yT - p.y) * uDisk2.y;
+            // Завихрения Квана: водовороты двух масштабов (∇n1 × ∇n2) — крупные гнут вихрь, мелкие рвут кромки.
+            float ts = uTime * uNoise2.x;
+            v += uNoise.x * eddy(p * uNoise.y, ts);
+            v += uNoise.z * eddy(p * uNoise.w + vec3(17.0, 3.0, -9.0), ts * 1.7);
             return v;
         }
         void main() {
@@ -324,6 +328,15 @@
         },
 
         stop() { shared.uSmokeA.value.x = 0; shared.uShadowInfo.value.x = 0; },
+
+        // Для отладки: состояние пары k (xyz, w) — только FloatType.
+        probe(k) {
+            if (!targets) return null;
+            const b = new Float32Array(4);
+            DP.stage.renderer.readRenderTargetPixels(targets[cur], k % side, Math.floor(k / side), 1, 1, b);
+            return Array.from(b);
+        },
+        get side() { return side; },
 
         // ---------- самозатенение (как в The Spirit): плотность дыма «со стороны света» ----------
         // Точки пар рисуются ортографической камерой света в маленькую текстуру; канал = слой глубины

@@ -1313,12 +1313,15 @@
         B.parts.forEach(p => { p.inAttr.needsUpdate = true; p.pairInAttr.needsUpdate = true; });
 
         const sm = c.smoke;
+        // Обороты: замер (400 частиц) — при spin 2.2 и закрутке 3 частица в среднем делает 2 оборота (внутренние
+        // быстрее — до ×2); вращение и закрутка масштабируются под заданное среднее число оборотов.
+        const tk = f.turns / 2;
         DP.smokeSim.prepare(side, dA, dB, dS, { center, R, w: 0 },
-            { capture: f.capture, land: f.land, gravity: f.gravity, pull: 0, twist: f.twist, shape: 2, roll: 0,
+            { capture: f.capture, land: f.land, gravity: f.gravity, pull: 0, twist: f.twist * tk, shape: 2, roll: 0,
               respawn: 0, twistRamp: 0, spiral: 1, escape: 0, speed: 1,
-              eddy: [0, 1, 0, 1, 0],
-              disk: [f.diskIn, f.thick, f.spin, f.pullR, f.pullY, f.spinPow, f.levels] });
-        DP.smokeSim.setShadow(0, center, R);
+              eddy: [f.eddyBig, f.eddyBigScale, f.eddySmall, f.eddySmallScale, f.eddySpeed],
+              disk: [f.diskIn, f.thick, f.spin * tk, f.pullR, f.pullY, f.spinPow, f.levels] });
+        DP.smokeSim.setShadow(f.shadow, center, Math.max(R, 0.5 * (bb.y1 - bb.y0)) * 1.6);
         shared.uSwirlA.value.set(f.flightSize, c.swirlSizeMin, f.flightAlpha, c.swirlVisible);
         shared.uSwirlB.value.set(c.leaveGlow, c.swirlBlend, c.swirlTint, f.flightLook);
         shared.uSmokeA.value.set(1, side, sm.lifeMin, Math.max(sm.lifeMin + 0.01, sm.lifeMax));
