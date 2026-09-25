@@ -1449,6 +1449,7 @@
     function planDisk(A, B) {
         const key = diskKey(A, B);
         if (ahead && ahead.A === A && ahead.B === B && ahead.key === key) {
+            if (!ahead.gen) ahead.gen = buildDisk(A, B, DP.config.morph.disk);   // подготовка ещё ждала сортировку
             while (!ahead.result) { const st = ahead.gen.next(); if (st.done) ahead.result = st.value; }   // досчитать остаток
             const r = ahead.result; ahead = null;
             return applyDisk(r);
