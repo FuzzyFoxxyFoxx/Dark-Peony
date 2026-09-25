@@ -46,6 +46,11 @@
     ];
     const PLANET_AXIS_TILT = 0.4;
 
+    // Какие части показывать (доводим по частям, как медузу; '' — все). ?parts= в адресе важнее.
+    // star — светило (прожилки, линии тока, искры, ядро), corona — лучи, loops — протуберанцы,
+    // orbits — орбиты, planets — планеты и спутник.
+    const DEFAULT_PARTS = 'star,corona';
+
     const ORDER_NOISE = 0.25;
     const ORDER_CURVE = 0.6;
 
@@ -754,14 +759,20 @@
             const pointsRoot = new THREE.Group();
             root.add(meshRoot, pointsRoot);
 
-            meshRoot.add(new THREE.Mesh(data.starMesh, mats.starMesh));
-            data.bodies.forEach((b, i) => meshRoot.add(new THREE.Mesh(b.meshGeo, mats.bodyMeshes[i])));
-            pointsRoot.add(new THREE.Points(data.coreGeo, mats.core));
-            pointsRoot.add(new THREE.Points(data.veinGeo, mats.veins));
-            pointsRoot.add(new THREE.Points(data.rayGeo, mats.rays));
-            pointsRoot.add(new THREE.Points(data.loopGeo, mats.loops));
-            data.orbits.forEach((o, i) => pointsRoot.add(new THREE.Points(o.geo, mats.orbits[i])));
-            data.bodies.forEach((b, i) => pointsRoot.add(new THREE.Points(b.geo, mats.bodies[i])));
+            const partsParam = DP.params.get('parts') || DEFAULT_PARTS;
+            const show = (k) => !partsParam || partsParam.split(',').indexOf(k) >= 0;
+            if (show('star')) {
+                meshRoot.add(new THREE.Mesh(data.starMesh, mats.starMesh));
+                pointsRoot.add(new THREE.Points(data.coreGeo, mats.core));
+                pointsRoot.add(new THREE.Points(data.veinGeo, mats.veins));
+            }
+            if (show('corona')) pointsRoot.add(new THREE.Points(data.rayGeo, mats.rays));
+            if (show('loops')) pointsRoot.add(new THREE.Points(data.loopGeo, mats.loops));
+            if (show('orbits')) data.orbits.forEach((o, i) => pointsRoot.add(new THREE.Points(o.geo, mats.orbits[i])));
+            if (show('planets')) data.bodies.forEach((b, i) => {
+                meshRoot.add(new THREE.Mesh(b.meshGeo, mats.bodyMeshes[i]));
+                pointsRoot.add(new THREE.Points(b.geo, mats.bodies[i]));
+            });
 
             return { root, meshRoot, pointsRoot, layout: data.layout, dispose() { mats.list.forEach(m => m.dispose()); } };
         }
