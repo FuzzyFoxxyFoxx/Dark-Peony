@@ -10,11 +10,14 @@
     if (!DP.stage) return;
 
     const M = DP.config.morph;
-    const get = (path) => path.split('.').reduce((o, k) => (o == null ? o : o[k]), M);
+    // Путь — от DP.config.morph; путь с «@» в начале — от DP.config (фон, круги).
+    const rootOf = (path) => path[0] === '@' ? [DP.config, path.slice(1)] : [M, path];
+    const get = (path) => { const [r, p] = rootOf(path); return p.split('.').reduce((o, k) => (o == null ? o : o[k]), r); };
     const set = (path, v) => {
-        const ks = path.split('.'), last = ks.pop();
-        const o = ks.reduce((a, k) => a[k], M);
+        const [r, p] = rootOf(path), ks = p.split('.'), last = ks.pop();
+        const o = ks.reduce((a, k) => a[k], r);
         o[last] = v;
+        if (path[0] === '@' && DP.background) DP.background.sync();   // фон меняется сразу
     };
 
     // Значения из адреса применяются всегда (даже без ?tune): ссылкой можно поделиться.
@@ -26,6 +29,15 @@
     });
 
     DP.tuneSpec = DP.tuneSpec || [
+        ['Фон: галактика и круги (сразу)'],
+        ['@background.starSize', 'звёзды: размер', 1, 30, 0.5],
+        ['@background.starAlpha', 'звёзды: яркость', 0, 3, 0.05],
+        ['@background.cloudSize', 'дымка: размер', 50, 1200, 10],
+        ['@background.cloudAlpha', 'дымка: яркость', 0, 0.6, 0.01],
+        ['@background.spin', 'вращение галактики', 0, 0.1, 0.001],
+        ['@hud.bigK', 'большие круги (× малого)', 1.1, 2.5, 0.01],
+        ['@hud.crossK', 'крестики: размер', 0.005, 0.08, 0.001],
+        ['@hud.starK', 'звёздочки: размер', 0.005, 0.08, 0.001],
         ['Вращение фигуры'],
         ['figureSpin.max', 'скорость (0 — выкл.), рад/с', 0, 4, 0.05],
         ['figureSpin.rise', 'раскрутка в начале, с', 0.1, 5, 0.05],
