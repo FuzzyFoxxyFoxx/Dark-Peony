@@ -49,10 +49,10 @@
     // «Атом»: орбиты астероидов вокруг светила под разными углами; на каждой — n астероидов, расставленных
     // равномерно (на одной орбите они не сходятся); у орбит свои радиус, скорость и направление — вразнобой.
     const ATOMS = [
-        { R: 1.2,  incl: 0.35,  node: 0.0, phase: 0.3, omega: 0.95,  n: 3, r: 0.034 },
-        { R: 1.42, incl: 1.15,  node: 1.3, phase: 1.9, omega: -0.72, n: 2, r: 0.04 },
-        { R: 1.64, incl: -0.95, node: 2.5, phase: 4.1, omega: 0.6,   n: 3, r: 0.03 },
-        { R: 1.86, incl: 1.45,  node: 3.8, phase: 5.2, omega: -0.5,  n: 2, r: 0.038 }
+        { R: 1.2,  incl: 0.35,  node: 0.0, phase: 0.3, omega: 0.95,  n: 3, r: 0.027 },
+        { R: 1.42, incl: 1.15,  node: 1.3, phase: 1.9, omega: -0.72, n: 2, r: 0.032 },
+        { R: 1.64, incl: -0.95, node: 2.5, phase: 4.1, omega: 0.6,   n: 3, r: 0.024 },
+        { R: 1.86, incl: 1.45,  node: 3.8, phase: 5.2, omega: -0.5,  n: 2, r: 0.03 }
     ];
 
     // Какие части показывать (доводим по частям, как медузу; '' — все). ?parts= в адресе важнее.
@@ -522,7 +522,9 @@
         ${commonPars}
         ${G.pointsVertex}
         uniform float uViewportScale, uSize;
-        uniform vec4 uPlanet;            // x — фаза, y — угловая скорость, z — тел на орбите, w — длина следа (больше — короче)
+        uniform vec4 uPlanet;            // x — фаза, y — угловая скорость, z — тел на орбите,
+                                         // w > 0 — след экспонентой (больше — короче); w < 0 — след длиной −w рад, плавно гаснет
+        uniform float uBodyAng;          // угловой радиус тела на орбите: внутри тела орбиту не видно
         attribute float aAng;
         varying float vA;
         void main() {
@@ -532,14 +534,18 @@
             float dist = max(-mv.z, 0.1);
             ${depthVert}
             // след — позади тела по ходу движения (у обратного хода — с другой стороны)
-            float tr = 0.0;
+            float tr = 0.0, inside = 0.0;
             for (int j = 0; j < 4; j++) {
                 if (float(j) >= uPlanet.z) break;
                 float ph = uPlanet.x + float(j) * 6.2831853 / uPlanet.z + uPlanet.y * uTime;
                 float behind = mod((ph - aAng) * sign(uPlanet.y), 6.2831853);
-                tr = max(tr, exp(-behind * uPlanet.w));
+                float trail = uPlanet.w > 0.0 ? exp(-behind * uPlanet.w)
+                                              : pow(clamp(1.0 - behind / -uPlanet.w, 0.0, 1.0), 1.6);
+                tr = max(tr, trail);
+                float d = min(behind, 6.2831853 - behind);                        // угол до тела в любую сторону
+                inside = max(inside, 1.0 - smoothstep(uBodyAng * 0.9, uBodyAng * 1.15, d));
             }
-            vA = (0.35 + 1.6 * tr) * dpBehindStar(mv.xyz);
+            vA = (0.35 + (uPlanet.w > 0.0 ? 1.6 : 2.6) * tr) * (1.0 - inside) * dpBehindStar(mv.xyz);
             gl_PointSize = uSize * uViewportScale * (0.85 / (0.4 + 0.06 * dist));
             dpMorphFinish();
         }
@@ -993,7 +999,8 @@
         const core = pts(coreVertex, coreFragment, { uSize: { value: 2.2 } });
         const rays = pts(rayVertex, rayFragment, { uSize: { value: 1.6 } });
         const loops = pts(loopVertex, loopFragment, { uSize: { value: 2.0 } });
-        const orbits = data.orbits.map(o => pts(orbitVertex, orbitFragment, { uSize: { value: 2.0 }, uPlanet: { value: new THREE.Vector4(o.O.phase, o.O.omega, o.O.n || 1, o.atom ? 3.0 : 1.6) } }));
+        const orbits = data.orbits.map(o => pts(orbitVertex, orbitFragment, { uSize: { value: 2.0 }, uPlanet: { value: new THREE.Vector4(o.O.phase, o.O.omega, o.O.n || 1, o.atom ? -Math.PI : 1.6) },
+                              uBodyAng: { value: (o.atom ? o.O.r * 1.25 : o.O.planet.r) / o.O.R } }));   // −π: след у астероидов на 180°
         const bodyUniforms = (b) => ({
             uOrbit: { value: new THREE.Vector4(b.orbit.R, b.orbit.incl, b.orbit.node, b.orbit.phase) },
             uOrbit2: { value: new THREE.Vector4(b.orbit.omega, b.orbit.spin, 0, 0) },
