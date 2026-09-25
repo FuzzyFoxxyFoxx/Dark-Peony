@@ -972,7 +972,7 @@
     // ==========================================
     DP.figures.register({
         name: 'jellyfish',
-        stageTilt: 0,         // ЭКСПЕРИМЕНТ автора: ось Y наклонена как у пиона (0). Откат: -1.25 (взгляд снизу ~26°)
+        stageTilt: -1.25,     // наклон сцены: смотрим снизу (~26°) — кольца щупалец видны овалами, как у пиона
         // Раскладка точек без создания экземпляра — для заблаговременной подготовки морфинга.
         getLayout(ctx) { return (cache[ctx.quality] || (cache[ctx.quality] = buildGeometry(ctx.qualityTier))).layout; },
         createInstance(ctx) {
