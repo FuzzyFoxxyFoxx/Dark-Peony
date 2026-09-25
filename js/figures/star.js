@@ -59,7 +59,7 @@
     // star — светило (дымная сфера), veins — прежние прожилки, core — ядро, corona — лучи, loops — протуберанцы,
     // orbits — орбиты планет, planets — планеты и спутник, atoms — астероиды на орбитах вокруг светила (как электроны);
     // planetN — N-я планета целиком: её орбита, она сама, её спутник и кольцо.
-    const DEFAULT_PARTS = 'star,atoms,planet1,planet2'; // светило + «атом» (утверждены) + планеты по одной (planet1…planet4)
+    const DEFAULT_PARTS = 'star,atoms,planet1,planet2,planet3'; // светило + «атом» (утверждены) + планеты по одной (planet1…planet4)
 
     // Дымная сфера (метод Квана, как дымное кольцо в lab/smoke.html): частицы на видеокарте, их несут
     // водовороты двух масштабов (∇n1 × ∇n2 — поле без стоков), мягкая пружина держит частицы в оболочке
@@ -1014,10 +1014,10 @@
         const core = pts(coreVertex, coreFragment, { uSize: { value: 2.2 } });
         const rays = pts(rayVertex, rayFragment, { uSize: { value: 1.6 } });
         const loops = pts(loopVertex, loopFragment, { uSize: { value: 2.0 } });
-        const orbits = data.orbits.map(o => pts(orbitVertex, orbitFragment, { uSize: { value: 2.0 }, uPlanet: { value: new THREE.Vector4(o.O.phase, o.O.omega, o.O.n || 1, o.atom ? -Math.PI * 4 / 3 : o.parent ? -Math.PI * 1.5 : 1.6) },
+        const orbits = data.orbits.map(o => pts(orbitVertex, orbitFragment, { uSize: { value: 2.0 }, uPlanet: { value: new THREE.Vector4(o.O.phase, o.O.omega, o.O.n || 1, o.atom ? -Math.PI * 4 / 3 : o.parent ? -Math.PI * 2 : 1.6) },
                               uBodyAng: { value: (o.atom ? o.O.r * 1.25 : o.O.planet.r) / o.O.R },
                               uParent: { value: o.parent ? new THREE.Vector4(o.parent.R, o.parent.incl, o.parent.node, o.parent.phase) : new THREE.Vector4() },
-                              uParentOmega: { value: o.parent ? o.parent.omega : -1 } }));   // −4π/3: след у астероидов на 240°, у спутника −1.5π — 270°
+                              uParentOmega: { value: o.parent ? o.parent.omega : -1 } }));   // −4π/3: след у астероидов на 240°, у спутника −2π — 360°
         const bodyUniforms = (b) => ({
             uOrbit: { value: new THREE.Vector4(b.orbit.R, b.orbit.incl, b.orbit.node, b.orbit.phase) },
             uOrbit2: { value: new THREE.Vector4(b.orbit.omega, b.orbit.spin, 0, 0) },
