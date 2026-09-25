@@ -49,7 +49,7 @@
     // Какие части показывать (доводим по частям, как медузу; '' — все). ?parts= в адресе важнее.
     // star — светило (дымная сфера), veins — прежние прожилки, core — ядро, corona — лучи, loops — протуберанцы,
     // orbits — орбиты, planets — планеты и спутник.
-    const DEFAULT_PARTS = 'star';      // сейчас автор настраивает ядро и дым со всполохами
+    const DEFAULT_PARTS = 'star,rings'; // светило (утверждено автором) + кольца
 
     // Дымная сфера (метод Квана, как дымное кольцо в lab/smoke.html): частицы на видеокарте, их несут
     // водовороты двух масштабов (∇n1 × ∇n2 — поле без стоков), мягкая пружина держит частицы в оболочке
@@ -81,6 +81,12 @@
         alpha: 0.33,
         fresnel: 0.8       // френель дыма: у края сферы ярче (0 — выкл.)
     }, DP.config.starSmoke || {});
+    // Кольца вокруг светила (как у Сатурна): два узких кольца в одной плоскости, наклон ~23°; точки рядками-
+    // окружностями с малым разбросом поперёк — видны бороздки, как рядки на ядре.
+    DP.config.starRings = Object.assign({
+        tilt: 23,          // наклон плоскости колец, градусы (задаётся при построении)
+        alpha: 3.0, size: 2.2
+    }, DP.config.starRings || {});
     // Ядро: сфера точек внутри дымной оболочки, без флуктуаций; точки мигают по очень крупному шуму
     // (размер от нуля до полного).
     DP.config.starCore = Object.assign({
@@ -234,6 +240,36 @@
             // френель: край сферы ярче центра — объём (uCoreFres: 0 — ровно, 1 — как у лепестков, больше — сильнее)
             float fr = mix(1.0, 0.25 + 1.6 * vFresnel, uCoreFres);
             gl_FragColor = dpMorphColor(c, tex.a * uCoreAlpha * fr * vSz * vDepthK, tex.a);
+        }
+    `;
+
+    // Кольца: точки неподвижны относительно фигуры; за диском светила притушены; aRing — яркость рядка.
+    const ringVertex = (G) => `
+        ${commonPars}
+        ${G.pointsVertex}
+        uniform float uViewportScale, uRingSize;
+        attribute float aRing, aSizeScale;
+        varying float vA;
+        void main() {
+            vec3 dpRest = position;
+            vec4 mv = viewMatrix * dpMorph(dpRest, position);
+            gl_Position = projectionMatrix * mv;
+            float dist = max(-mv.z, 0.1);
+            ${depthVert}
+            vA = aRing * dpBehindStar(mv.xyz);
+            gl_PointSize = uRingSize * uViewportScale * (0.7 + 0.5 * aSizeScale) / (0.35 + 0.06 * dist);
+            dpMorphFinish();
+        }
+    `;
+    const ringFragment = (G) => `
+        ${G.pointsFragment}
+        uniform sampler2D uTexture;
+        uniform float uRingAlpha;
+        varying float vA, vDepthK;
+        void main() {
+            vec4 tex = texture2D(uTexture, gl_PointCoord);
+            if (tex.a < 0.01) discard;
+            gl_FragColor = dpMorphColor(vec3(0.78, 0.9, 1.0), tex.a * vA * uRingAlpha * 0.35 * vDepthK, tex.a);
         }
     `;
 
@@ -769,6 +805,37 @@
         smokeGeo.setAttribute('aRef', new THREE.BufferAttribute(smokeRef, 2));
         const smoke = { N: SN, init: smokeInit, info: smokeInfo };
 
+        // ---------- КОЛЬЦА ----------
+        // Два узких кольца (доли радиуса светила); рядки-окружности через 0.012, вдоль рядка 0.008, разброс поперёк ±0.1
+        // шага; часть рядков пропущена (щели), яркость рядков гуляет — бороздки.
+        const rgP = [], rgA = [], rgS = [];
+        const tilt = DP.config.starRings.tilt * Math.PI / 180, ct = Math.cos(tilt), st = Math.sin(tilt);
+        const tw = 0.35, cw = Math.cos(tw), sw = Math.sin(tw);          // плоскость: наклон вокруг Z, потом разворот вокруг Y
+        [[1.38, 1.62], [1.72, 1.86]].forEach(([a, b], ri) => {
+            const r0 = STAR_R * a, r1 = STAR_R * b, hr = 0.012 / Math.sqrt(q), hc = 0.008 / Math.sqrt(q);
+            const nRow = Math.round((r1 - r0) / hr);
+            for (let i = 0; i <= nRow; i++) {
+                const u = i / nRow;
+                const gap = seededRandom(ri * 97 + i * 3.1);
+                if (gap < 0.12) continue;                                       // щель
+                const bright = (0.45 + 0.55 * seededRandom(ri * 51 + i * 1.7)) * Math.pow(Math.sin(Math.PI * u), 0.4);
+                const r = r0 + (r1 - r0) * u, n = Math.round(2 * Math.PI * r / hc);
+                for (let j = 0; j < n; j++) {
+                    const sd = ri * 1e5 + i * 1000 + j;
+                    const rr = r + (seededRandom(sd * 0.37) - 0.5) * 0.2 * hr;
+                    const ang = (j + (seededRandom(sd * 0.53) - 0.5) * 0.8) / n * Math.PI * 2;
+                    let x = Math.cos(ang) * rr, y = 0, z = Math.sin(ang) * rr;
+                    const x2 = x * ct - y * st, y2 = x * st + y * ct; x = x2; y = y2;          // наклон вокруг Z
+                    const x3 = x * cw + z * sw, z3 = -x * sw + z * cw;                          // разворот вокруг Y
+                    rgP.push(x3, y, z3); rgA.push(bright); rgS.push(seededRandom(sd * 0.71));
+                }
+            }
+        });
+        const ringGeo = new THREE.BufferGeometry();
+        ringGeo.setAttribute('position', new THREE.Float32BufferAttribute(rgP, 3));
+        ringGeo.setAttribute('aRing', new THREE.Float32BufferAttribute(rgA, 1));
+        ringGeo.setAttribute('aSizeScale', new THREE.Float32BufferAttribute(rgS, 1));
+
         // ---------- ЯДРО-СФЕРА ----------
         const csP = [], csS = [];
         const coreR = STAR_R * DP.config.starCore.radius;
@@ -902,7 +969,7 @@
 
         const starMesh = new THREE.SphereGeometry(STAR_R, 64, 48);
         const rootMatrix = new THREE.Matrix4().makeTranslation(0, FIG_Y_OFFSET, 0);
-        const data = { smokeGeo, smoke, coreSphereGeo, veinGeo, coreGeo, rayGeo, loopGeo, orbits, bodies, starMesh, rootMatrix };
+        const data = { smokeGeo, smoke, coreSphereGeo, ringGeo, veinGeo, coreGeo, rayGeo, loopGeo, orbits, bodies, starMesh, rootMatrix };
         assignOrderAndLayout(data);
         return data;
     }
@@ -913,7 +980,7 @@
     function assignOrderAndLayout(data) {
         const v = new THREE.Vector3();
         const dist = (x, y, z) => Math.hypot(x, y, z) + ORDER_NOISE * (Math.sin(x * 1.7 + y * 0.9) * Math.sin(z * 1.9 - y * 1.3) + 0.5 * Math.sin(x * 3.1 - z * 2.7 + y * 2.3));
-        const pointGeos = [data.smokeGeo, data.coreSphereGeo, data.veinGeo, data.coreGeo, data.rayGeo, data.loopGeo].concat(data.orbits.map(o => o.geo), data.bodies.map(b => b.geo));
+        const pointGeos = [data.smokeGeo, data.coreSphereGeo, data.ringGeo, data.veinGeo, data.coreGeo, data.rayGeo, data.loopGeo].concat(data.orbits.map(o => o.geo), data.bodies.map(b => b.geo));
         const meshGeos = [data.starMesh].concat(data.bodies.map(b => b.meshGeo));
         let dMin = Infinity, dMax = -Infinity;
         pointGeos.forEach(g => { const p = g.attributes.position; for (let i = 0; i < p.count; i++) { const d = dist(p.getX(i), p.getY(i), p.getZ(i)); if (d < dMin) dMin = d; if (d > dMax) dMax = d; } });
@@ -1116,6 +1183,18 @@
                     mats.list.push(m);
                     pointsRoot.add(new THREE.Points(data.smokeGeo, m));
                 } else pointsRoot.add(new THREE.Points(data.veinGeo, mats.veins));   // нет float-текстур
+            }
+            if (show('rings')) {
+                const G = DP.morph.glsl, S = DP.shared, RC = DP.config.starRings;
+                const m = new THREE.ShaderMaterial(Object.assign({}, DP.pointsMaterialConfig, {
+                    uniforms: Object.assign({ uTime: S.uTime, uDepth: { value: new THREE.Vector2(8.1, 0.4) }, uStarR: { value: STAR_R },
+                                              uTexture: S.uTexture, uViewportScale: S.uViewportScale,
+                                              uRingSize: { get value() { return RC.size; } }, uRingAlpha: { get value() { return RC.alpha; } } },
+                                            DP.morph.uniformsFor(ctx.uniforms)),
+                    vertexShader: ringVertex(G), fragmentShader: ringFragment(G)
+                }));
+                mats.list.push(m);
+                pointsRoot.add(new THREE.Points(data.ringGeo, m));
             }
             if (show('veins')) pointsRoot.add(new THREE.Points(data.veinGeo, mats.veins));
             if (show('core')) pointsRoot.add(new THREE.Points(data.coreGeo, mats.core));
