@@ -71,59 +71,43 @@
     };
 
     // ------------------------------------------
-    // ФОН: ГАЛАКТИКА (россыпь звёзд) + ДЫМКА
+    // ФОН: ГАЛАКТИКА (звёзды) + ДЫМКА
     // ------------------------------------------
-    // Постоянная часть фона, не относится к фигурам: эллиптическая россыпь редких крупных звёзд за фигурой
-    // (медленно мерцают, диск чуть вращается) и лёгкие облака дыма вокруг — как было на исходной «чёрной дыре».
+    // Постоянная часть фона, не относится к фигурам. Галактика — «пол»: плоский диск звёзд в горизонтальной
+    // плоскости (как у цветка), уходит к горизонту и медленно вращается вокруг вертикальной оси. Над ним —
+    // россыпь звёзд, вращается медленнее (параллакс). Туманности — в основном в плоскости диска.
+    // Защитный кокон: звёзды и дымка видны только за фигурой (дальше от камеры, чем её центр) — крупные звёзды
+    // перед камерой не пролетают; на границе кокона плавно гаснут.
     const bg = cfg.background;
-    const galaxy = new THREE.Group();
-    galaxy.position.set(0, -0.1, -1.5);
-    scene.add(galaxy);
-    (function createGalaxy() {
-        const count = bg.stars;
-        const geo = new THREE.BufferGeometry();
-        const positions = new Float32Array(count * 3);
-        const scales = new Float32Array(count), phases = new Float32Array(count);
-        for (let i = 0; i < count; i++) {
-            if (seededRandom(i * 8.3 + 0.5) < bg.halo) {
-                // россыпь по всему фону: и сверху, и снизу от приплюснутого диска
-                positions[i * 3 + 0] = (seededRandom(i * 1.5) - 0.5) * 18;
-                positions[i * 3 + 1] = (seededRandom(i * 3.7) - 0.5) * 10;
-                positions[i * 3 + 2] = (seededRandom(i * 4.9) - 0.5) * 3;
-            } else {
-                const u = seededRandom(i * 1.5) * Math.PI * 2;
-                const r = Math.pow(seededRandom(i * 2.3), 0.6) * 4.2;
-                positions[i * 3 + 0] = Math.cos(u) * r * 2.4;
-                positions[i * 3 + 1] = (seededRandom(i * 3.7) - 0.5) * bg.starSpreadY;
-                positions[i * 3 + 2] = Math.sin(u) * r * 0.35 + (seededRandom(i * 4.9) - 0.5) * 0.5;
-            }
-            scales[i] = seededRandom(i * 4.1);
-            phases[i] = seededRandom(i * 7.3) * 6.2831853;
-        }
-        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-        geo.setAttribute('aSizeScale', new THREE.BufferAttribute(scales, 1));
-        geo.setAttribute('aPhase', new THREE.BufferAttribute(phases, 1));
-        const mat = new THREE.ShaderMaterial(Object.assign({}, DP.pointsMaterialConfig, {
+    const galaxy = new THREE.Group();   // диск + туманности
+    const halo = new THREE.Group();     // звёзды над диском (вращаются медленнее)
+    galaxy.position.set(0, bg.diskY, 0);
+    scene.add(galaxy, halo);
+    const cocoon = { value: 8.5 };      // глубина (от камеры), ближе которой фона нет; задаётся по центру фигуры
+    const cocoonGlsl = `
+        uniform float uCocoon;
+        float dpCocoon(float depth) { return smoothstep(uCocoon, uCocoon + 1.5, depth); }
+    `;
+    function starMaterial() {
+        return new THREE.ShaderMaterial(Object.assign({}, DP.pointsMaterialConfig, {
             uniforms: {
-                uTexture: DP.shared.uTexture,
-                uViewportScale: DP.shared.uViewportScale,
-                uSize: { value: bg.starSize },
-                uAlpha: { value: bg.starAlpha },
-                uTime: DP.shared.uTime
+                uTexture: DP.shared.uTexture, uViewportScale: DP.shared.uViewportScale,
+                uSize: { value: bg.starSize }, uAlpha: { value: bg.starAlpha }, uTime: DP.shared.uTime, uCocoon: cocoon
             },
             vertexShader: `
                 uniform float uViewportScale, uSize, uTime;
                 attribute float aSizeScale, aPhase;
                 varying float vAlpha;
+                ${cocoonGlsl}
                 void main() {
                     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
                     gl_Position = projectionMatrix * mvPosition;
                     float dist = max(-mvPosition.z, 0.1);
-                    // крупные звёзды редкие: размер растёт круто с aSizeScale
-                    gl_PointSize = uSize * uViewportScale * (0.6 + 1.6 * aSizeScale * aSizeScale) / (0.4 + 0.08 * dist);
-                    // медленное мерцание, у каждой звезды свой ритм
-                    float tw = 0.55 + 0.45 * sin(uTime * (0.6 + 1.3 * fract(aPhase * 3.1)) + aPhase);
-                    vAlpha = (0.35 + 0.65 * aSizeScale) * tw;
+                    // крупные звёзды редкие; за коконом звёзды не мельчают сильнее, чем на расстоянии ~9 (иначе пропадают)
+                    gl_PointSize = uSize * uViewportScale * (0.6 + 1.6 * aSizeScale * aSizeScale) / (0.4 + 0.08 * min(dist, 9.0));
+                    float tw = 0.55 + 0.45 * sin(uTime * (0.6 + 1.3 * fract(aPhase * 3.1)) + aPhase);   // мерцание
+                    vAlpha = (0.35 + 0.65 * aSizeScale) * tw * dpCocoon(dist);
+                    if (vAlpha < 0.002) gl_PointSize = 0.0;
                 }
             `,
             fragmentShader: `
@@ -138,11 +122,41 @@
                 }
             `
         }));
-        const pts = new THREE.Points(geo, mat);
+    }
+    function starPoints(count, place, salt) {
+        const geo = new THREE.BufferGeometry();
+        const pos = new Float32Array(count * 3), scales = new Float32Array(count), phases = new Float32Array(count);
+        for (let i = 0; i < count; i++) {
+            const p = place(i);
+            pos[i * 3] = p[0]; pos[i * 3 + 1] = p[1]; pos[i * 3 + 2] = p[2];
+            scales[i] = seededRandom(i * 4.1 + salt);
+            phases[i] = seededRandom(i * 7.3 + salt) * 6.2831853;
+        }
+        geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        geo.setAttribute('aSizeScale', new THREE.BufferAttribute(scales, 1));
+        geo.setAttribute('aPhase', new THREE.BufferAttribute(phases, 1));
+        const pts = new THREE.Points(geo, starMaterial());
         pts.frustumCulled = false;
-        galaxy.add(pts);
-        galaxy.userData.starMat = mat;
-    })();
+        return pts;
+    }
+    const nHalo = Math.round(bg.stars * bg.halo), nDisk = bg.stars - nHalo;
+    // Диск: кольцо от ядра к краю (плотнее к центру), тонкий по высоте.
+    const diskStars = starPoints(nDisk, (i) => {
+        const u = seededRandom(i * 1.5) * Math.PI * 2;
+        const r = bg.diskIn + Math.pow(seededRandom(i * 2.3), 0.8) * (bg.diskOut - bg.diskIn);
+        const y = (seededRandom(i * 3.7) + seededRandom(i * 5.1) - 1) * bg.diskThick;
+        return [Math.cos(u) * r, y, Math.sin(u) * r];
+    }, 0);
+    galaxy.add(diskStars);
+    // Звёздное небо: дальняя сфера вокруг фигуры — её дальняя половина (за коконом) закрывает весь кадр
+    // позади фигуры, и сверху, и снизу; вращается медленнее диска (параллакс).
+    const haloStars = starPoints(nHalo, (i) => {
+        const u = seededRandom(i * 1.9 + 11) * Math.PI * 2, ct = seededRandom(i * 3.3 + 13) * 2 - 1, st = Math.sqrt(1 - ct * ct);
+        const r = bg.haloIn + seededRandom(i * 2.9 + 12) * (bg.haloOut - bg.haloIn);
+        return [Math.cos(u) * st * r, ct * r, Math.sin(u) * st * r];
+    }, 50);
+    halo.add(haloStars);
+
     (function createHaze() {
         // Мягкая текстура облака: пятно с неровным краем (несколько смещённых градиентов).
         const size = 256, c = document.createElement('canvas');
@@ -161,28 +175,35 @@
         const geo = new THREE.BufferGeometry();
         const pos = new Float32Array(count * 3), seed = new Float32Array(count);
         for (let i = 0; i < count; i++) {
-            const u = seededRandom(i * 9.1 + 1) * Math.PI * 2, r = Math.pow(seededRandom(i * 6.7 + 2), 0.5) * 3.4;
-            pos[i * 3] = Math.cos(u) * r * 2.2; pos[i * 3 + 1] = (seededRandom(i * 4.3 + 3) - 0.5) * 0.9; pos[i * 3 + 2] = Math.sin(u) * r * 0.3;
+            const u = seededRandom(i * 9.1 + 1) * Math.PI * 2;
+            const high = seededRandom(i * 3.9 + 5) < bg.cloudHigh;   // немногие облака — выше диска
+            const r = bg.diskIn + Math.sqrt(seededRandom(i * 6.7 + 2)) * (bg.diskOut - bg.diskIn);
+            pos[i * 3] = Math.cos(u) * r;
+            pos[i * 3 + 1] = high ? 1.5 + seededRandom(i * 4.3 + 3) * bg.haloHigh * 0.6 : (seededRandom(i * 4.3 + 3) - 0.5) * bg.diskThick * 2;
+            pos[i * 3 + 2] = Math.sin(u) * r;
             seed[i] = seededRandom(i * 2.9 + 4);
         }
         geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
         geo.setAttribute('aSeed', new THREE.BufferAttribute(seed, 1));
         const mat = new THREE.ShaderMaterial({
             uniforms: { uTex: { value: tex }, uTime: DP.shared.uTime, uViewportScale: DP.shared.uViewportScale,
-                        uSize: { value: bg.cloudSize }, uAlpha: { value: bg.cloudAlpha } },
+                        uSize: { value: bg.cloudSize }, uAlpha: { value: bg.cloudAlpha }, uCocoon: cocoon },
             vertexShader: `
                 uniform float uTime, uViewportScale, uSize;
                 attribute float aSeed;
                 varying float vA; varying float vRot;
+                ${cocoonGlsl}
                 void main() {
                     vec3 p = position;
-                    p.x += sin(uTime * 0.05 + aSeed * 12.0) * 0.25;   // облака медленно плывут
-                    p.y += cos(uTime * 0.04 + aSeed * 7.0) * 0.08;
+                    p.x += sin(uTime * 0.05 + aSeed * 12.0) * 0.4;   // облака медленно плывут
+                    p.z += cos(uTime * 0.04 + aSeed * 7.0) * 0.4;
                     vec4 mv = modelViewMatrix * vec4(p, 1.0);
                     gl_Position = projectionMatrix * mv;
-                    gl_PointSize = uSize * uViewportScale * (0.7 + 0.8 * aSeed) / (0.4 + 0.08 * max(-mv.z, 0.1));
-                    vA = 0.5 + 0.5 * sin(uTime * (0.07 + 0.08 * aSeed) + aSeed * 20.0);   // медленно «дышат»
+                    float dist = max(-mv.z, 0.1);
+                    gl_PointSize = uSize * uViewportScale * (0.7 + 0.8 * aSeed) / (0.4 + 0.08 * dist);
+                    vA = (0.5 + 0.5 * sin(uTime * (0.07 + 0.08 * aSeed) + aSeed * 20.0)) * dpCocoon(dist);   // медленно «дышат»
                     vRot = aSeed * 6.2831853 + uTime * 0.02 * (aSeed - 0.5);
+                    if (vA < 0.002) gl_PointSize = 0.0;
                 }
             `,
             fragmentShader: `
@@ -205,15 +226,17 @@
         galaxy.userData.cloudMat = mat;
     })();
     DP.background = {
-        galaxy,
+        galaxy, halo,
         // Применить значения из DP.config.background / hud на ходу (панель ?tune).
         sync() {
-            const b = cfg.background, s = galaxy.userData.starMat.uniforms, c = galaxy.userData.cloudMat.uniforms;
-            s.uSize.value = b.starSize; s.uAlpha.value = b.starAlpha;
+            const b = cfg.background, c = galaxy.userData.cloudMat.uniforms;
+            [diskStars, haloStars].forEach(p => { p.material.uniforms.uSize.value = b.starSize; p.material.uniforms.uAlpha.value = b.starAlpha; });
             c.uSize.value = b.cloudSize; c.uAlpha.value = b.cloudAlpha;
             drawHud(Math.max(1, window.innerWidth), Math.max(1, window.innerHeight));
         }
     };
+    // Кокон — по центру фигур: всё фоновое, что ближе к камере, чем центр фигуры (+ запас), не рисуется.
+    cocoon.value = camera.position.distanceTo(new THREE.Vector3(0, -0.48, 0)) + bg.cocoonMargin;
 
     // ------------------------------------------
     // 2D HUD: две «весики» — малая (с крестиками) и большая
@@ -343,7 +366,8 @@
     function render(dt) {
         if (resizePending) { resizePending = false; applySize(false); }
         adaptQuality(dt);
-        galaxy.rotation.y = DP.shared.uTime.value * cfg.background.spin;   // диск галактики медленно вращается
+        galaxy.rotation.y = DP.shared.uTime.value * cfg.background.spin;             // диск галактики медленно вращается
+        halo.rotation.y = DP.shared.uTime.value * cfg.background.spin * cfg.background.haloSpin;   // россыпь — медленнее (параллакс)
         figureStage.updateMatrixWorld(true);
         DP.morph.shared.uStageMatrix.value.copy(figureStage.matrixWorld);
         DP.morph.shared.uStageMatrixInv.value.copy(figureStage.matrixWorld).invert();
