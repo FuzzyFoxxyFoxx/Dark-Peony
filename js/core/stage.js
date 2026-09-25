@@ -79,10 +79,20 @@
     // Защитный кокон: звёзды и дымка видны только за фигурой (дальше от камеры, чем её центр) — крупные звёзды
     // перед камерой не пролетают; на границе кокона плавно гаснут.
     const bg = cfg.background;
-    const galaxy = new THREE.Group();   // диск + туманности
+    const galaxy = new THREE.Group();   // диск + туманности (вращается вокруг своей оси)
     const halo = new THREE.Group();     // звёзды над диском (вращаются медленнее)
-    galaxy.position.set(0, bg.diskY, 0);
-    scene.add(galaxy, halo);
+    // Плоскость галактики наклонена так, чтобы её горизонт (точка схода) был на `horizon` высоты экрана сверху
+    // (автор: на линии, делящей верхнюю половину пополам). Угол — из направления взгляда камеры и её поля зрения.
+    const galaxyTilt = new THREE.Group();
+    galaxyTilt.position.set(0, bg.diskY, 0);
+    (function placeHorizon() {
+        const look = new THREE.Vector3(0, -0.48, 0).sub(camera.position).normalize();
+        const pitch = Math.asin(-look.y);                                   // камера смотрит вниз на pitch
+        const up = Math.atan((1 - 2 * bg.horizon) * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
+        galaxyTilt.rotation.x = -(pitch - up);                              // дальний край плоскости опущен
+    })();
+    galaxyTilt.add(galaxy);
+    scene.add(galaxyTilt, halo);
     const cocoon = { value: 8.5 };      // глубина (от камеры), ближе которой фона нет; задаётся по центру фигуры
     const cocoonGlsl = `
         uniform float uCocoon;
