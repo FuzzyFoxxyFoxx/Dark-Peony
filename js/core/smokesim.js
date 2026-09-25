@@ -16,7 +16,7 @@
     const shared = DP.morph.shared;
     const LAB_R = 1.46;   // радиус кольца в лаборатории: параметры течения заданы в её единицах
     let support = null, side = 0, targets = null, cur = 0;
-    let texA = null, texB = null, texS = null;
+    let dataRT = null;   // { n, rt: [A, B, S] } — данные пар в видеокарте (загружаются полосами)
     let scene = null, camera = null, material = null;
     let needReset = true, lastTime = 0;
 
@@ -209,10 +209,26 @@
         return ok ? { type } : false;
     }
 
-    const dataTex = (arr, n) => {
-        const t = new THREE.DataTexture(arr, n, n, THREE.RGBAFormat, THREE.FloatType);
-        t.minFilter = t.magFilter = THREE.NearestFilter; t.needsUpdate = true; return t;
-    };
+    // Данные пар — в текстурах-«мишенях» (выделяются один раз на размер) и загружаются полосами строк:
+    // заранее — понемногу в простое между кадрами, чтобы не было длинного кадра.
+    function dataTargets(n) {
+        if (dataRT && dataRT.n === n) return dataRT.rt;
+        if (dataRT) dataRT.rt.forEach(t => t.dispose());
+        const r = DP.stage.renderer, prev = r.getRenderTarget();
+        const rt = [0, 1, 2].map(() => {
+            const t = makeTarget(n, support.type);
+            t.texture.flipY = false;
+            r.setRenderTarget(t);          // выделить память в видеокарте
+            return t;
+        });
+        r.setRenderTarget(prev);
+        dataRT = { n, rt };
+        return rt;
+    }
+    function uploadRows(t, arr, n, y0, rows) {
+        const src = new THREE.DataTexture(arr.subarray(y0 * n * 4, (y0 + rows) * n * 4), n, rows, THREE.RGBAFormat, THREE.FloatType);
+        DP.stage.renderer.copyTextureToTexture(new THREE.Vector2(0, y0), src, t.texture);
+    }
     const makeTarget = (n, type) => new THREE.WebGLRenderTarget(n, n, {
         type, format: THREE.RGBAFormat, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
         depthBuffer: false, stencilBuffer: false, generateMipmaps: false });
@@ -229,18 +245,29 @@
 
         // n — сторона текстуры; dA: xyz фигуры A + отрыв L; dB: xyz фигуры B + длительность D; dS: seed.
         // Заранее загрузить данные пар в видеокарту (пока фигура спокойно вращается) — старт без замирания.
-        stage(n, dA, dB, dS) {
-            if (!this.supported()) return;
+        // Возвращает задачу: step(мс) загружает очередные полосы и отвечает true, когда всё загружено.
+        stageJob(n, dA, dB, dS) {
+            if (!this.supported()) return null;
             if (n !== side) {
                 if (targets) targets.forEach(t => t.dispose());
                 side = n;
                 targets = [makeTarget(n, support.type), makeTarget(n, support.type)];
             }
-            [texA, texB, texS].forEach(t => t && t.dispose());
-            texA = dataTex(dA, n); texB = dataTex(dB, n); texS = dataTex(dS, n);
-            const r = DP.stage.renderer;
-            [texA, texB, texS].forEach(t => r.initTexture(t));
-            this.staged = { n, dA, dB, dS };
+            const rt = dataTargets(n), arrs = [dA, dB, dS], ROWS = 48;
+            let y = 0, k = 0;
+            this.staged = null;
+            return {
+                step: (budget) => {
+                    const t0 = performance.now();
+                    while (y < n && performance.now() - t0 < budget) {
+                        const rows = Math.min(ROWS, n - y);
+                        uploadRows(rt[k], arrs[k], n, y, rows);
+                        if (++k === 3) { k = 0; y += rows; }
+                    }
+                    if (y >= n) { this.staged = { n, dA, dB, dS }; return true; }
+                    return false;
+                }
+            };
         },
 
         // ring: { center, R } — неподвижное кольцо, или { at(t) → {y, R, dy, dR} } — кольцо едет и дышит.
@@ -252,10 +279,9 @@
                 side = n;
                 targets = [makeTarget(n, support.type), makeTarget(n, support.type)];
             }
-            const st = this.staged;
+            const rt = dataTargets(n), st = this.staged;
             if (!(st && st.n === n && st.dA === dA && st.dB === dB && st.dS === dS)) {
-                [texA, texB, texS].forEach(t => t && t.dispose());
-                texA = dataTex(dA, n); texB = dataTex(dB, n); texS = dataTex(dS, n);
+                uploadRows(rt[0], dA, n, 0, n); uploadRows(rt[1], dB, n, 0, n); uploadRows(rt[2], dS, n, 0, n);
             }
             this.staged = null;
             if (!material) {
@@ -279,7 +305,7 @@
                 camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
             }
             const u = material.uniforms, f = DP.config.morph.smoke;
-            u.uA.value = texA; u.uB.value = texB; u.uS.value = texS; u.uSide.value = n;
+            u.uA.value = rt[0].texture; u.uB.value = rt[1].texture; u.uS.value = rt[2].texture; u.uSide.value = n;
             this.ring = ring; this.timing = timing || null;
             this.placeRing(0);
             this.sync();
@@ -347,6 +373,8 @@
         },
 
         stop() { shared.uSmokeA.value.x = 0; shared.uShadowInfo.value.x = 0; },
+        // Все частицы сели: дальше не считать симуляцию и тени (текстура положений остаётся как есть).
+        pause() { shared.uShadowInfo.value.x = 0; },
 
         // Для отладки: состояние пары k (xyz, w) — только FloatType.
         probe(k) {
