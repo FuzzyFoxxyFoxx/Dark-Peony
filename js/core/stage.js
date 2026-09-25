@@ -71,61 +71,149 @@
     };
 
     // ------------------------------------------
-    // ФОНОВЫЕ ЧАСТИЦЫ
+    // ФОН: ГАЛАКТИКА (россыпь звёзд) + ДЫМКА
     // ------------------------------------------
+    // Постоянная часть фона, не относится к фигурам: эллиптическая россыпь редких крупных звёзд за фигурой
+    // (медленно мерцают, диск чуть вращается) и лёгкие облака дыма вокруг — как было на исходной «чёрной дыре».
+    const bg = cfg.background;
+    const galaxy = new THREE.Group();
+    galaxy.position.set(0, -0.1, -1.5);
+    scene.add(galaxy);
     (function createGalaxy() {
-        const count = 900;
+        const count = bg.stars;
         const geo = new THREE.BufferGeometry();
         const positions = new Float32Array(count * 3);
-        const scales = new Float32Array(count);
+        const scales = new Float32Array(count), phases = new Float32Array(count);
         for (let i = 0; i < count; i++) {
             const u = seededRandom(i * 1.5) * Math.PI * 2;
             const r = Math.pow(seededRandom(i * 2.3), 0.6) * 4.2;
             positions[i * 3 + 0] = Math.cos(u) * r * 2.4;
-            positions[i * 3 + 1] = (seededRandom(i * 3.7) - 0.5) * 1.2 - 0.1;
-            positions[i * 3 + 2] = (seededRandom(i * 4.9) - 0.5) * 0.8 - 1.5;
+            positions[i * 3 + 1] = (seededRandom(i * 3.7) - 0.5) * bg.starSpreadY;
+            positions[i * 3 + 2] = Math.sin(u) * r * 0.35 + (seededRandom(i * 4.9) - 0.5) * 0.5;
             scales[i] = seededRandom(i * 4.1);
+            phases[i] = seededRandom(i * 7.3) * 6.2831853;
         }
         geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         geo.setAttribute('aSizeScale', new THREE.BufferAttribute(scales, 1));
+        geo.setAttribute('aPhase', new THREE.BufferAttribute(phases, 1));
         const mat = new THREE.ShaderMaterial(Object.assign({}, DP.pointsMaterialConfig, {
             uniforms: {
                 uTexture: DP.shared.uTexture,
                 uViewportScale: DP.shared.uViewportScale,
-                uSize: { value: 3.5 },
+                uSize: { value: bg.starSize },
+                uAlpha: { value: bg.starAlpha },
                 uTime: DP.shared.uTime
             },
             vertexShader: `
                 uniform float uViewportScale, uSize, uTime;
-                attribute float aSizeScale;
+                attribute float aSizeScale, aPhase;
                 varying float vAlpha;
                 void main() {
                     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
                     gl_Position = projectionMatrix * mvPosition;
                     float dist = max(-mvPosition.z, 0.1);
-                    gl_PointSize = uSize * uViewportScale * (0.8 + aSizeScale * 0.7) / (0.4 + 0.08 * dist);
-                    vAlpha = 0.3 + 0.4 * aSizeScale;
+                    // крупные звёзды редкие: размер растёт круто с aSizeScale
+                    gl_PointSize = uSize * uViewportScale * (0.6 + 1.6 * aSizeScale * aSizeScale) / (0.4 + 0.08 * dist);
+                    // медленное мерцание, у каждой звезды свой ритм
+                    float tw = 0.55 + 0.45 * sin(uTime * (0.6 + 1.3 * fract(aPhase * 3.1)) + aPhase);
+                    vAlpha = (0.35 + 0.65 * aSizeScale) * tw;
                 }
             `,
             fragmentShader: `
                 uniform sampler2D uTexture;
+                uniform float uAlpha;
                 varying float vAlpha;
                 void main() {
                     vec4 tex = texture2D(uTexture, gl_PointCoord);
                     if (tex.a < 0.01) discard;
-                    vec3 col = mix(vec3(0.1, 0.35, 0.7), vec3(0.7, 0.9, 1.0), tex.a);
-                    gl_FragColor = vec4(col, tex.a * vAlpha * 0.25);
+                    vec3 col = mix(vec3(0.25, 0.5, 0.85), vec3(0.85, 0.95, 1.0), tex.a);
+                    gl_FragColor = vec4(col, tex.a * vAlpha * uAlpha);
                 }
             `
         }));
         const pts = new THREE.Points(geo, mat);
         pts.frustumCulled = false;
-        scene.add(pts);
+        galaxy.add(pts);
+        galaxy.userData.starMat = mat;
     })();
+    (function createHaze() {
+        // Мягкая текстура облака: пятно с неровным краем (несколько смещённых градиентов).
+        const size = 256, c = document.createElement('canvas');
+        c.width = c.height = size;
+        const g = c.getContext('2d');
+        for (let k = 0; k < 7; k++) {
+            const x = size * (0.5 + (seededRandom(k * 3.1) - 0.5) * 0.35), y = size * (0.5 + (seededRandom(k * 5.7) - 0.5) * 0.35);
+            const r = size * (0.22 + seededRandom(k * 2.3) * 0.22);
+            const gr = g.createRadialGradient(x, y, 0, x, y, r);
+            gr.addColorStop(0, 'rgba(255,255,255,0.22)');
+            gr.addColorStop(1, 'rgba(255,255,255,0)');
+            g.fillStyle = gr; g.fillRect(0, 0, size, size);
+        }
+        const tex = new THREE.CanvasTexture(c);
+        const count = bg.clouds;
+        const geo = new THREE.BufferGeometry();
+        const pos = new Float32Array(count * 3), seed = new Float32Array(count);
+        for (let i = 0; i < count; i++) {
+            const u = seededRandom(i * 9.1 + 1) * Math.PI * 2, r = Math.pow(seededRandom(i * 6.7 + 2), 0.5) * 3.4;
+            pos[i * 3] = Math.cos(u) * r * 2.2; pos[i * 3 + 1] = (seededRandom(i * 4.3 + 3) - 0.5) * 0.9; pos[i * 3 + 2] = Math.sin(u) * r * 0.3;
+            seed[i] = seededRandom(i * 2.9 + 4);
+        }
+        geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        geo.setAttribute('aSeed', new THREE.BufferAttribute(seed, 1));
+        const mat = new THREE.ShaderMaterial({
+            uniforms: { uTex: { value: tex }, uTime: DP.shared.uTime, uViewportScale: DP.shared.uViewportScale,
+                        uSize: { value: bg.cloudSize }, uAlpha: { value: bg.cloudAlpha } },
+            vertexShader: `
+                uniform float uTime, uViewportScale, uSize;
+                attribute float aSeed;
+                varying float vA; varying float vRot;
+                void main() {
+                    vec3 p = position;
+                    p.x += sin(uTime * 0.05 + aSeed * 12.0) * 0.25;   // облака медленно плывут
+                    p.y += cos(uTime * 0.04 + aSeed * 7.0) * 0.08;
+                    vec4 mv = modelViewMatrix * vec4(p, 1.0);
+                    gl_Position = projectionMatrix * mv;
+                    gl_PointSize = uSize * uViewportScale * (0.7 + 0.8 * aSeed) / (0.4 + 0.08 * max(-mv.z, 0.1));
+                    vA = 0.5 + 0.5 * sin(uTime * (0.07 + 0.08 * aSeed) + aSeed * 20.0);   // медленно «дышат»
+                    vRot = aSeed * 6.2831853 + uTime * 0.02 * (aSeed - 0.5);
+                }
+            `,
+            fragmentShader: `
+                uniform sampler2D uTex; uniform float uAlpha;
+                varying float vA; varying float vRot;
+                void main() {
+                    vec2 q = gl_PointCoord - 0.5;
+                    float c = cos(vRot), s = sin(vRot);
+                    q = vec2(q.x * c - q.y * s, q.x * s + q.y * c) + 0.5;
+                    float a = texture2D(uTex, q).a;
+                    gl_FragColor = vec4(vec3(0.45, 0.62, 0.9), a * vA * uAlpha);
+                }
+            `,
+            transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending
+        });
+        const pts = new THREE.Points(geo, mat);
+        pts.frustumCulled = false;
+        pts.renderOrder = -1;
+        galaxy.add(pts);
+        galaxy.userData.cloudMat = mat;
+    })();
+    DP.background = {
+        galaxy,
+        // Применить значения из DP.config.background / hud на ходу (панель ?tune).
+        sync() {
+            const b = cfg.background, s = galaxy.userData.starMat.uniforms, c = galaxy.userData.cloudMat.uniforms;
+            s.uSize.value = b.starSize; s.uAlpha.value = b.starAlpha;
+            c.uSize.value = b.cloudSize; c.uAlpha.value = b.cloudAlpha;
+            drawHud(Math.max(1, window.innerWidth), Math.max(1, window.innerHeight));
+        }
+    };
 
     // ------------------------------------------
-    // 2D HUD
+    // 2D HUD: две «весики» — малая (крестики) и большая (звёздочки)
     // ------------------------------------------
+    // Малая: круг R в центре и два круга R с центрами сверху и снизу — проходят через центр; на пересечениях —
+    // крестики. Большая — то же с радиусом R2 (выходит за экран); на пересечениях — четырёхлучевые звёздочки.
+    // Все линии одной толщины; крестики и звёздочки масштабируются вместе с кругами.
     const hudCanvas = document.getElementById('hudCanvas');
     const hudCtx = hudCanvas.getContext('2d');
 
@@ -135,18 +223,17 @@
         hudCanvas.height = Math.round(h * dpr);
         hudCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
         hudCtx.clearRect(0, 0, w, h);
+        const H = cfg.hud;
 
         const cx = w / 2;
         const cy = h / 2;
-        const R = Math.min(w, h) * 0.38 * 1.25;
+        const R = Math.min(w, h) * 0.475;
+        const R2 = R * H.bigK;
 
-        hudCtx.lineWidth = 1.5;
-        hudCtx.strokeStyle = 'rgba(100, 160, 220, 0.35)';
-        hudCtx.beginPath(); hudCtx.arc(cx, cy, R, 0, Math.PI * 2); hudCtx.stroke();
-
-        hudCtx.strokeStyle = 'rgba(80, 140, 200, 0.22)';
-        hudCtx.beginPath(); hudCtx.arc(cx, cy - R, R, 0, Math.PI * 2); hudCtx.stroke();
-        hudCtx.beginPath(); hudCtx.arc(cx, cy + R, R, 0, Math.PI * 2); hudCtx.stroke();
+        hudCtx.lineWidth = H.line;
+        hudCtx.strokeStyle = H.color;
+        const circle = (x, y, r) => { hudCtx.beginPath(); hudCtx.arc(x, y, r, 0, Math.PI * 2); hudCtx.stroke(); };
+        [R, R2].forEach(r => { circle(cx, cy, r); circle(cx, cy - r, r); circle(cx, cy + r, r); });
 
         const hGrad = hudCtx.createLinearGradient(0, cy, w, cy);
         hGrad.addColorStop(0.0, 'rgba(100, 170, 240, 0.0)');
@@ -164,20 +251,33 @@
         hudCtx.strokeStyle = vGrad;
         hudCtx.beginPath(); hudCtx.moveTo(cx, 0); hudCtx.lineTo(cx, h); hudCtx.stroke();
 
-        const drawCross = (x, y, sz, col) => {
-            hudCtx.strokeStyle = col;
-            hudCtx.lineWidth = 2.5;
+        // Точки пересечения: круг r в центре с кругами сверху/снизу — под углом ±30° от горизонтали.
+        const marks = (r) => { const ox = r * Math.sin(Math.PI / 3); return [[cx - ox, cy - r / 2], [cx + ox, cy - r / 2], [cx - ox, cy + r / 2], [cx + ox, cy + r / 2]]; };
+        const crossSz = R * H.crossK, crossW = Math.max(1, R * H.crossLineK);
+        hudCtx.strokeStyle = H.markColor; hudCtx.lineWidth = crossW;
+        marks(R).forEach(([x, y]) => {
             hudCtx.beginPath();
-            hudCtx.moveTo(x - sz, y); hudCtx.lineTo(x + sz, y);
-            hudCtx.moveTo(x, y - sz); hudCtx.lineTo(x, y + sz);
+            hudCtx.moveTo(x - crossSz, y); hudCtx.lineTo(x + crossSz, y);
+            hudCtx.moveTo(x, y - crossSz); hudCtx.lineTo(x, y + crossSz);
             hudCtx.stroke();
-        };
-        const ox = R * Math.sin(Math.PI / 3);
-        const crossCol = 'rgba(180, 220, 255, 0.85)';
-        drawCross(cx - ox, cy - R * 0.5, 12, crossCol);
-        drawCross(cx + ox, cy - R * 0.5, 12, crossCol);
-        drawCross(cx - ox, cy + R * 0.5, 12, crossCol);
-        drawCross(cx + ox, cy + R * 0.5, 12, crossCol);
+        });
+        const starSz = R * H.starK;
+        marks(R2).forEach(([x, y]) => {
+            if (x < -starSz || x > w + starSz || y < -starSz || y > h + starSz) return;
+            const g = hudCtx.createRadialGradient(x, y, 0, x, y, starSz * 2.2);
+            g.addColorStop(0, 'rgba(180, 220, 255, 0.35)'); g.addColorStop(1, 'rgba(180, 220, 255, 0)');
+            hudCtx.fillStyle = g; hudCtx.beginPath(); hudCtx.arc(x, y, starSz * 2.2, 0, Math.PI * 2); hudCtx.fill();
+            // четырёхлучевая звёздочка: лучи — вогнутые дуги
+            const a = starSz, b = starSz * 0.16;
+            hudCtx.fillStyle = H.starColor;
+            hudCtx.beginPath();
+            hudCtx.moveTo(x, y - a);
+            hudCtx.quadraticCurveTo(x + b, y - b, x + a, y);
+            hudCtx.quadraticCurveTo(x + b, y + b, x, y + a);
+            hudCtx.quadraticCurveTo(x - b, y + b, x - a, y);
+            hudCtx.quadraticCurveTo(x - b, y - b, x, y - a);
+            hudCtx.fill();
+        });
     }
 
     // ------------------------------------------
@@ -253,6 +353,7 @@
     function render(dt) {
         if (resizePending) { resizePending = false; applySize(false); }
         adaptQuality(dt);
+        galaxy.rotation.y = DP.shared.uTime.value * cfg.background.spin;   // диск галактики медленно вращается
         figureStage.updateMatrixWorld(true);
         DP.morph.shared.uStageMatrix.value.copy(figureStage.matrixWorld);
         DP.morph.shared.uStageMatrixInv.value.copy(figureStage.matrixWorld).invert();
