@@ -697,12 +697,13 @@
         const c = DP.config.morph;
         shared.uSmokeA.value.x = 0;
         shared.uShadowInfo.value.x = 0;
-        DP.morph.tiltWindow = (c.mode === 'sweep' || c.mode === 'sphere') ? [0, 1] : [0.15, 0.75];
+        DP.morph.tiltWindow = (c.mode === 'sweep' || c.mode === 'sphere' || c.mode === 'disk') ? [0, 1] : [0.15, 0.75];
         const smokeOk = DP.smokeSim && DP.smokeSim.supported();
+        if (c.mode === 'disk' && smokeOk) return planDisk(A, B);
         if (c.mode === 'sphere' && smokeOk) return planSphere(A, B);
         if (c.mode === 'sweep' && smokeOk) return planSweep(A, B);
         if (c.mode === 'smoke' && smokeOk) return planSmoke(A, B);
-        if (c.mode === 'fountain' || c.mode === 'smoke' || c.mode === 'sweep' || c.mode === 'sphere') return planFountain(A, B);
+        if (c.mode !== 'vortex') return planFountain(A, B);
         shared.uFountA.value.x = 0;
         syncConfig();
         const NA = A.total, NB = B.total, N = Math.max(NA, NB);
@@ -1249,6 +1250,75 @@
               eddy: [f.eddyBig, f.eddyBigScale, f.eddySmall, f.eddySmallScale, f.eddySpeed] });
         DP.smokeSim.setShadow(f.shadow, center, Math.max(R, 0.5 * (bb.y1 - bb.y0)) * 1.6);
         // Вид частиц в полёте — свой у сферы: мельче и ярче, пряди читаются нитями, а не туманом.
+        shared.uSwirlA.value.set(f.flightSize, c.swirlSizeMin, f.flightAlpha, c.swirlVisible);
+        shared.uSwirlB.value.set(c.leaveGlow, c.swirlBlend, c.swirlTint, f.flightLook);
+        shared.uSmokeA.value.set(1, side, sm.lifeMin, Math.max(sm.lifeMin + 0.01, sm.lifeMax));
+        shared.uSmokeB.value.set(sm.fadeIn, sm.fadeOut, sm.grow, f.capture);
+        shared.uSmokeC.value.set(f.land, 0, 0, 0);
+        shared.uMorphSched.value.set(0.05, f.leaveSpread, arriveStart, f.arriveSpread);
+        shared.uMorphSched2.value.set(0, c.meshRevealLag, c.meshFade, 0);
+        return end + c.meshRevealLag + c.meshFade + 0.1;
+    }
+
+    // ------------------------------------------
+    // ПЛАНИРОВЩИК «ДИСК» (disk) — чистый вихрь, без водоворотов
+    // ------------------------------------------
+    // Фигура распадается от краёв элементов к середине и низу (aOrder), частицы закручиваются, как чай в чашке,
+    // и стягиваются в толстое вращающееся кольцо-диск с пустой серединой на уровне экватора. Из диска частицы
+    // разлетаются по местам новой фигуры сверху вниз: сначала верх, потом середина, потом самый низ.
+    function planDisk(A, B) {
+        const c = DP.config.morph, f = c.disk;
+        syncConfig();
+        shared.uFountA.value.x = 0;
+        shared.uSimInfo.value.set(0, 1, 0, 0);
+        const bb = bounds([A, B]), bB = bounds([B]);
+        DP.morph.lastBounds = bb;
+        const R = f.diskR * bb.r1;
+        const center = new THREE.Vector3(0, bb.y0 + f.diskY * (bb.y1 - bb.y0), 0);
+        const total = cellPairs(A, B, f.sectors, f.bands, bb, null);
+        const side = Math.max(1, Math.ceil(Math.sqrt(total)));
+        const dA = new Float32Array(side * side * 4), dB = new Float32Array(side * side * 4), dS = new Float32Array(side * side * 4);
+        const arriveStart = 0.05 + f.leaveSpread + f.hold;
+        const orderOf = (Lay, gi) => { const p = Lay.parts[Lay.partOf[gi]]; return U.clamp(p.order[gi - p.start], 0, 1); };
+        const hOf = (y) => U.clamp((y - bB.y0) / Math.max(bB.y1 - bB.y0, 1e-3), 0, 1);
+        let end = 0;
+        cellPairs(A, B, f.sectors, f.bands, bb, (P) => {
+            const { ia, ib, firstA, firstB, kk } = P;
+            const b0 = ib >= 0 ? restOf(B, ib) : null;
+            const oA = ia >= 0 ? orderOf(A, ia) : orderOf(B, ib);
+            const hB = b0 ? hOf(b0[1]) : 1 - oA;
+            const seed = U.seededRandom(kk * 0.618 + 0.37);
+            const jit = (U.seededRandom(kk * 0.7311 + 3.3) - 0.5) * 2 * f.jitter;
+            const jitA = (U.seededRandom(kk * 1.319 + 5.1) - 0.5) * 2 * f.jitter;
+            const L = Math.max(0, 0.05 + f.leaveSpread * oA + jit);
+            const T = arriveStart + f.arriveSpread * (1 - hB) + jitA;   // сборка сверху вниз
+            const D = Math.max(f.land + 0.4, T - L);
+            const Lq = U.clamp(Math.round(L * 100), 0, 2047), Dq = U.clamp(Math.round(D * 100), 5, 2047);
+            end = Math.max(end, (Lq + Dq) * 0.01);
+            const packed = Lq * 2048 + Dq;
+            writePair(A, B, P, [packed, 0, seed + (firstB ? 0 : 2), 0], [packed, 0, seed + (firstA ? 0 : 2), 0]);
+            // Нет точки в A — частица рождается в диске, в стороне своей точки B.
+            let a;
+            if (ia >= 0) a = restOf(A, ia);
+            else {
+                const ph = U.azimuth(b0[0], b0[2]), rr = R * (f.diskIn + (1 - f.diskIn) * U.seededRandom(kk * 3.1 + 0.7));
+                a = [Math.sin(ph) * rr, center.y, Math.cos(ph) * rr];
+            }
+            const b = b0 || a, j = kk * 4;
+            dA[j] = a[0]; dA[j + 1] = a[1]; dA[j + 2] = a[2]; dA[j + 3] = Lq * 0.01;
+            dB[j] = b[0]; dB[j + 1] = b[1]; dB[j + 2] = b[2]; dB[j + 3] = Dq * 0.01;
+            dS[j] = seed;
+        });
+        A.parts.forEach(p => { p.outAttr.needsUpdate = true; p.pairOutAttr.needsUpdate = true; });
+        B.parts.forEach(p => { p.inAttr.needsUpdate = true; p.pairInAttr.needsUpdate = true; });
+
+        const sm = c.smoke;
+        DP.smokeSim.prepare(side, dA, dB, dS, { center, R, w: 0 },
+            { capture: f.capture, land: f.land, gravity: f.gravity, pull: 0, twist: f.twist, shape: 2, roll: 0,
+              respawn: 0, twistRamp: 0, spiral: 1, escape: 0, speed: 1,
+              eddy: [0, 1, 0, 1, 0],
+              disk: [f.diskIn, f.thick, f.spin, f.pullR, f.pullY, f.spinPow] });
+        DP.smokeSim.setShadow(0, center, R);
         shared.uSwirlA.value.set(f.flightSize, c.swirlSizeMin, f.flightAlpha, c.swirlVisible);
         shared.uSwirlB.value.set(c.leaveGlow, c.swirlBlend, c.swirlTint, f.flightLook);
         shared.uSmokeA.value.set(1, side, sm.lifeMin, Math.max(sm.lifeMin + 0.01, sm.lifeMax));

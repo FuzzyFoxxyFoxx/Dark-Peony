@@ -26,6 +26,26 @@
     });
 
     DP.tuneSpec = DP.tuneSpec || [
+        ['Диск (чистый вихрь)'],
+        ['disk.leaveSpread', 'распад от краёв, с', 0.2, 5, 0.05],
+        ['disk.hold', 'диск целиком, с', 0, 4, 0.05],
+        ['disk.arriveSpread', 'сборка сверху вниз, с', 0.2, 5, 0.05],
+        ['disk.jitter', 'разброс частиц, с', 0, 0.6, 0.01],
+        ['disk.capture', 'затягивание в вихрь, с', 0.1, 4, 0.05],
+        ['disk.land', 'посадка, с', 0.1, 3, 0.05],
+        ['disk.twist', 'закрутка при срыве', 0, 10, 0.05],
+        ['disk.gravity', 'осыпание при срыве', 0, 5, 0.05],
+        ['disk.diskR', 'радиус диска', 0.2, 2, 0.01],
+        ['disk.diskIn', 'пустая середина (доля)', 0, 0.95, 0.01],
+        ['disk.thick', 'толщина диска', 0.01, 1, 0.01],
+        ['disk.diskY', 'высота экватора', 0, 1, 0.01],
+        ['disk.spin', 'скорость вращения', 0, 8, 0.05],
+        ['disk.spinPow', 'внутри быстрее (−1…0)', -1.5, 0.5, 0.05],
+        ['disk.pullR', 'стягивание в кольцо', 0, 8, 0.05],
+        ['disk.pullY', 'сплющивание в диск', 0, 8, 0.05],
+        ['disk.flightSize', 'размер в полёте', 0.1, 2, 0.01],
+        ['disk.flightAlpha', 'яркость в полёте', 0, 2, 0.01],
+        ['disk.flightLook', 'вид в полёте (0 — как на фигуре)', 0, 1, 0.01],
         ['Дымная сфера'],
         ['sphere.leaveSpread', 'распад от краёв, с', 0.2, 5, 0.05],
         ['sphere.hold', 'шар целиком, с', 0, 4, 0.05],
@@ -162,7 +182,7 @@
     const loop = { on: DP.params.get('loop') !== '0', pause: parseFloat(DP.params.get('pause') || '1.5') };
     const bar = document.createElement('div');
     bar.innerHTML = '<button data-a="loop"></button><button data-a="now">морфинг сейчас</button>' +
-        '<select data-a="mode"><option value="sphere">дымная сфера</option><option value="sweep">кольцо-кисть</option><option value="smoke">дымное кольцо</option><option value="fountain">фонтан</option><option value="vortex">вихрь</option></select>';
+        '<select data-a="mode"><option value="disk">диск (чистый вихрь)</option><option value="sphere">дымная сфера</option><option value="sweep">кольцо-кисть</option><option value="smoke">дымное кольцо</option><option value="fountain">фонтан</option><option value="vortex">вихрь</option></select>';
     rows.appendChild(bar);
     const bLoop = bar.querySelector('[data-a=loop]'), sMode = bar.querySelector('[data-a=mode]');
     const showLoop = () => { bLoop.textContent = loop.on ? 'цикл: вкл' : 'цикл: выкл'; };
