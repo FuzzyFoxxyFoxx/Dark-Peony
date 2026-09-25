@@ -960,6 +960,28 @@
             pb.pairInAttr.array[lb] = P.kk;
         }
     }
+    // Порядок распада точек одним массивом (в порядке глобальных индексов).
+    function flatOrder(Lay) {
+        if (Lay._order) return Lay._order;
+        const r = new Float32Array(Lay.total);
+        Lay.parts.forEach(p => { for (let i = 0; i < p.count; i++) { const v = p.order[i]; r[p.start + i] = v < 0 ? 0 : v > 1 ? 1 : v; } });
+        return (Lay._order = r);
+    }
+    // Быстрый псевдослучайный [0, 1) по числу (без Math.sin).
+    function hash01(x) {
+        let h = Math.imul((x * 1000003) | 0, 0x9E3779B1) ^ 0x85EBCA6B;
+        h = Math.imul(h ^ (h >>> 15), 0x2C1B3C6D); h = Math.imul(h ^ (h >>> 12), 0x297A2D39);
+        return ((h ^ (h >>> 15)) >>> 0) / 4294967296;
+    }
+    // Буферы данных пар переиспользуются между морфингами (десятки МБ — не выделять каждый раз).
+    let pairBuf = null;
+    function pairBuffers(side) {
+        if (!pairBuf || pairBuf.side !== side) {
+            const n = side * side * 4;
+            pairBuf = { side, dA: new Float32Array(n), dB: new Float32Array(n), dS: new Float32Array(n) };
+        }
+        return pairBuf;
+    }
     const restOf = (Lay, gi) => { const p = Lay.parts[Lay.partOf[gi]], j = (gi - p.start) * 3; return [p.rest[j], p.rest[j + 1], p.rest[j + 2]]; };
 
     // ------------------------------------------
@@ -1144,28 +1166,77 @@
     // сортируются сверху вниз и сопоставляются по порядку. Соседи в старой фигуре — соседи и в новой, поэтому
     // в вихре они летят вместе (пряди, складки), а не перекрещиваются. Где в ячейке точек разное число,
     // лишние тают в вихре (ib < 0 или повтор), недостающие рождаются из него (ia < 0 или повтор).
-    function cellPairs(A, B, S, NBd, bb, visit) {
-        const H = Math.max(bb.y1 - bb.y0, 1e-3), IDX = 4194304;
-        const cells = (Lay) => {
-            const n = Lay.total, keys = new Float64Array(n), cnt = new Int32Array(S * NBd);
-            Lay.parts.forEach(p => {
-                for (let i = 0; i < p.count; i++) {
-                    const g = p.start + i, x = p.rest[i * 3], y = p.rest[i * 3 + 1], z = p.rest[i * 3 + 2];
-                    const sec = Math.min(S - 1, Math.floor((U.azimuth(x, z) + Math.PI) / TWO_PI * S));
-                    const hh = U.clamp((y - bb.y0) / H, 0, 1), band = Math.min(NBd - 1, Math.floor((1 - hh) * NBd));
-                    const cell = sec * NBd + band;
-                    cnt[cell]++;
-                    keys[g] = (cell * 1048576 + Math.floor((1 - hh) * 1048575)) * IDX + g;
-                }
-            });
+    // Ячейки «сектор × полоса высоты» для фигуры: точки, отсортированные по ячейке и сверху вниз.
+    // Зависят только от формы фигуры и границ пары — считаются один раз и кэшируются на раскладке;
+    // заранее их считает фоновый поток (prewarm), поэтому старт морфинга не останавливает кадр.
+    const cellsKey = (S, NBd, bb) => S + '|' + NBd + '|' + bb.y0.toFixed(4) + '|' + bb.y1.toFixed(4);
+    const cellsSrc = `
+        function cells(rest, n, S, NBd, y0, H) {
+            const IDX = 4194304, TWO_PI = Math.PI * 2;
+            const keys = new Float64Array(n), cnt = new Int32Array(S * NBd);
+            for (let g = 0; g < n; g++) {
+                const x = rest[g * 3], y = rest[g * 3 + 1], z = rest[g * 3 + 2];
+                const az = (Math.abs(x) + Math.abs(z) < 1e-5) ? 0 : Math.atan2(x, z);
+                const sec = Math.min(S - 1, Math.floor((az + Math.PI) / TWO_PI * S));
+                let hh = (y - y0) / H; hh = hh < 0 ? 0 : hh > 1 ? 1 : hh;
+                const band = Math.min(NBd - 1, Math.floor((1 - hh) * NBd));
+                const cell = sec * NBd + band;
+                cnt[cell]++;
+                keys[g] = (cell * 1048576 + Math.floor((1 - hh) * 1048575)) * IDX + g;
+            }
             keys.sort();
             const sorted = new Uint32Array(n);
             for (let k = 0; k < n; k++) sorted[k] = keys[k] % IDX;
             const start = new Int32Array(S * NBd + 1);
             for (let q = 0; q < S * NBd; q++) start[q + 1] = start[q] + cnt[q];
             return { sorted, start, cnt };
-        };
-        const CA = cells(A), CB = cells(B);
+        }`;
+    const cellsFn = new Function(cellsSrc + '; return cells;')();
+    // Все точки раскладки одним массивом xyz (в порядке глобальных индексов).
+    function flatRest(Lay) {
+        if (Lay._flat) return Lay._flat;
+        const r = new Float32Array(Lay.total * 3);
+        Lay.parts.forEach(p => r.set(p.rest.subarray ? p.rest.subarray(0, p.count * 3) : p.rest.slice(0, p.count * 3), p.start * 3));
+        return (Lay._flat = r);
+    }
+    function cellsOf(Lay, S, NBd, bb) {
+        const key = cellsKey(S, NBd, bb);
+        Lay._cells = Lay._cells || {};
+        if (!Lay._cells[key]) Lay._cells[key] = cellsFn(flatRest(Lay), Lay.total, S, NBd, bb.y0, Math.max(bb.y1 - bb.y0, 1e-3));
+        return Lay._cells[key];
+    }
+    let worker = null, workerJobs = 0;
+    // Заранее посчитать ячейки пары A → B в фоновом потоке (результат — в кэш раскладок).
+    function prewarm(A, B) {
+        const c = DP.config.morph, f = c[c.mode];
+        if (!f || !f.sectors || !f.bands) return;
+        const bb = bounds([A, B]), key = cellsKey(f.sectors, f.bands, bb);
+        [A, B].forEach(Lay => {
+            Lay._cells = Lay._cells || {};
+            if (Lay._cells[key] || (Lay._pending && Lay._pending[key])) return;
+            try {
+                if (!worker) {
+                    const url = URL.createObjectURL(new Blob([cellsSrc + `
+                        onmessage = (e) => { const d = e.data; const r = cells(d.rest, d.n, d.S, d.NBd, d.y0, d.H);
+                            postMessage({ id: d.id, sorted: r.sorted, start: r.start, cnt: r.cnt }, [r.sorted.buffer, r.start.buffer, r.cnt.buffer]); };`],
+                        { type: 'application/javascript' }));
+                    worker = new Worker(url);
+                    worker.onmessage = (e) => {
+                        const job = worker.jobs[e.data.id]; delete worker.jobs[e.data.id];
+                        if (job) { job.Lay._cells[job.key] = { sorted: e.data.sorted, start: e.data.start, cnt: e.data.cnt }; delete job.Lay._pending[job.key]; }
+                    };
+                    worker.jobs = {};
+                }
+                const id = ++workerJobs;
+                Lay._pending = Lay._pending || {}; Lay._pending[key] = true;
+                worker.jobs[id] = { Lay, key };
+                worker.postMessage({ id, rest: flatRest(Lay), n: Lay.total, S: f.sectors, NBd: f.bands, y0: bb.y0, H: Math.max(bb.y1 - bb.y0, 1e-3) });
+            } catch (e) { worker = false; }   // нет фоновых потоков — посчитается при старте морфинга
+        });
+    }
+
+    function cellPairs(A, B, S, NBd, bb, visit) {
+        const CA = cellsOf(A, S, NBd, bb), CB = cellsOf(B, S, NBd, bb);
         let total = 0;
         for (let q = 0; q < S * NBd; q++) total += Math.max(CA.cnt[q], CB.cnt[q]);
         if (!visit) return total;
@@ -1266,49 +1337,85 @@
     // Фигура распадается от краёв элементов к середине и низу (aOrder), частицы закручиваются, как чай в чашке,
     // и стягиваются в толстое вращающееся кольцо-диск с пустой серединой на уровне экватора. Из диска частицы
     // разлетаются по местам новой фигуры сверху вниз: сначала верх, потом середина, потом самый низ.
-    function planDisk(A, B) {
-        const c = DP.config.morph, f = c.disk;
+    // Подготовка «диска» по частям: генератор отдаёт управление каждые ~150 тыс. пар, поэтому её можно
+    // растянуть на несколько кадров заранее (planAhead), пока фигура спокойно вращается.
+    function* buildDisk(A, B, f) {
+        const bb = bounds([A, B]), bB = bounds([B]);
+        const R = f.diskR * bb.r1;
+        const center = new THREE.Vector3(0, bb.y0 + f.diskY * (bb.y1 - bb.y0), 0);
+        // Быстрый проход по парам (≈1.3 млн): без временных объектов, буферы переиспользуются между морфингами.
+        const S = f.sectors, NBd = f.bands;
+        const CA = cellsOf(A, S, NBd, bb), CB = cellsOf(B, S, NBd, bb);
+        let total = 0;
+        for (let q = 0; q < S * NBd; q++) total += Math.max(CA.cnt[q], CB.cnt[q]);
+        const side = Math.max(1, Math.ceil(Math.sqrt(total)));
+        const { dA, dB, dS } = pairBuffers(side);
+        const arriveStart = 0.05 + f.leaveSpread + f.hold;
+        const rA = flatRest(A), rB = flatRest(B), oAf = flatOrder(A), oBf = flatOrder(B);
+        const by0 = bB.y0, bdy = Math.max(bB.y1 - bB.y0, 1e-3);
+        const usedA = new Uint8Array(A.total), usedB = new Uint8Array(B.total);
+        const aParts = A.parts, bParts = B.parts, aOf = A.partOf, bOf = B.partOf;
+        let end = 0, kk = 0, lastYield = 0;
+        for (let q = 0; q < S * NBd; q++) {
+            const nA = CA.cnt[q], nB = CB.cnt[q], n = Math.max(nA, nB);
+            if (kk - lastYield > 150000) { lastYield = kk; yield; }
+            for (let k = 0; k < n; k++, kk++) {
+                const j = kk * 4;
+                const ia = nA ? CA.sorted[CA.start[q] + Math.floor(k * nA / n)] : -1;
+                const ib = nB ? CB.sorted[CB.start[q] + Math.floor(k * nB / n)] : -1;
+                const firstA = ia >= 0 && !usedA[ia], firstB = ib >= 0 && !usedB[ib];
+                if (!firstA && !firstB) { dB[j + 3] = 0; continue; }
+                if (ia >= 0) usedA[ia] = 1;
+                if (ib >= 0) usedB[ib] = 1;
+                const oA = ia >= 0 ? oAf[ia] : oBf[ib];
+                let hB = 1 - oA;
+                if (ib >= 0) { hB = (rB[ib * 3 + 1] - by0) / bdy; hB = hB < 0 ? 0 : hB > 1 ? 1 : hB; }
+                const seed = hash01(kk * 0.618 + 0.37);
+                const jit = (hash01(kk * 0.7311 + 3.3) - 0.5) * 2 * f.jitter;
+                const jitA = (hash01(kk * 1.319 + 5.1) - 0.5) * 2 * f.jitter;
+                const L = Math.max(0, 0.05 + f.leaveSpread * oA + jit);
+                const T = arriveStart + f.arriveSpread * (1 - hB) + jitA;   // сборка сверху вниз
+                const D = Math.max(f.land + 0.4, T - L);
+                let Lq = Math.round(L * 100); Lq = Lq < 0 ? 0 : Lq > 2047 ? 2047 : Lq;
+                let Dq = Math.round(D * 100); Dq = Dq < 5 ? 5 : Dq > 2047 ? 2047 : Dq;
+                if ((Lq + Dq) * 0.01 > end) end = (Lq + Dq) * 0.01;
+                const packed = Lq * 2048 + Dq;
+                if (firstA) {
+                    const pa = aParts[aOf[ia]], la = ia - pa.start, o = pa.outAttr.array, m = la * 4;
+                    o[m] = packed; o[m + 1] = 0; o[m + 2] = seed + (firstB ? 0 : 2); o[m + 3] = 0;
+                    pa.pairOutAttr.array[la] = kk;
+                }
+                if (firstB) {
+                    const pb = bParts[bOf[ib]], lb = ib - pb.start, o = pb.inAttr.array, m = lb * 4;
+                    o[m] = packed; o[m + 1] = 0; o[m + 2] = seed + (firstA ? 0 : 2); o[m + 3] = 0;
+                    pb.pairInAttr.array[lb] = kk;
+                }
+                // Нет точки в A — частица рождается в диске, в стороне своей точки B.
+                let ax, ay, az;
+                if (ia >= 0) { ax = rA[ia * 3]; ay = rA[ia * 3 + 1]; az = rA[ia * 3 + 2]; }
+                else {
+                    const ph = U.azimuth(rB[ib * 3], rB[ib * 3 + 2]), rr = R * (f.diskIn + (1 - f.diskIn) * hash01(kk * 3.1 + 0.7));
+                    ax = Math.sin(ph) * rr; ay = center.y; az = Math.cos(ph) * rr;
+                }
+                dA[j] = ax; dA[j + 1] = ay; dA[j + 2] = az; dA[j + 3] = Lq * 0.01;
+                if (ib >= 0) { dB[j] = rB[ib * 3]; dB[j + 1] = rB[ib * 3 + 1]; dB[j + 2] = rB[ib * 3 + 2]; }
+                else { dB[j] = ax; dB[j + 1] = ay; dB[j + 2] = az; }
+                dB[j + 3] = Dq * 0.01;
+                dS[j] = seed;
+            }
+        }
+        dB.fill(0, kk * 4);   // хвост текстуры — пустые пиксели
+        return { A, B, bb, R, center, side, dA, dB, dS, end };
+    }
+
+    // Применить готовую подготовку: выгрузить атрибуты и данные пар, выставить uniform'ы. Возвращает длительность.
+    function applyDisk(r) {
+        const c = DP.config.morph, f = c.disk, { A, B, bb, R, center, side, dA, dB, dS, end } = r;
+        const arriveStart = 0.05 + f.leaveSpread + f.hold;
         syncConfig();
         shared.uFountA.value.x = 0;
         shared.uSimInfo.value.set(0, 1, 0, 0);
-        const bb = bounds([A, B]), bB = bounds([B]);
         DP.morph.lastBounds = bb;
-        const R = f.diskR * bb.r1;
-        const center = new THREE.Vector3(0, bb.y0 + f.diskY * (bb.y1 - bb.y0), 0);
-        const total = cellPairs(A, B, f.sectors, f.bands, bb, null);
-        const side = Math.max(1, Math.ceil(Math.sqrt(total)));
-        const dA = new Float32Array(side * side * 4), dB = new Float32Array(side * side * 4), dS = new Float32Array(side * side * 4);
-        const arriveStart = 0.05 + f.leaveSpread + f.hold;
-        const orderOf = (Lay, gi) => { const p = Lay.parts[Lay.partOf[gi]]; return U.clamp(p.order[gi - p.start], 0, 1); };
-        const hOf = (y) => U.clamp((y - bB.y0) / Math.max(bB.y1 - bB.y0, 1e-3), 0, 1);
-        let end = 0;
-        cellPairs(A, B, f.sectors, f.bands, bb, (P) => {
-            const { ia, ib, firstA, firstB, kk } = P;
-            const b0 = ib >= 0 ? restOf(B, ib) : null;
-            const oA = ia >= 0 ? orderOf(A, ia) : orderOf(B, ib);
-            const hB = b0 ? hOf(b0[1]) : 1 - oA;
-            const seed = U.seededRandom(kk * 0.618 + 0.37);
-            const jit = (U.seededRandom(kk * 0.7311 + 3.3) - 0.5) * 2 * f.jitter;
-            const jitA = (U.seededRandom(kk * 1.319 + 5.1) - 0.5) * 2 * f.jitter;
-            const L = Math.max(0, 0.05 + f.leaveSpread * oA + jit);
-            const T = arriveStart + f.arriveSpread * (1 - hB) + jitA;   // сборка сверху вниз
-            const D = Math.max(f.land + 0.4, T - L);
-            const Lq = U.clamp(Math.round(L * 100), 0, 2047), Dq = U.clamp(Math.round(D * 100), 5, 2047);
-            end = Math.max(end, (Lq + Dq) * 0.01);
-            const packed = Lq * 2048 + Dq;
-            writePair(A, B, P, [packed, 0, seed + (firstB ? 0 : 2), 0], [packed, 0, seed + (firstA ? 0 : 2), 0]);
-            // Нет точки в A — частица рождается в диске, в стороне своей точки B.
-            let a;
-            if (ia >= 0) a = restOf(A, ia);
-            else {
-                const ph = U.azimuth(b0[0], b0[2]), rr = R * (f.diskIn + (1 - f.diskIn) * U.seededRandom(kk * 3.1 + 0.7));
-                a = [Math.sin(ph) * rr, center.y, Math.cos(ph) * rr];
-            }
-            const b = b0 || a, j = kk * 4;
-            dA[j] = a[0]; dA[j + 1] = a[1]; dA[j + 2] = a[2]; dA[j + 3] = Lq * 0.01;
-            dB[j] = b[0]; dB[j + 1] = b[1]; dB[j + 2] = b[2]; dB[j + 3] = Dq * 0.01;
-            dS[j] = seed;
-        });
         A.parts.forEach(p => { p.outAttr.needsUpdate = true; p.pairOutAttr.needsUpdate = true; });
         B.parts.forEach(p => { p.inAttr.needsUpdate = true; p.pairInAttr.needsUpdate = true; });
 
@@ -1332,6 +1439,43 @@
         return end + c.meshRevealLag + c.meshFade + 0.1;
     }
 
+    const diskKey = (A, B) => JSON.stringify(DP.config.morph.disk) + '|' + A.total + '|' + B.total;
+    let ahead = null;   // { A, B, key, gen, result }
+    function planDisk(A, B) {
+        const key = diskKey(A, B);
+        if (ahead && ahead.A === A && ahead.B === B && ahead.key === key) {
+            while (!ahead.result) { const st = ahead.gen.next(); if (st.done) ahead.result = st.value; }   // досчитать остаток
+            const r = ahead.result; ahead = null;
+            return applyDisk(r);
+        }
+        ahead = null;
+        const gen = buildDisk(A, B, DP.config.morph.disk);
+        let st; do { st = gen.next(); } while (!st.done);
+        return applyDisk(st.value);
+    }
+    // Заранее, по частям (не больше ~6 мс за шаг), подготовить морфинг A → B, пока фигура спокойно вращается.
+    function planAhead(A, B) {
+        const c = DP.config.morph;
+        if (c.mode !== 'disk' || !(DP.smokeSim && DP.smokeSim.supported())) return;
+        const key = diskKey(A, B);
+        if (ahead && ahead.A === A && ahead.B === B && ahead.key === key) return;
+        const job = ahead = { A, B, key, gen: null, result: null };
+        const bb = bounds([A, B]), ck = cellsKey(c.disk.sectors, c.disk.bands, bb);
+        const tick = () => {
+            if (ahead !== job) return;                                    // отменено (морфинг начался или новая подготовка)
+            if (!(A._cells && A._cells[ck]) || !(B._cells && B._cells[ck])) {   // ждём сортировку из фонового потока
+                if (!(A._pending && A._pending[ck]) && !(B._pending && B._pending[ck])) prewarm(A, B);
+                return setTimeout(tick, 50);
+            }
+            if (!job.gen) job.gen = buildDisk(A, B, c.disk);
+            const t0 = performance.now();
+            while (!job.result && performance.now() - t0 < 6) { const st = job.gen.next(); if (st.done) job.result = st.value; }
+            if (!job.result) setTimeout(tick, 16);
+            else DP.smokeSim.stage(job.result.side, job.result.dA, job.result.dB, job.result.dS);   // текстуры — в видеокарту заранее
+        };
+        setTimeout(tick, 0);
+    }
+
     DP.morph = {
         shared,
         syncConfig,
@@ -1339,6 +1483,8 @@
         uniformsFor,
         createLayout,
         plan,
+        prewarm,
+        planAhead,
         glsl: { pointsVertex, pointsFragment, meshVertex, meshFragment, simplexNoise, flowGlsl }
     };
 })(window.DP);
