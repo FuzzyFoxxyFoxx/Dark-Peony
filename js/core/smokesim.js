@@ -32,6 +32,8 @@
         uniform vec4 uTimes;    // захват (с), посадка (с), ускорение осыпания, притяжение к сердцевине
         uniform vec4 uShape;    // форма: 0 — кольцо, 1 — сфера; клубление сферы (вихрь Хилла); перерождение частиц (0/1); разгон закрутки, с (0 — только до захвата)
         uniform vec4 uExtra;    // посадка по спирали (0/1), -, -, -
+        uniform vec4 uDisk;     // диск (координаты кольца): внутренний радиус, внешний, полутолщина, скорость вращения
+        uniform vec4 uDisk2;    // диск: притяжение по радиусу, по высоте, показатель (скорость ~ r^p), -
         uniform vec4 uMove;     // движение кольца: скорость центра по высоте, скорость «дыхания» (dR/dt / R), закрутка до захвата, вращение кольца (рад/с)
         ${DP.morph.glsl.simplexNoise}
         float dpHash(float n) { return fract(sin(n * 127.1 + 311.7) * 43758.5453); }
@@ -88,6 +90,24 @@
             v -= normalize(p + vec3(1e-5)) * pull * smoothstep(a * 0.9, a * 1.6, r);
             return v;
         }
+        // Диск (координаты кольца): вихрь как чай в чашке — всё вращается вокруг оси (внутри быстрее),
+        // частицы стягиваются в толстое кольцо-диск с пустой серединой на уровне экватора. Без водоворотов.
+        vec3 diskFlow(vec3 p, float seed) {
+            vec3 up = vec3(0.0, 1.0, 0.0);
+            float r = length(p.xz);
+            vec3 e = normalize(vec3(p.x, 0.0, p.z) + vec3(1e-5, 0.0, 0.0));
+            float vt = uDisk.w * pow(max(r, 0.25 * uDisk.y) / uDisk.y, uDisk2.z);
+            vec3 v = cross(up, e) * vt;
+            // У каждой частицы своё место в толще диска (радиус и высота от seed) — диск заполнен объёмно,
+            // частицы не скапливаются на его границах.
+            float ur = sqrt(dpHash(seed * 5.31 + 0.7));
+            float rT = mix(uDisk.x, uDisk.y, ur);
+            // Сечение — линза: толще всего в середине кольца, к краям сходит на нет (бублик, галактика).
+            float yT = (dpHash(seed * 9.17 + 2.3) * 2.0 - 1.0) * uDisk.z * pow(sin(3.14159265 * ur), 0.8);
+            v += e * (rT - r) * uDisk2.x;
+            v.y += (yT - p.y) * uDisk2.y;
+            return v;
+        }
         void main() {
             vec2 uv = gl_FragCoord.xy / uSide;
             vec4 A = texture2D(uA, uv), B = texture2D(uB, uv);
@@ -119,7 +139,7 @@
             // Вращение кольца вокруг оси (вихрь): всё кольцо крутится, быстрее всего на экваторе сферы.
             v += cross(vec3(0.0, 1.0, 0.0), vec3(p.x - uCenter.x, 0.0, p.z - uCenter.z)) * uMove.w * cap * (1.0 - land);
             vec3 q = toRing(p);
-            vec3 vr = (uShape.x > 0.5 ? sphereFlow(q, t, uTimes.w) : ringFlow(q, t, uTimes.w)) * uNoise2.w;
+            vec3 vr = (uShape.x > 1.5 ? diskFlow(q, seed) : uShape.x > 0.5 ? sphereFlow(q, t, uTimes.w) : ringFlow(q, t, uTimes.w)) * uNoise2.w;
             // Улетающие: часть частиц отрывается от кольца и уходит вверх, рассеиваясь.
             float esc = step(dpHash(seed * 7.3 + 1.1), uNoise2.y) * uNoise2.z * (age > 0.0 ? smoothstep(0.2, 1.0, age / life) : 0.0);
             vr.y += esc;
@@ -216,7 +236,8 @@
                         uSide: { value: 1 }, uTime: { value: 0 }, uDt: { value: 0 }, uReset: { value: 1 },
                         uCenter: { value: new THREE.Vector4() }, uRing: { value: new THREE.Vector4() },
                         uNoise: { value: new THREE.Vector4() }, uNoise2: { value: new THREE.Vector4() },
-                        uLife: { value: new THREE.Vector4() }, uTimes: { value: new THREE.Vector4() }, uMove: { value: new THREE.Vector4() }, uShape: { value: new THREE.Vector4() }, uExtra: { value: new THREE.Vector4() }
+                        uLife: { value: new THREE.Vector4() }, uTimes: { value: new THREE.Vector4() }, uMove: { value: new THREE.Vector4() }, uShape: { value: new THREE.Vector4() }, uExtra: { value: new THREE.Vector4() },
+                        uDisk: { value: new THREE.Vector4() }, uDisk2: { value: new THREE.Vector4() }
                     },
                     vertexShader: 'void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }',
                     fragmentShader: simFragment,
@@ -261,6 +282,9 @@
             if (tm0.eddy) { const e = tm0.eddy; u.uNoise.value.set(e[0], e[1], e[2], e[3]); u.uNoise2.value.x = e[4]; }
             u.uShape.value.set(tm0.shape || 0, tm0.roll || 0, tm0.respawn != null ? tm0.respawn : 1, tm0.twistRamp || 0);
             u.uExtra.value.set(tm0.spiral ? 1 : 0, 0, 0, 0);
+            if (tm0.escape != null) u.uNoise2.value.y = tm0.escape;
+            if (tm0.speed != null) u.uNoise2.value.w = tm0.speed;
+            if (tm0.disk) { const d = tm0.disk; u.uDisk.value.set(d[0] * LAB_R, LAB_R, d[1] * LAB_R, d[2]); u.uDisk2.value.set(d[3], d[4], d[5], 0); }
             u.uNoise2.value.set(f.noiseSpeed, f.escape, f.lift, f.speed);
             u.uLife.value.set(f.lifeMin, Math.max(f.lifeMin + 0.01, f.lifeMax), f.fadeIn, f.tilt);
             const tm = this.timing || f;
