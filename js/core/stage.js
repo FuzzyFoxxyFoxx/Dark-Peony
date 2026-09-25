@@ -445,14 +445,16 @@
 
         // Точки пересечения: круг r в центре с кругами сверху/снизу — под углом ±30° от горизонтали.
         const marks = (r) => { const ox = r * Math.sin(Math.PI / 3); return [[cx - ox, cy - r / 2], [cx + ox, cy - r / 2], [cx - ox, cy + r / 2], [cx + ox, cy + r / 2]]; };
-        const crossSz = R * H.crossK, crossW = Math.max(1, R * H.crossLineK);
+        const crossSz = R * H.crossK, crossW = Math.max(0.35, R * H.crossLineK);   // тоньше 1 px — на ретине это 1 физ. пиксель
         hudCtx.strokeStyle = H.markColor; hudCtx.lineWidth = crossW;
+        hudCtx.globalAlpha = H.crossAlpha;
         marks(R).forEach(([x, y]) => {
             hudCtx.beginPath();
             hudCtx.moveTo(x - crossSz, y); hudCtx.lineTo(x + crossSz, y);
             hudCtx.moveTo(x, y - crossSz); hudCtx.lineTo(x, y + crossSz);
             hudCtx.stroke();
         });
+        hudCtx.globalAlpha = 1;
     }
 
     // ------------------------------------------
