@@ -33,7 +33,7 @@
         uniform vec4 uShape;    // форма: 0 — кольцо, 1 — сфера; клубление сферы (вихрь Хилла); перерождение частиц (0/1); разгон закрутки, с (0 — только до захвата)
         uniform vec4 uExtra;    // посадка по спирали (0/1), -, -, -
         uniform vec4 uDisk;     // диск (координаты кольца): внутренний радиус, внешний, полутолщина, скорость вращения
-        uniform vec4 uDisk2;    // диск: притяжение по радиусу, по высоте, показатель (скорость ~ r^p), -
+        uniform vec4 uDisk2;    // диск: притяжение по радиусу, по высоте, показатель (скорость ~ r^p), уровни (0 — диск, 1 — каждая на своей высоте)
         uniform vec4 uMove;     // движение кольца: скорость центра по высоте, скорость «дыхания» (dR/dt / R), закрутка до захвата, вращение кольца (рад/с)
         ${DP.morph.glsl.simplexNoise}
         float dpHash(float n) { return fract(sin(n * 127.1 + 311.7) * 43758.5453); }
@@ -92,7 +92,8 @@
         }
         // Диск (координаты кольца): вихрь как чай в чашке — всё вращается вокруг оси (внутри быстрее),
         // частицы стягиваются в толстое кольцо-диск с пустой серединой на уровне экватора. Без водоворотов.
-        vec3 diskFlow(vec3 p, float seed) {
+        // lvl — «свой уровень» пары (координаты кольца): между местом в старой и в новой фигуре.
+        vec3 diskFlow(vec3 p, float seed, vec3 lvl) {
             vec3 up = vec3(0.0, 1.0, 0.0);
             float r = length(p.xz);
             vec3 e = normalize(vec3(p.x, 0.0, p.z) + vec3(1e-5, 0.0, 0.0));
@@ -104,6 +105,11 @@
             float rT = mix(uDisk.x, uDisk.y, ur);
             // Сечение — линза: толще всего в середине кольца, к краям сходит на нет (бублик, галактика).
             float yT = (dpHash(seed * 9.17 + 2.3) * 2.0 - 1.0) * uDisk.z * pow(sin(3.14159265 * ur), 0.8);
+            // Уровни: частица крутится на своей высоте (верх — в верх, низ — в низ), радиус — свой, но не ближе
+            // к оси, чем пустая середина.
+            float lr = max(length(lvl.xz), uDisk.x * (0.7 + 0.3 * ur));
+            yT = mix(yT, lvl.y, uDisk2.w);
+            rT = mix(rT, lr, uDisk2.w);
             v += e * (rT - r) * uDisk2.x;
             v.y += (yT - p.y) * uDisk2.y;
             return v;
@@ -139,7 +145,7 @@
             // Вращение кольца вокруг оси (вихрь): всё кольцо крутится, быстрее всего на экваторе сферы.
             v += cross(vec3(0.0, 1.0, 0.0), vec3(p.x - uCenter.x, 0.0, p.z - uCenter.z)) * uMove.w * cap * (1.0 - land);
             vec3 q = toRing(p);
-            vec3 vr = (uShape.x > 1.5 ? diskFlow(q, seed) : uShape.x > 0.5 ? sphereFlow(q, t, uTimes.w) : ringFlow(q, t, uTimes.w)) * uNoise2.w;
+            vec3 vr = (uShape.x > 1.5 ? diskFlow(q, seed, toRing(mix(A.xyz, B.xyz, smoothstep(0.0, 1.0, since / max(T - L, 1e-3))))) : uShape.x > 0.5 ? sphereFlow(q, t, uTimes.w) : ringFlow(q, t, uTimes.w)) * uNoise2.w;
             // Улетающие: часть частиц отрывается от кольца и уходит вверх, рассеиваясь.
             float esc = step(dpHash(seed * 7.3 + 1.1), uNoise2.y) * uNoise2.z * (age > 0.0 ? smoothstep(0.2, 1.0, age / life) : 0.0);
             vr.y += esc;
@@ -284,7 +290,7 @@
             u.uExtra.value.set(tm0.spiral ? 1 : 0, 0, 0, 0);
             if (tm0.escape != null) u.uNoise2.value.y = tm0.escape;
             if (tm0.speed != null) u.uNoise2.value.w = tm0.speed;
-            if (tm0.disk) { const d = tm0.disk; u.uDisk.value.set(d[0] * LAB_R, LAB_R, d[1] * LAB_R, d[2]); u.uDisk2.value.set(d[3], d[4], d[5], 0); }
+            if (tm0.disk) { const d = tm0.disk; u.uDisk.value.set(d[0] * LAB_R, LAB_R, d[1] * LAB_R, d[2]); u.uDisk2.value.set(d[3], d[4], d[5], d[6] || 0); }
             u.uNoise2.value.set(f.noiseSpeed, f.escape, f.lift, f.speed);
             u.uLife.value.set(f.lifeMin, Math.max(f.lifeMin + 0.01, f.lifeMax), f.fadeIn, f.tilt);
             const tm = this.timing || f;

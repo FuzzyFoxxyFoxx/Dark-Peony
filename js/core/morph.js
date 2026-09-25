@@ -1317,7 +1317,7 @@
             { capture: f.capture, land: f.land, gravity: f.gravity, pull: 0, twist: f.twist, shape: 2, roll: 0,
               respawn: 0, twistRamp: 0, spiral: 1, escape: 0, speed: 1,
               eddy: [0, 1, 0, 1, 0],
-              disk: [f.diskIn, f.thick, f.spin, f.pullR, f.pullY, f.spinPow] });
+              disk: [f.diskIn, f.thick, f.spin, f.pullR, f.pullY, f.spinPow, f.levels] });
         DP.smokeSim.setShadow(0, center, R);
         shared.uSwirlA.value.set(f.flightSize, c.swirlSizeMin, f.flightAlpha, c.swirlVisible);
         shared.uSwirlB.value.set(c.leaveGlow, c.swirlBlend, c.swirlTint, f.flightLook);
