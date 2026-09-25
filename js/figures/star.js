@@ -526,11 +526,17 @@
         uniform vec4 uPlanet;            // x — фаза, y — угловая скорость, z — тел на орбите,
                                          // w > 0 — след экспонентой (больше — короче); w < 0 — след длиной −w рад, плавно гаснет
         uniform float uBodyAng;          // угловой радиус тела на орбите: внутри тела орбиту не видно
+        uniform vec4 uParent;            // орбита спутника едет вместе с планетой: орбита планеты (R, наклон, узел, фаза)
+        uniform float uParentOmega;      // скорость планеты; < 0 — орбита неподвижна
         attribute float aAng;
         varying float vA;
+        ${orbitGlsl}
         void main() {
             vec3 dpRest = position;
-            vec4 mv = viewMatrix * dpMorph(dpRest, position);
+            vec3 pos = position;
+            if (uParentOmega >= 0.0) pos += dpOrbitPos(uParent.x, uParent.y, uParent.z, uParent.w + uParentOmega * uTime)
+                                          - dpOrbitPos(uParent.x, uParent.y, uParent.z, uParent.w);
+            vec4 mv = viewMatrix * dpMorph(dpRest, pos);
             gl_Position = projectionMatrix * mv;
             float dist = max(-mv.z, 0.1);
             ${depthVert}
@@ -929,6 +935,12 @@
                 const M = O.moon, m = orbitPos(M.R, M.incl, M.node, M.phase);
                 makeBody(M.r, 'plain', 11.1, [c[0] + m[0], c[1] + m[1], c[2] + m[2]],
                     { R: M.R, incl: M.incl, node: M.node, phase: M.phase, omega: M.omega, spin: 0.1 }, O);
+                // орбита спутника — как у планет, вокруг планеты (в покое — у её положения при t = 0)
+                const mo = makeOrbitGeo({ R: M.R, incl: M.incl, node: M.node, phase: M.phase, omega: M.omega, planet: { r: M.r } }, 40 + oi);
+                const mp = mo.geo.attributes.position;
+                for (let i = 0; i < mp.count; i++) mp.setXYZ(i, mp.getX(i) + c[0], mp.getY(i) + c[1], mp.getZ(i) + c[2]);
+                mo.planet = oi + 1; mo.parent = O;
+                orbits.push(mo);
             }
             for (let k = from; k < bodies.length; k++) bodies[k].planet = oi + 1;    // планета и её спутник
         });
@@ -1003,7 +1015,9 @@
         const rays = pts(rayVertex, rayFragment, { uSize: { value: 1.6 } });
         const loops = pts(loopVertex, loopFragment, { uSize: { value: 2.0 } });
         const orbits = data.orbits.map(o => pts(orbitVertex, orbitFragment, { uSize: { value: 2.0 }, uPlanet: { value: new THREE.Vector4(o.O.phase, o.O.omega, o.O.n || 1, o.atom ? -Math.PI * 4 / 3 : 1.6) },
-                              uBodyAng: { value: (o.atom ? o.O.r * 1.25 : o.O.planet.r) / o.O.R } }));   // −4π/3: след у астероидов на 240°
+                              uBodyAng: { value: (o.atom ? o.O.r * 1.25 : o.O.planet.r) / o.O.R },
+                              uParent: { value: o.parent ? new THREE.Vector4(o.parent.R, o.parent.incl, o.parent.node, o.parent.phase) : new THREE.Vector4() },
+                              uParentOmega: { value: o.parent ? o.parent.omega : -1 } }));   // −4π/3: след у астероидов на 240°
         const bodyUniforms = (b) => ({
             uOrbit: { value: new THREE.Vector4(b.orbit.R, b.orbit.incl, b.orbit.node, b.orbit.phase) },
             uOrbit2: { value: new THREE.Vector4(b.orbit.omega, b.orbit.spin, 0, 0) },
