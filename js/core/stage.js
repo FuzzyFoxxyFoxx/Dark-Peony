@@ -85,11 +85,18 @@
         const positions = new Float32Array(count * 3);
         const scales = new Float32Array(count), phases = new Float32Array(count);
         for (let i = 0; i < count; i++) {
-            const u = seededRandom(i * 1.5) * Math.PI * 2;
-            const r = Math.pow(seededRandom(i * 2.3), 0.6) * 4.2;
-            positions[i * 3 + 0] = Math.cos(u) * r * 2.4;
-            positions[i * 3 + 1] = (seededRandom(i * 3.7) - 0.5) * bg.starSpreadY;
-            positions[i * 3 + 2] = Math.sin(u) * r * 0.35 + (seededRandom(i * 4.9) - 0.5) * 0.5;
+            if (seededRandom(i * 8.3 + 0.5) < bg.halo) {
+                // россыпь по всему фону: и сверху, и снизу от приплюснутого диска
+                positions[i * 3 + 0] = (seededRandom(i * 1.5) - 0.5) * 18;
+                positions[i * 3 + 1] = (seededRandom(i * 3.7) - 0.5) * 10;
+                positions[i * 3 + 2] = (seededRandom(i * 4.9) - 0.5) * 3;
+            } else {
+                const u = seededRandom(i * 1.5) * Math.PI * 2;
+                const r = Math.pow(seededRandom(i * 2.3), 0.6) * 4.2;
+                positions[i * 3 + 0] = Math.cos(u) * r * 2.4;
+                positions[i * 3 + 1] = (seededRandom(i * 3.7) - 0.5) * bg.starSpreadY;
+                positions[i * 3 + 2] = Math.sin(u) * r * 0.35 + (seededRandom(i * 4.9) - 0.5) * 0.5;
+            }
             scales[i] = seededRandom(i * 4.1);
             phases[i] = seededRandom(i * 7.3) * 6.2831853;
         }
@@ -209,11 +216,11 @@
     };
 
     // ------------------------------------------
-    // 2D HUD: две «весики» — малая (крестики) и большая (звёздочки)
+    // 2D HUD: две «весики» — малая (с крестиками) и большая
     // ------------------------------------------
     // Малая: круг R в центре и два круга R с центрами сверху и снизу — проходят через центр; на пересечениях —
-    // крестики. Большая — то же с радиусом R2 (выходит за экран); на пересечениях — четырёхлучевые звёздочки.
-    // Все линии одной толщины; крестики и звёздочки масштабируются вместе с кругами.
+    // крестики. Большая — то же с радиусом R2 (выходит за экран), без знаков на пересечениях.
+    // Все линии одной толщины; крестики масштабируются вместе с кругами (размер — доля R).
     const hudCanvas = document.getElementById('hudCanvas');
     const hudCtx = hudCanvas.getContext('2d');
 
@@ -260,23 +267,6 @@
             hudCtx.moveTo(x - crossSz, y); hudCtx.lineTo(x + crossSz, y);
             hudCtx.moveTo(x, y - crossSz); hudCtx.lineTo(x, y + crossSz);
             hudCtx.stroke();
-        });
-        const starSz = R * H.starK;
-        marks(R2).forEach(([x, y]) => {
-            if (x < -starSz || x > w + starSz || y < -starSz || y > h + starSz) return;
-            const g = hudCtx.createRadialGradient(x, y, 0, x, y, starSz * 2.2);
-            g.addColorStop(0, 'rgba(180, 220, 255, 0.35)'); g.addColorStop(1, 'rgba(180, 220, 255, 0)');
-            hudCtx.fillStyle = g; hudCtx.beginPath(); hudCtx.arc(x, y, starSz * 2.2, 0, Math.PI * 2); hudCtx.fill();
-            // четырёхлучевая звёздочка: лучи — вогнутые дуги
-            const a = starSz, b = starSz * 0.16;
-            hudCtx.fillStyle = H.starColor;
-            hudCtx.beginPath();
-            hudCtx.moveTo(x, y - a);
-            hudCtx.quadraticCurveTo(x + b, y - b, x + a, y);
-            hudCtx.quadraticCurveTo(x + b, y + b, x, y + a);
-            hudCtx.quadraticCurveTo(x - b, y + b, x - a, y);
-            hudCtx.quadraticCurveTo(x - b, y - b, x, y - a);
-            hudCtx.fill();
         });
     }
 
