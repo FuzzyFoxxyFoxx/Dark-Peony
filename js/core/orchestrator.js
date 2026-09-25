@@ -43,7 +43,18 @@
     let queued = null;      // { name, resolve }
     let pointsMode = true;
 
+    // Запас экземпляров: ушедшая фигура не уничтожается, а откладывается и потом переиспользуется —
+    // без удаления и пересборки шейдеров (иначе в начале и в конце морфинга проскакивали длинные кадры).
+    const pool = {};
     function instantiate(name) {
+        const pooled = pool[name];
+        if (pooled) {
+            delete pool[name];
+            const u = pooled.uniforms;
+            u.uMorphActive.value = 0; u.uMorphRole.value = 0; u.uMorphTime.value = 0;
+            DP.stage.figureStage.add(pooled.instance.root);
+            return pooled;
+        }
         const def = registry[name];
         if (!def) throw new Error(`DP: фигура «${name}» не зарегистрирована`);
         const uniforms = DP.morph.createInstanceUniforms();
@@ -63,7 +74,11 @@
 
     function release(entry) {
         DP.stage.figureStage.remove(entry.instance.root);
-        if (entry.instance.dispose) entry.instance.dispose();
+        entry.instance.root.visible = true;
+        entry.uniforms.uMorphActive.value = 0;
+        const old = pool[entry.name];
+        pool[entry.name] = entry;
+        if (old && old !== entry && old.instance.dispose) old.instance.dispose();   // лишний экземпляр той же фигуры
     }
 
     function applyVisibility() {
@@ -122,7 +137,7 @@
     // Заранее (в фоне) подготовить морфинг в следующую по кругу фигуру: тяжёлая сортировка точек
     // считается фоновым потоком, пока фигура спокойно вращается, — старт морфинга без замирания.
     let prewarmTimer = null;
-    function prewarmNext() {
+    function schedulePrewarm(delay) {
         clearTimeout(prewarmTimer);
         prewarmTimer = setTimeout(() => {
             if (!current || morph || !DP.morph.prewarm) return;
@@ -135,10 +150,11 @@
                 DP.morph.prewarm(current.instance.layout, layout);
                 if (DP.morph.planAhead) DP.morph.planAhead(current.instance.layout, layout);
             } catch (e) { console.warn('DP.prewarm:', e); }
-        }, 400);
+        }, delay);
     }
-    events.on('show', prewarmNext);
-    events.on('morphend', prewarmNext);
+    // Подготовка идёт только в простое между кадрами (DP.morph.planAhead) — движению фигуры не мешает.
+    events.on('show', () => schedulePrewarm(400));
+    events.on('morphend', () => schedulePrewarm(300));
 
     DP.orchestrator = {
         on: events.on.bind(events),
@@ -173,7 +189,14 @@
                 morph.from.uniforms.uMorphTime.value = morph.time;
                 morph.to.uniforms.uMorphTime.value = morph.time;
                 if (DP.flowSim) DP.flowSim.step(morph.time);
-                if (DP.smokeSim) DP.smokeSim.step(morph.time);
+                // Нагрузка снижается постепенно: старая фигура отдала все частицы — её больше не рисуем;
+                // последняя частица села — симуляция и тени больше не нужны (в режиме точек).
+                const ph = DP.morph.phases;
+                if (ph && pointsMode) {
+                    if (morph.time > ph.hideFrom && morph.from.instance.root.visible) morph.from.instance.root.visible = false;
+                    if (morph.time > ph.simEnd && DP.smokeSim && !morph.simStopped) { morph.simStopped = true; DP.smokeSim.pause(); }
+                }
+                if (DP.smokeSim && !morph.simStopped) DP.smokeSim.step(morph.time);
                 const tw = DP.morph.tiltWindow || [0.15, 0.75];   // «кольцо-кисть»: наклон меняется медленно, весь переход
                 const k = DP.util.smoothstep(tw[0], tw[1], morph.time / morph.duration);
                 setTilt(morph.tilt0 + (morph.to.tilt - morph.tilt0) * k);

@@ -697,6 +697,7 @@
         const c = DP.config.morph;
         shared.uSmokeA.value.x = 0;
         shared.uShadowInfo.value.x = 0;
+        DP.morph.phases = null;
         DP.morph.tiltWindow = (c.mode === 'sweep' || c.mode === 'sphere' || c.mode === 'disk') ? [0, 1] : [0.15, 0.75];
         const smokeOk = DP.smokeSim && DP.smokeSim.supported();
         if (c.mode === 'disk' && smokeOk) return planDisk(A, B);
@@ -1355,10 +1356,10 @@
         const by0 = bB.y0, bdy = Math.max(bB.y1 - bB.y0, 1e-3);
         const usedA = new Uint8Array(A.total), usedB = new Uint8Array(B.total);
         const aParts = A.parts, bParts = B.parts, aOf = A.partOf, bOf = B.partOf;
-        let end = 0, kk = 0, lastYield = 0;
+        let end = 0, kk = 0, lastYield = 0, hand = 0;
         for (let q = 0; q < S * NBd; q++) {
             const nA = CA.cnt[q], nB = CB.cnt[q], n = Math.max(nA, nB);
-            if (kk - lastYield > 150000) { lastYield = kk; yield; }
+            if (kk - lastYield > 40000) { lastYield = kk; yield; }
             for (let k = 0; k < n; k++, kk++) {
                 const j = kk * 4;
                 const ia = nA ? CA.sorted[CA.start[q] + Math.floor(k * nA / n)] : -1;
@@ -1379,6 +1380,7 @@
                 let Lq = Math.round(L * 100); Lq = Lq < 0 ? 0 : Lq > 2047 ? 2047 : Lq;
                 let Dq = Math.round(D * 100); Dq = Dq < 5 ? 5 : Dq > 2047 ? 2047 : Dq;
                 if ((Lq + Dq) * 0.01 > end) end = (Lq + Dq) * 0.01;
+                if (Lq * 0.01 + Dq * 0.005 > hand) hand = Lq * 0.01 + Dq * 0.005;   // последняя передача эстафеты A → B
                 const packed = Lq * 2048 + Dq;
                 if (firstA) {
                     const pa = aParts[aOf[ia]], la = ia - pa.start, o = pa.outAttr.array, m = la * 4;
@@ -1405,12 +1407,15 @@
             }
         }
         dB.fill(0, kk * 4);   // хвост текстуры — пустые пиксели
-        return { A, B, bb, R, center, side, dA, dB, dS, end };
+        return { A, B, bb, R, center, side, dA, dB, dS, end, hand };
     }
 
     // Применить готовую подготовку: выгрузить атрибуты и данные пар, выставить uniform'ы. Возвращает длительность.
     function applyDisk(r) {
-        const c = DP.config.morph, f = c.disk, { A, B, bb, R, center, side, dA, dB, dS, end } = r;
+        const c = DP.config.morph, f = c.disk, { A, B, bb, R, center, side, dA, dB, dS, end, hand } = r;
+        // Когда старую фигуру можно больше не рисовать и когда можно остановить симуляцию (в режиме точек):
+        // нагрузка снижается постепенно, а не обрывается в конце морфинга.
+        DP.morph.phases = { hideFrom: hand + 0.05, simEnd: end + 0.05 };
         const arriveStart = 0.05 + f.leaveSpread + f.hold;
         syncConfig();
         shared.uFountA.value.x = 0;
@@ -1461,19 +1466,25 @@
         if (ahead && ahead.A === A && ahead.B === B && ahead.key === key) return;
         const job = ahead = { A, B, key, gen: null, result: null };
         const bb = bounds([A, B]), ck = cellsKey(c.disk.sectors, c.disk.bands, bb);
-        const tick = () => {
+        // Только в простое между кадрами и маленькими кусками — кадры идут ровно даже на экранах 120 Гц.
+        const idle = (fn) => window.requestIdleCallback ? requestIdleCallback(fn, { timeout: 250 })
+            : setTimeout(() => fn({ timeRemaining: () => 3, didTimeout: false }), 20);
+        const budgetOf = (dl) => Math.max(1, Math.min(3, dl.timeRemaining() - 1));
+        let upload = null;
+        const tick = (dl) => {
             if (ahead !== job) return;                                    // отменено (морфинг начался или новая подготовка)
             if (!(A._cells && A._cells[ck]) || !(B._cells && B._cells[ck])) {   // ждём сортировку из фонового потока
                 if (!(A._pending && A._pending[ck]) && !(B._pending && B._pending[ck])) prewarm(A, B);
-                return setTimeout(tick, 50);
+                return setTimeout(() => idle(tick), 50);
             }
+            const t0 = performance.now(), budget = budgetOf(dl);
             if (!job.gen) job.gen = buildDisk(A, B, c.disk);
-            const t0 = performance.now();
-            while (!job.result && performance.now() - t0 < 6) { const st = job.gen.next(); if (st.done) job.result = st.value; }
-            if (!job.result) setTimeout(tick, 16);
-            else DP.smokeSim.stage(job.result.side, job.result.dA, job.result.dB, job.result.dS);   // текстуры — в видеокарту заранее
+            while (!job.result && performance.now() - t0 < budget) { const st = job.gen.next(); if (st.done) job.result = st.value; }
+            if (job.result && !upload) upload = DP.smokeSim.stageJob(job.result.side, job.result.dA, job.result.dB, job.result.dS);
+            if (upload && performance.now() - t0 < budget) { if (upload.step(budget - (performance.now() - t0))) return; }   // всё готово
+            idle(tick);
         };
-        setTimeout(tick, 0);
+        idle(tick);
     }
 
     DP.morph = {
