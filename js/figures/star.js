@@ -57,8 +57,9 @@
 
     // Какие части показывать (доводим по частям, как медузу; '' — все). ?parts= в адресе важнее.
     // star — светило (дымная сфера), veins — прежние прожилки, core — ядро, corona — лучи, loops — протуберанцы,
-    // orbits — орбиты планет, planets — планеты и спутник, atoms — астероиды на орбитах вокруг светила (как электроны).
-    const DEFAULT_PARTS = 'star,atoms'; // светило (утверждено автором) + «атом»: астероиды на орбитах вокруг него
+    // orbits — орбиты планет, planets — планеты и спутник, atoms — астероиды на орбитах вокруг светила (как электроны);
+    // planetN — N-я планета целиком: её орбита, она сама, её спутник и кольцо.
+    const DEFAULT_PARTS = 'star,atoms,planet1'; // светило + «атом» (утверждены) + планеты по одной (planet1…planet4)
 
     // Дымная сфера (метод Квана, как дымное кольцо в lab/smoke.html): частицы на видеокарте, их несут
     // водовороты двух масштабов (∇n1 × ∇n2 — поле без стоков), мягкая пружина держит частицы в оболочке
@@ -877,7 +878,7 @@
             geo.setAttribute('aAng', new THREE.BufferAttribute(ang, 1));
             return { geo, O };
         };
-        const orbits = ORBITS.map((O, oi) => makeOrbitGeo(O, oi));
+        const orbits = ORBITS.map((O, oi) => Object.assign(makeOrbitGeo(O, oi), { planet: oi + 1 }));
         ATOMS.forEach((O, k) => {
             const o = makeOrbitGeo(O, 10 + k);
             o.atom = true;
@@ -920,14 +921,16 @@
             const meshGeo = new THREE.SphereGeometry(r, 32, 24);
             bodies.push({ geo, meshGeo, r, orbit, parent, center });
         };
-        ORBITS.forEach((O) => {
+        ORBITS.forEach((O, oi) => {
             const c = orbitPos(O.R, O.incl, O.node, O.phase);
+            const from = bodies.length;
             makeBody(O.planet.r, O.planet.tex, O.planet.seed, c, { R: O.R, incl: O.incl, node: O.node, phase: O.phase, omega: O.omega, spin: O.planet.spin }, null, O.planet.ring);
             if (O.moon) {
                 const M = O.moon, m = orbitPos(M.R, M.incl, M.node, M.phase);
                 makeBody(M.r, 'plain', 11.1, [c[0] + m[0], c[1] + m[1], c[2] + m[2]],
                     { R: M.R, incl: M.incl, node: M.node, phase: M.phase, omega: M.omega, spin: 0.1 }, O);
             }
+            for (let k = from; k < bodies.length; k++) bodies[k].planet = oi + 1;    // планета и её спутник
         });
 
         ATOMS.forEach((O, k) => {
@@ -1162,9 +1165,9 @@
             if (show('core')) pointsRoot.add(new THREE.Points(data.coreGeo, mats.core));
             if (show('corona')) pointsRoot.add(new THREE.Points(data.rayGeo, mats.rays));
             if (show('loops')) pointsRoot.add(new THREE.Points(data.loopGeo, mats.loops));
-            data.orbits.forEach((o, i) => { if (show(o.atom ? 'atoms' : 'orbits')) pointsRoot.add(new THREE.Points(o.geo, mats.orbits[i])); });
+            data.orbits.forEach((o, i) => { if (o.atom ? show('atoms') : (show('orbits') || show('planet' + o.planet))) pointsRoot.add(new THREE.Points(o.geo, mats.orbits[i])); });
             data.bodies.forEach((b, i) => {
-                if (!show(b.atom ? 'atoms' : 'planets')) return;
+                if (b.atom ? !show('atoms') : !(show('planets') || show('planet' + b.planet))) return;
                 meshRoot.add(new THREE.Mesh(b.meshGeo, mats.bodyMeshes[i]));
                 pointsRoot.add(new THREE.Points(b.geo, mats.bodies[i]));
             });
