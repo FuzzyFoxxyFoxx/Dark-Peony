@@ -55,22 +55,39 @@
     // водовороты двух масштабов (∇n1 × ∇n2 — поле без стоков), мягкая пружина держит частицы в оболочке
     // радиуса светила; жизнь частицы — появление, угасание, рост (как в Particular). Ползунки — панель ?tune.
     DP.config.starSmoke = Object.assign({
-        speed: 1.0,        // скорость течения
+        speed: 0.43,       // скорость течения (значения — подобраны автором)
         noiseAmp: 0.25,    // крупное завихрение вдоль сферы: сила
         noiseScale: 1.2,   // крупное: частота (больше — мельче)
         detailAmp: 0.06,   // мелкое завихрение: сила
-        detailScale: 5.0,
+        detailScale: 2.8,
         gather: 0.1,       // объёмные водовороты: сгущают нити в пряди (много — слипается в комки)
         noiseSpeed: 0.35,  // изменчивость водоворотов во времени
         spring: 4.0,       // сила, возвращающая частицу к радиусу оболочки
-        radial: 0.5,       // свобода по радиусу для объёмных водоворотов (завитки за край)
-        spin: 0.08,        // вращение всей сферы, рад/с
-        lifeMin: 1.5, lifeMax: 4.0,
-        fadeIn: 0.15, fadeOut: 0.45,
-        grow: 1.6,         // во сколько раз частица крупнее к концу жизни
-        size: 2.2,
-        alpha: 0.2
+        radial: 0.87,      // свобода по радиусу для объёмных водоворотов (завитки за край)
+        spin: 1.0,         // вращение потока вокруг оси Y (как у сферы целиком)
+        fieldSpin: 0.25,   // узор водоворотов плывёт вокруг оси Y, рад/с (частицы при этом не обязаны вращаться)
+        emitShare: 0.35,   // доля частиц, рождённых у эмиттеров, которые ездят по сфере вокруг Y
+        emitSpin: 0.6,     // скорость эмиттеров, рад/с
+        emitDrag: 0.5,     // эмиттер увлекает поток за собой (шлейфы)
+        emitSize: 0.28,    // размер зоны эмиттера (доля радиуса)
+        flare: 0.2,        // доля частиц-всполохов: рождаются в узких источниках-языках и уходят наружу
+        flareLift: 1.3,    // скорость ухода всполохов
+        flareZone: 0.12,   // ширина языка у основания (доля радиуса)
+        flareAlpha: 2.0,   // яркость всполохов относительно дыма
+        lifeMin: 1.1, lifeMax: 2.9,
+        fadeIn: 0.61, fadeOut: 0.45,
+        grow: 1.75,        // во сколько раз частица крупнее к концу жизни
+        size: 1.6,
+        alpha: 0.33
     }, DP.config.starSmoke || {});
+    // Ядро: сфера точек внутри дымной оболочки, без флуктуаций; точки мигают по очень крупному шуму
+    // (размер от нуля до полного).
+    DP.config.starCore = Object.assign({
+        radius: 0.62,      // доля радиуса дымной оболочки
+        size: 2.8, alpha: 1.1,
+        noiseScale: 1.1,   // масштаб шума мигания (меньше — крупнее пятна)
+        speed: 0.3         // скорость мигания
+    }, DP.config.starCore || {});
 
     const ORDER_NOISE = 0.25;
     const ORDER_CURVE = 0.6;
@@ -174,6 +191,43 @@
         }
     `;
 
+    // Ядро-сфера: точки рядками внутри дымной оболочки, без флуктуаций; мигают по очень крупному шуму —
+    // размер от нуля до полного. uCore: x — радиус (доля R), y — размер, z — масштаб шума, w — скорость.
+    const coreSphereVertex = (G) => `
+        ${commonPars}
+        ${G.pointsVertex}
+        uniform float uViewportScale;
+        uniform vec4 uCore;
+        attribute float aSizeScale;
+        varying float vFresnel;
+        void main() {
+            vec3 dpRest = position;
+            vec3 n = normalize(position);
+            vec3 pos = n * uStarR * uCore.x;
+            float tw = dpSnoise(n * uCore.z + vec3(uTime * uCore.w, -uTime * uCore.w * 0.7, uTime * uCore.w * 0.4));
+            float sz = smoothstep(-0.15, 0.4, tw);
+            vec4 mv = viewMatrix * dpMorph(dpRest, pos);
+            gl_Position = projectionMatrix * mv;
+            float dist = max(-mv.z, 0.1);
+            ${depthVert}
+            vFresnel = pow(clamp(1.0 - abs(dot(normalize(normalMatrix * n), normalize(-mv.xyz))), 0.0, 1.0), 1.5);
+            gl_PointSize = uCore.y * uViewportScale * (0.7 + 0.5 * aSizeScale) * sz / (0.35 + 0.06 * dist);
+            dpMorphFinish();
+        }
+    `;
+    const coreSphereFragment = (G) => `
+        ${G.pointsFragment}
+        uniform sampler2D uTexture;
+        uniform float uCoreAlpha;
+        varying float vFresnel, vDepthK;
+        void main() {
+            vec4 tex = texture2D(uTexture, gl_PointCoord);
+            if (tex.a < 0.01) discard;
+            vec3 c = mix(vec3(0.7, 0.85, 1.0), vec3(0.95, 0.98, 1.0), vFresnel);
+            gl_FragColor = dpMorphColor(c, tex.a * uCoreAlpha * (0.6 + 0.4 * vFresnel) * vDepthK, tex.a);
+        }
+    `;
+
     // Ядро: светлая сердцевина — частицы в объёме, гуще к центру, мерцают.
     const coreVertex = (G) => `
         ${commonPars}
@@ -260,20 +314,55 @@
             return cross(g1, g2);
         }
         float h(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
-        vec3 flow(vec3 p, float t) {
+        uniform vec4 uEmit;    // доля у эмиттеров, скорость эмиттеров, увлечение, размер зоны
+        uniform vec4 uFlare;   // доля всполохов, скорость ухода, порог зон, вращение узора
+        vec3 rotY(vec3 p, float a) { float c = cos(a), s = sin(a); return vec3(p.x * c + p.z * s, p.y, -p.x * s + p.z * c); }
+        // Эмиттер k: едет по сфере вокруг Y на своей широте, со своей скоростью.
+        vec3 emitter(float k, float t, out float om) {
+            float y = (fract(sin(k * 12.9898 + 1.3) * 43758.5453) - 0.5) * 1.5;
+            om = uEmit.y * (0.7 + 0.6 * fract(sin(k * 78.233 + 2.1) * 12345.678)) * (mod(k, 3.0) < 0.5 ? -0.6 : 1.0);
+            float a = fract(sin(k * 39.425) * 24634.634) * 6.2831853 + om * t;
+            float s = sqrt(1.0 - y * y);
+            return vec3(s * cos(a), y, s * sin(a)) * uR;
+        }
+        // Источник всполохов j: узкое место на поверхности, медленно дрейфует; сила пульсирует (язык то бьёт, то гаснет).
+        vec3 flareSrc(float j, float t, out float pulse) {
+            float y = (fract(sin(j * 91.7 + 4.3) * 43758.5453) - 0.5) * 1.6;
+            float a = fract(sin(j * 27.1 + 0.7) * 24634.634) * 6.2831853 + t * 0.12 * (fract(sin(j * 5.3) * 999.1) - 0.5);
+            float s = sqrt(1.0 - y * y);
+            pulse = 0.5 + 0.5 * sin(t * (0.9 + 0.8 * fract(sin(j * 3.7) * 777.7)) + j * 2.3);
+            return vec3(s * cos(a), y, s * sin(a));
+        }
+        vec3 flow(vec3 p, float t, float flare, float kLife) {
             float ts = t * uShell.w;
             float r = max(length(p), 1e-4);
             vec3 n = p / r;
+            if (flare > 0.5) {
+                // всполох: уходит наружу с ускорением; плавное покачивание растёт к концу языка — он извивается и рвётся
+                vec3 w = eddy(p * 1.1 + vec3(3.3, 1.1, -4.4), t * 0.45);
+                return n * uFlare.y * (0.35 + 1.2 * kLife) + w * 0.35 * (0.15 + kLife)
+                     + cross(vec3(0.0, 1.0, 0.0), p) * uShell.z * 0.5;
+            }
+            // Узор водоворотов плывёт вокруг Y: поле считаем в повёрнутой системе и возвращаем обратно.
+            float fa = -uFlare.w * t;
+            vec3 q = rotY(p, fa), nq = rotY(n, fa);
             // Завихрение вдоль сферы: n × ∇ψ — на сфере без стоков, дым не слипается в комки, а тянется в нити.
-            vec3 g1 = dpSnoiseGrad(p * uNoise.y + vec3(0.0, -ts, 0.0)).xyz;
-            vec3 g2 = dpSnoiseGrad(p * uNoise.w + vec3(17.0, 3.0 + ts * 1.7, -9.0)).xyz;
-            vec3 v = uNoise.x * cross(n, g1) + uNoise.z * cross(n, g2);
+            vec3 g1 = dpSnoiseGrad(q * uNoise.y + vec3(0.0, -ts, 0.0)).xyz;
+            vec3 g2 = dpSnoiseGrad(q * uNoise.w + vec3(17.0, 3.0 + ts * 1.7, -9.0)).xyz;
+            vec3 v = uNoise.x * cross(nq, g1) + uNoise.z * cross(nq, g2);
             // Немного объёмных водоворотов: сгущают нити в пряди и выбивают завитки за край (свобода по радиусу).
-            vec3 e = eddy(p * uNoise.y * 1.3 + vec3(5.1, -2.7, 8.3), ts * 1.3);
-            e -= n * dot(e, n) * (1.0 - uShell.y);
+            vec3 e = eddy(q * uNoise.y * 1.3 + vec3(5.1, -2.7, 8.3), ts * 1.3);
+            e -= nq * dot(e, nq) * (1.0 - uShell.y);
             v += uGather * e;
-            v += n * (uR - r) * uShell.x;                          // пружина к радиусу оболочки
-            v += cross(vec3(0.0, 1.0, 0.0), p) * uShell.z;         // вращение сферы
+            v = rotY(v, -fa);
+            // Эмиттеры увлекают поток за собой — тянутся шлейфы.
+            for (int k = 0; k < 6; k++) {
+                float om; vec3 E = emitter(float(k), t, om);
+                vec3 d = p - E;
+                v += cross(vec3(0.0, 1.0, 0.0), E) * om * uEmit.z * exp(-dot(d, d) / (uEmit.w * uEmit.w * uR * uR));
+            }
+            v += n * (uR - r) * uShell.x;                                // пружина к радиусу оболочки
+            v += cross(vec3(0.0, 1.0, 0.0), p) * uShell.z;               // вращение потока вокруг Y
             return v;
         }
         void main() {
@@ -281,21 +370,35 @@
             vec4 P = texture2D(uPos, uv);
             vec4 I = texture2D(uInfo, uv);
             float life = mix(uLife.x, uLife.y, I.x);
-            float age = P.w + uDt;
+            float flare = step(100.0, P.w);                 // признак всполоха хранится в возрасте (+100)
+            float age = P.w - 100.0 * flare + uDt;
             vec3 p = P.xyz;
             if (age > life) {
-                // смерть → рождение в случайной точке оболочки
+                // смерть → рождение: часть — у эмиттеров, остальные — в случайной точке оболочки
                 float h1 = h(uv + fract(uTime * 0.137)), h2 = h(uv * 1.7 + fract(uTime * 0.291) + 3.1), h3 = h(uv * 2.3 + fract(uTime * 0.173) + 7.7);
+                float h4 = h(uv * 3.1 + fract(uTime * 0.219) + 1.9), h5 = h(uv * 0.7 + fract(uTime * 0.313) + 5.3);
                 float z = h1 * 2.0 - 1.0, a = h2 * 6.2831853, s = sqrt(1.0 - z * z);
-                p = vec3(s * cos(a), z, s * sin(a)) * uR * (1.0 + (h3 - 0.5) * 0.04);
+                vec3 rn = vec3(s * cos(a), z, s * sin(a));
+                if (h4 < uEmit.x) {
+                    float om; vec3 E = emitter(floor(h5 * 6.0), uTime, om);
+                    rn = normalize(E / uR + rn * uEmit.w * sqrt(h3));
+                }
+                flare = 0.0;
+                float h6 = fract(h5 * 7.13);
+                if (h6 < uFlare.x) {
+                    // всполох рождается в узком источнике (языке), если тот сейчас «бьёт»
+                    float pulse; vec3 F = flareSrc(floor(fract(h4 * 3.71) * 7.0), uTime, pulse);
+                    if (fract(h3 * 5.9) < pulse) { rn = normalize(F + (rn - F * dot(rn, F)) * uFlare.z * sqrt(h1)); flare = 1.0; }
+                }
+                p = rn * uR * (1.0 + (h3 - 0.5) * 0.04);
                 age = 0.0;
             } else {
-                float vd = uDt * uLife.z;
-                vec3 v1 = flow(p, uTime);
-                vec3 v2 = flow(p + v1 * vd * 0.5, uTime + uDt * 0.5);
+                float vd = uDt * uLife.z, kl = age / life;
+                vec3 v1 = flow(p, uTime, flare, kl);
+                vec3 v2 = flow(p + v1 * vd * 0.5, uTime + uDt * 0.5, flare, kl);
                 p += v2 * vd;
             }
-            gl_FragColor = vec4(p, age);
+            gl_FragColor = vec4(p, age + 100.0 * flare);
         }
     `;
     const smokeVertex = (G) => `
@@ -305,14 +408,18 @@
         uniform sampler2D uSmokePos, uSmokeInfo;
         uniform vec4 uSmokeLife;   // жизнь от, до
         uniform vec4 uSmokeLook;   // появление, угасание, рост, размер
+        uniform vec4 uSmokeLook2;  // x — яркость всполохов
         attribute vec2 aRef;
         varying float vA, vK;
         void main() {
             vec3 dpRest = position;
             vec4 P = texture2D(uSmokePos, aRef);
             float life = mix(uSmokeLife.x, uSmokeLife.y, texture2D(uSmokeInfo, aRef).x);
-            float k = clamp(P.w / life, 0.0, 1.0);
+            float fl = step(100.0, P.w);
+            float k = clamp((P.w - 100.0 * fl) / life, 0.0, 1.0);
             vA = smoothstep(0.0, uSmokeLook.x, k) * (1.0 - smoothstep(1.0 - uSmokeLook.y, 1.0, k));
+            // всполох: вспыхивает сразу у поверхности и долго тает, уходя наружу (язык пламени)
+            vA = mix(vA, smoothstep(0.0, 0.06, k) * (1.0 - smoothstep(0.25, 1.0, k)) * uSmokeLook2.x, fl);
             vK = k;
             vec4 mv = viewMatrix * dpMorph(dpRest, P.xyz);
             gl_Position = projectionMatrix * mv;
@@ -647,6 +754,14 @@
         smokeGeo.setAttribute('aRef', new THREE.BufferAttribute(smokeRef, 2));
         const smoke = { N: SN, init: smokeInit, info: smokeInfo };
 
+        // ---------- ЯДРО-СФЕРА ----------
+        const csP = [], csS = [];
+        const coreR = STAR_R * DP.config.starCore.radius;
+        spherePoints(coreR, q, (x, y, z, rs) => { csP.push(x * coreR, y * coreR, z * coreR); csS.push(rs); });
+        const coreSphereGeo = new THREE.BufferGeometry();
+        coreSphereGeo.setAttribute('position', new THREE.Float32BufferAttribute(csP, 3));
+        coreSphereGeo.setAttribute('aSizeScale', new THREE.Float32BufferAttribute(csS, 1));
+
         // ---------- ЯДРО ----------
         const nCore = Math.round(CORE_COUNT * q);
         const cp = new Float32Array(nCore * 3), cs = new Float32Array(nCore);
@@ -772,7 +887,7 @@
 
         const starMesh = new THREE.SphereGeometry(STAR_R, 64, 48);
         const rootMatrix = new THREE.Matrix4().makeTranslation(0, FIG_Y_OFFSET, 0);
-        const data = { smokeGeo, smoke, veinGeo, coreGeo, rayGeo, loopGeo, orbits, bodies, starMesh, rootMatrix };
+        const data = { smokeGeo, smoke, coreSphereGeo, veinGeo, coreGeo, rayGeo, loopGeo, orbits, bodies, starMesh, rootMatrix };
         assignOrderAndLayout(data);
         return data;
     }
@@ -783,7 +898,7 @@
     function assignOrderAndLayout(data) {
         const v = new THREE.Vector3();
         const dist = (x, y, z) => Math.hypot(x, y, z) + ORDER_NOISE * (Math.sin(x * 1.7 + y * 0.9) * Math.sin(z * 1.9 - y * 1.3) + 0.5 * Math.sin(x * 3.1 - z * 2.7 + y * 2.3));
-        const pointGeos = [data.smokeGeo, data.veinGeo, data.coreGeo, data.rayGeo, data.loopGeo].concat(data.orbits.map(o => o.geo), data.bodies.map(b => b.geo));
+        const pointGeos = [data.smokeGeo, data.coreSphereGeo, data.veinGeo, data.coreGeo, data.rayGeo, data.loopGeo].concat(data.orbits.map(o => o.geo), data.bodies.map(b => b.geo));
         const meshGeos = [data.starMesh].concat(data.bodies.map(b => b.meshGeo));
         let dMin = Infinity, dMax = -Infinity;
         pointGeos.forEach(g => { const p = g.attributes.position; for (let i = 0; i < p.count; i++) { const d = dist(p.getX(i), p.getY(i), p.getZ(i)); if (d < dMin) dMin = d; if (d > dMax) dMax = d; } });
@@ -875,6 +990,7 @@
     // ==========================================
     // ДЫМНАЯ СФЕРА: симуляция на видеокарте (своя у каждого экземпляра)
     // ==========================================
+    const coreVec = new THREE.Vector4();
     function createSmokeSim(data) {
         const renderer = DP.stage.renderer, caps = renderer.capabilities, ext = renderer.extensions;
         const vtf = caps.maxVertexTextures > 0;
@@ -892,22 +1008,25 @@
         const targets = [rt(), rt()];
         const simMat = new THREE.ShaderMaterial({
             uniforms: { uPos: { value: data.smoke.initTex }, uInfo: { value: data.smoke.infoTex }, uTime: { value: 0 }, uDt: { value: 0 },
-                        uR: { value: STAR_R }, uGather: { value: 0 }, uNoise: { value: new THREE.Vector4() }, uShell: { value: new THREE.Vector4() }, uLife: { value: new THREE.Vector4() } },
+                        uR: { value: STAR_R }, uGather: { value: 0 }, uEmit: { value: new THREE.Vector4() }, uFlare: { value: new THREE.Vector4() }, uNoise: { value: new THREE.Vector4() }, uShell: { value: new THREE.Vector4() }, uLife: { value: new THREE.Vector4() } },
             vertexShader: 'void main(){ gl_Position = vec4(position.xy, 0.0, 1.0); }',
             fragmentShader: smokeSimFrag(N), depthTest: false, depthWrite: false
         });
         const scene = new THREE.Scene(), cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
         const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), simMat); quad.frustumCulled = false; scene.add(quad);
         let cur = 0, first = true, simTime = 0;
-        const life = { value: new THREE.Vector4() }, look = { value: new THREE.Vector4() }, pos = { value: data.smoke.initTex };
+        const life = { value: new THREE.Vector4() }, look = { value: new THREE.Vector4() }, look2 = { value: new THREE.Vector4() }, pos = { value: data.smoke.initTex };
         function sync() {
             const S = DP.config.starSmoke, u = simMat.uniforms;
             u.uNoise.value.set(S.noiseAmp, S.noiseScale, S.detailAmp, S.detailScale);
             u.uShell.value.set(S.spring, S.radial, S.spin, S.noiseSpeed);
             u.uGather.value = S.gather;
+            u.uEmit.value.set(S.emitShare, S.emitSpin, S.emitDrag, S.emitSize);
+            u.uFlare.value.set(S.flare, S.flareLift, S.flareZone, S.fieldSpin);
             u.uLife.value.set(S.lifeMin, Math.max(S.lifeMin + 0.01, S.lifeMax), S.speed, 0);
             life.value.copy(u.uLife.value);
             look.value.set(S.fadeIn, S.fadeOut, S.grow, S.size);
+            look2.value.set(S.flareAlpha, 0, 0, 0);
         }
         function step(dt) {
             if (dt <= 0) return;
@@ -926,8 +1045,11 @@
             pos.value = targets[cur].texture;
         }
         for (let i = 0; i < 90; i++) step(1 / 30);                // прогрев: структура дыма сразу сложилась
+        // отладка: прочитать состояние частиц (xyz + возраст, +100 у всполохов)
+        const read = () => { const buf = new Float32Array(N * N * 4); renderer.readRenderTargetPixels(targets[cur], 0, 0, N, N, buf); return buf; };
+        DP.starSmokeSim = { read, get N() { return N; } };
         return {
-            step, uniforms: { uSmokePos: pos, uSmokeInfo: { value: data.smoke.infoTex }, uSmokeLife: life, uSmokeLook: look,
+            step, uniforms: { uSmokePos: pos, uSmokeInfo: { value: data.smoke.infoTex }, uSmokeLife: life, uSmokeLook: look, uSmokeLook2: look2,
                               uAlpha: { get value() { return DP.config.starSmoke.alpha; } } },
             dispose() { targets.forEach(t => t.dispose()); simMat.dispose(); }
         };
@@ -955,6 +1077,18 @@
             let sim = null;
             if (show('star')) {
                 meshRoot.add(new THREE.Mesh(data.starMesh, mats.starMesh));
+                {
+                    const G = DP.morph.glsl, S = DP.shared, C = DP.config.starCore;
+                    const uCore = { get value() { return coreVec.set(C.radius, C.size, C.noiseScale, C.speed); } };
+                    const m = new THREE.ShaderMaterial(Object.assign({}, DP.pointsMaterialConfig, {
+                        uniforms: Object.assign({ uTime: S.uTime, uDepth: { value: new THREE.Vector2(8.1, 0.4) }, uStarR: { value: STAR_R },
+                                                  uTexture: S.uTexture, uViewportScale: S.uViewportScale, uCore,
+                                                  uCoreAlpha: { get value() { return C.alpha; } } }, DP.morph.uniformsFor(ctx.uniforms)),
+                        vertexShader: coreSphereVertex(G), fragmentShader: coreSphereFragment(G)
+                    }));
+                    mats.list.push(m);
+                    pointsRoot.add(new THREE.Points(data.coreSphereGeo, m));
+                }
                 sim = createSmokeSim(data);
                 if (sim) {
                     const G = DP.morph.glsl, S = DP.shared;
