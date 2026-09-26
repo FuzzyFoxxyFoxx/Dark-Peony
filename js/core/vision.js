@@ -49,6 +49,7 @@
     let next = 4 + rnd() * 4;           // первый сеанс — вскоре после загрузки
     let session = null;
     let lastFigure = null;
+    let wasMorphing = false;
 
     // Экранная позиция точки фигуры (раскладка — в пространстве сцены фигуры).
     function project(x, y, z, out) {
@@ -186,10 +187,12 @@
             const inst = orch.currentInstance;
             if (!C.enabled || orch.isMorphing || !inst) {
                 session = null;
-                if (orch.isMorphing) next = Math.max(next, T + lerp(C.gapMin, C.gapMax, rnd()) * 0.5);   // после морфинга — не сразу
+                if (orch.isMorphing) wasMorphing = true;
                 draw(T, dt);
                 return;
             }
+            // фигура только что собралась — первый сеанс вскоре (1.5–3 с), дальше обычные паузы
+            if (wasMorphing) { wasMorphing = false; next = T + lerp(1.5, 3, rnd()); }
             if (orch.current !== lastFigure) { lastFigure = orch.current; session = null; }
             if (session && T > session.T0 + session.dur + 2.5) session = null;
             if (!session && T >= next) {
