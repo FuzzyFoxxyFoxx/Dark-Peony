@@ -80,6 +80,7 @@
         DP.stage.figureStage.rotation.y = time * cfg.stageRotationSpeed + spinAngle;
         orchestrator.update(time, dt);
         if (draw) DP.stage.render(dt);
+        if (DP.vision && draw) DP.vision.update(time, dt);   // «компьютерное зрение» поверх сцены (отдельный модуль)
     }
 
     function frame(now) {

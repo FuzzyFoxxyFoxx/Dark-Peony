@@ -216,6 +216,7 @@
         setPointsMode(v) { pointsMode = !!v; applyVisibility(); events.emit('mode', { points: pointsMode }); },
         get pointsMode() { return pointsMode; },
         get current() { return current ? current.name : null; },
+        get currentInstance() { return current ? current.instance : null; },   // для HUD-модулей (js/core/vision.js)
         get isMorphing() { return !!morph; }
     };
 

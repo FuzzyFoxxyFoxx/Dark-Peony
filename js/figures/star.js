@@ -1240,8 +1240,28 @@
             });
 
             let lastT = -1e9;
+            // Текущие положения движущихся тел (для HUD «компьютерное зрение») — в пространстве сцены фигуры.
+            const bodyNow = (i) => {
+                const U = mats.bodies[i].uniforms, t = DP.shared.uTime.value, o = U.uOrbit.value;
+                let c = orbitPos(o.x, o.y, o.z, o.w + U.uOrbit2.value.x * t);
+                if (U.uParentOmega.value >= 0) {
+                    const p = U.uParent.value, q = orbitPos(p.x, p.y, p.z, p.w + U.uParentOmega.value * t);
+                    c = [c[0] + q[0], c[1] + q[1], c[2] + q[2]];
+                }
+                return new THREE.Vector3(c[0], c[1], c[2]).applyMatrix4(data.rootMatrix);
+            };
+            const shown = pointsRoot.children.map(o => o.geometry);
+            const visionAnchors = () => data.bodies.map((b, i) => ({ b, i })).filter(e => shown.indexOf(e.b.geo) >= 0).map(e => {
+                const p = bodyNow(e.i);
+                return { x: p.x, y: p.y, z: p.z, size: e.b.r * 2.4, get: () => bodyNow(e.i) };
+            });
+            // Части раскладки, чьи точки в покое не совпадают с видимыми (движущиеся тела и орбита спутника) —
+            // HUD за них не цепляется (берёт текущие положения из visionAnchors).
+            const visionSkip = new Set();
+            data.orbits.forEach((o, i) => { if (o.parent) visionSkip.add(6 + i); });
+            data.bodies.forEach((b, i) => visionSkip.add(6 + data.orbits.length + i));
             return {
-                root, meshRoot, pointsRoot, layout: data.layout,
+                root, meshRoot, pointsRoot, layout: data.layout, visionAnchors, visionSkip,
                 update(time, dt) {
                     if (time - lastT > 0.25) mats.anchor(time);          // фигура только что появилась — тела на своих местах
                     lastT = time;
