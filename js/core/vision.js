@@ -15,6 +15,9 @@
 //  • Быстрая смена: рамка живёт 0.1–1 с, номера растут, как у трекера.
 //  • Сеть: у каждой рамки 2–4 соседа + несколько длинных линий; голые метки «_номер» без рамки.
 //  • Размеры по уровням: много крошечных, немного средних (по размеру пятна), редкие крупные.
+//  • Рамка облегает пятно: от точки рамки заливкой собирается связная область ярче доли пика (у каждой
+//    рамки свой порог) — рамка берёт её габариты 12 раз в секунду (скачками, как трекер). Цепкие рамки (60%)
+//    без дрожи держатся за центр области, нервные — перескакивают.
 //  • Заливки: контур; полупрозрачная заливка цветом пятна; инверсия (свой слой, difference);
 //    «кусок картинки со сдвигом» (глитч). Координаты x/y/z — только у редких рамок, одной строкой.
 // Во время морфинга не работает. Выключить: ?vision=0 или ползунок «включено».
@@ -40,6 +43,9 @@
         invert: 0.2, tint: 0.2, glitch: 0.1,   // доли рамок с инверсией / заливкой цветом / куском картинки
         bare: 0.3,                  // доля голых меток без рамки
         coords: 0.1,                // доля рамок с координатами
+        locked: 0.6,                // доля «цепких» рамок: без дрожи, держатся за центр своего пятна
+        fit: 1,                     // 1 — рамка облегает пятно (размер и пропорции по области яркости)
+        lineStyle: 2,               // линии: 0 — прежние (1 px экрана, белые), 1 — волосок белый, 2 — волосок голубой
         alpha: 0.8                  // видимость всего слоя
     }, DP.config.vision || {});
 
@@ -139,6 +145,52 @@
             return out.slice(0, 160);
         } catch (e) { trackOk = false; return null; }   // кадр недоступен — работаем по точкам фигуры
     }
+    // Область пятна вокруг точки (CSS px), по размытой яркости (соседние нити сливаются в деталь): пик в окне 5×5, затем заливка соседей ярче thr·пик (до 900 пикселей).
+    // Возвращает центр (взвешенный по яркости) и габариты; null — если кадр не читался или пятна нет.
+    let seen = new Int32Array(0), stamp = 1;
+    const queue = new Int32Array(900);
+    function region(cx, cy, thr) {
+        if (!bl.length) return null;
+        let x = Math.round(cx / W * SW - 0.5), y = Math.round(cy / H * SH - 0.5);
+        if (x < 2 || y < 2 || x > SW - 3 || y > SH - 3) return null;
+        let bi = y * SW + x;
+        for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) { const j = (y + dy) * SW + x + dx; if (bl[j] > bl[bi]) bi = j; }
+        const peak = bl[bi];
+        if (peak < 0.04) return null;
+        if (seen.length !== bl.length) seen = new Int32Array(bl.length);
+        stamp++;
+        const lim = peak * thr;
+        let qh = 0, qt = 0, x0 = SW, x1 = 0, y0 = SH, y1 = 0, sw = 0, sx = 0, sy = 0;
+        queue[qt++] = bi; seen[bi] = stamp;
+        while (qh < qt) {
+            const i = queue[qh++], px = i % SW, py = (i - px) / SW, L = bl[i];
+            if (px < x0) x0 = px; if (px > x1) x1 = px; if (py < y0) y0 = py; if (py > y1) y1 = py;
+            sw += L; sx += px * L; sy += py * L;
+            if (qt >= queue.length - 4) continue;
+            const nb = [i - 1, i + 1, i - SW, i + SW];
+            for (let k = 0; k < 4; k++) {
+                const j = nb[k];
+                if (j < 0 || j >= bl.length || seen[j] === stamp) continue;
+                if ((k < 2) && Math.abs((j % SW) - px) !== 1) continue;
+                seen[j] = stamp;
+                if (bl[j] > lim) queue[qt++] = j;
+            }
+        }
+        const kx = W / SW, ky = H / SH;
+        return { x: (sx / sw + 0.5) * kx, y: (sy / sw + 0.5) * ky, w: (x1 - x0 + 1) * kx, h: (y1 - y0 + 1) * ky };
+    }
+    // Рамка облегает пятно: габариты области с небольшим запасом, в пределах [min, max].
+    function fitTrack(tr) {
+        if (!C.fit || !(C.track && trackOk) || tr.tiny) return false;
+        const r = region(tr.x, tr.y, tr.thr);
+        if (!r) return false;
+        const pad = 1.15;
+        const nw = Math.min(tr.maxW, Math.max(tr.minW, r.w * pad)), nh = Math.min(tr.maxH, Math.max(tr.minH, r.h * pad));
+        tr.w = lerp(tr.w, nw, 0.55); tr.h = lerp(tr.h, nh, 0.55);          // подстройка в такт находкам, без мигания между крайностями
+        if (tr.locked) { tr.x = lerp(tr.x, r.x, 0.6); tr.y = lerp(tr.y, r.y, 0.6); }
+        return true;
+    }
+
     // Находки по точкам фигуры (запасной путь).
     function detectPoints(inst) {
         const L = inst.layout, parts = L && L.parts, out = [];
@@ -185,11 +237,13 @@
         S.target = S.off ? 0 : Math.max(1, Math.round((S.surge ? S.surgeN : S.baseN) * C.density));
     }
     function spawn(S, det, T) {
-        const farFromAscii = S.tracks.every(o => o.fill !== 'ascii' || Math.abs(o.x - det.x) > (o.size * o.aspect + 200) / 2 + 20);
+        const farFromAscii = S.tracks.every(o => o.fill !== 'ascii' || Math.abs(o.x - det.x) > (o.w + 200) / 2 + 20);
         if (S.surge && S.asciiLeft > 0 && rnd() < 0.25 && farFromAscii) {   // рамка с символами — крупная, вертикальная, не налезает на другую
             S.asciiLeft--;
             const h = Math.min(H * 0.42, lerp(190, 320, rnd()));
-            S.tracks.push({ id: nextId += 1 + Math.floor(rnd() * 2), x: det.x, y: det.y, size: h, aspect: lerp(0.5, 0.75, rnd()),
+            const w = h * lerp(0.5, 0.75, rnd());
+            S.tracks.push({ id: nextId += 1 + Math.floor(rnd() * 2), x: det.x, y: det.y, w, h, size: h,
+                minW: w, minH: h, maxW: Math.max(w, W * 0.3), maxH: Math.max(h, H * 0.55), thr: lerp(0.25, 0.4, rnd()), locked: true,
                 born: T, life: lerp(1.6, 3, rnd()), seen: T, sticky: true, bare: false, fill: 'ascii', col: det.col,
                 coords: rnd() < 0.5, gx: 0, gy: 0, jx: 0, jy: 0, jt: 0, cells: null });
             return;
@@ -199,8 +253,12 @@
         const size = tier === 'tiny' ? lerp(5, 13, rnd()) : tier === 'mid' ? Math.min(60, Math.max(16, det.size * lerp(1, 1.8, rnd()))) : lerp(55, 115, rnd());
         const f = rnd();
         const fill = tier === 'tiny' ? 'none' : f < C.invert ? 'invert' : f < C.invert + C.tint ? 'tint' : f < C.invert + C.tint + C.glitch ? 'glitch' : 'none';
+        const aspect = lerp(0.65, 1.5, rnd());
+        const minS = tier === 'mid' ? 16 : 34, maxS = tier === 'mid' ? 110 : 190;
         S.tracks.push({
-            id: nextId += 1 + Math.floor(rnd() * 2), x: det.x, y: det.y, size, aspect: lerp(0.65, 1.5, rnd()),
+            id: nextId += 1 + Math.floor(rnd() * 2), x: det.x, y: det.y, size, w: size * aspect, h: size, tiny: tier === 'tiny',
+            minW: minS, minH: minS, maxW: maxS * 1.3, maxH: maxS, thr: tier === 'big' ? lerp(0.3, 0.5, rnd()) : lerp(0.5, 0.8, rnd()),
+            locked: rnd() < C.locked,
             born: T, life: S.surge ? lerp(0.1, 1.0, Math.pow(rnd(), 0.8)) * (S.strongSurge ? 0.7 : 1) : lerp(0.8, 2.5, rnd()), seen: T,   // фон — спокойнее
             bare: tier === 'tiny' && rnd() < C.bare / 0.6, fill, col: det.col,
             coords: rnd() < C.coords, gx: (rnd() - 0.5) * 80, gy: (rnd() - 0.5) * 80, jx: 0, jy: 0, jt: 0
@@ -217,7 +275,12 @@
             S.tracks.forEach(tr => {
                 let bi = -1, bd = R;
                 dets.forEach((d, i) => { if (used.has(i)) return; const dd = Math.hypot(d.x - tr.x, d.y - tr.y); if (dd < bd) { bd = dd; bi = i; } });
-                if (bi >= 0) { used.add(bi); const d = dets[bi]; tr.x = lerp(tr.x, d.x, 0.7); tr.y = lerp(tr.y, d.y, 0.7); tr.seen = T; tr.col = d.col; }
+                if (bi >= 0) {
+                    used.add(bi); const d = dets[bi];
+                    if (!tr.locked) { tr.x = lerp(tr.x, d.x, 0.7); tr.y = lerp(tr.y, d.y, 0.7); }   // нервная — прыгает к находке
+                    tr.seen = T; tr.col = d.col;
+                }
+                if (fitTrack(tr)) tr.seen = T;                                   // облегает своё пятно (цепкая — и едет за ним)
             });
             {                                                               // пополнение до текущей цели
                 const sig = Math.min(W, H) * 0.16;
@@ -228,6 +291,7 @@
                     for (let tries = 0; tries < 12 && pick < 0; tries++) {
                         const di = Math.floor(Math.pow(rnd(), 2) * dets.length), d = dets[di];
                         if (used.has(di)) continue;
+                        if (S.tracks.some(o => !o.bare && Math.abs(o.x - d.x) < o.w * 0.4 && Math.abs(o.y - d.y) < o.h * 0.4)) continue;   // место занято
                         if (inCluster) { const dd = Math.hypot(d.x - S.focus.x, d.y - S.focus.y); if (rnd() > Math.exp(-dd * dd / (2 * sig * sig))) continue; }
                         pick = di;
                     }
@@ -236,6 +300,9 @@
                 if (S.focus && dets.length) { const d = dets[0]; S.focus.x = lerp(S.focus.x, d.x, 0.02); S.focus.y = lerp(S.focus.y, d.y, 0.02); }
             }
             S.tracks = S.tracks.filter(tr => T - tr.born < tr.life && (tr.sticky || T - tr.seen < 0.3));
+            // две рамки на одном месте (съехались на одно пятно) — остаётся старшая
+            S.tracks = S.tracks.filter((tr, i) => tr.bare || tr.tiny || !S.tracks.some((o, j) => j < i && !o.bare && !o.tiny &&
+                Math.abs(o.x - tr.x) < Math.max(o.w, tr.w) * 0.3 && Math.abs(o.y - tr.y) < Math.max(o.h, tr.h) * 0.3));
             if (S.tracks.length > S.target + 4) S.tracks.sort((p, q) => (p.sticky ? 1 : 0) - (q.sticky ? 1 : 0)).splice(0, S.tracks.length - S.target - 4);
             // связи: 2–4 ближайших + несколько длинных
             const tr = S.tracks;
@@ -301,29 +368,34 @@
         const a = C.alpha;
         S.tracks.forEach(tr => {
             tr.v = vis(tr, T);
-            if (T - tr.jt > 0.12) { tr.jt = T; tr.jx = (rnd() - 0.5) * tr.size * 0.15; tr.jy = (rnd() - 0.5) * tr.size * 0.15; }
+            if (tr.locked) { tr.jx = tr.jy = 0; }
+            else if (T - tr.jt > 0.12) { tr.jt = T; tr.jx = (rnd() - 0.5) * tr.h * 0.15; tr.jy = (rnd() - 0.5) * tr.h * 0.15; }
             tr.dx = tr.x + tr.jx; tr.dy = tr.y + tr.jy;
         });
-        g.lineWidth = 1;
+        const LS = C.lineStyle, hair = LS >= 1 ? 1 / dpr : 1;             // волосок — 1 физический пиксель
+        const off = hair / 2;                                                // смещение, чтобы линия легла на пиксель
+        const RGB = LS === 2 ? '165, 205, 255' : '222, 238, 255', LA = LS === 2 ? 0.95 : 0.8;
+        const snap = (v) => Math.round(v * dpr) / dpr + off;
+        g.lineWidth = hair;
         S.links.forEach(([p, q]) => {
             if (p === q || !p.v || !q.v || p.dx == null || q.dx == null) return;
-            g.strokeStyle = `rgba(215, 232, 255, ${0.38 * a * Math.min(p.v, q.v)})`;
+            g.strokeStyle = `rgba(${RGB}, ${0.45 * a * Math.min(p.v, q.v)})`;
             g.beginPath(); g.moveTo(p.dx, p.dy); g.lineTo(q.dx, q.dy); g.stroke();
         });
         g.font = '9px ui-monospace, SFMono-Regular, Menlo, monospace';
         S.tracks.forEach(tr => {
             if (!tr.v) return;
-            const w = tr.size * tr.aspect, h = tr.size;
-            const x0 = Math.round(tr.dx - w / 2) + 0.5, y0 = Math.round(tr.dy - h / 2) + 0.5;
+            const w = Math.round(tr.w), h = Math.round(tr.h);
+            const x0 = snap(tr.dx - w / 2), y0 = snap(tr.dy - h / 2);
             if (tr.bare) {                                                   // голая метка: чёрточка и номер
-                g.strokeStyle = `rgba(220, 238, 255, ${0.7 * a * tr.v})`;
-                g.beginPath(); g.moveTo(tr.dx - 3, tr.dy + 0.5); g.lineTo(tr.dx + 3, tr.dy + 0.5); g.stroke();
+                g.strokeStyle = `rgba(${RGB}, ${0.7 * a * tr.v})`;
+                g.beginPath(); g.moveTo(tr.dx - 3, snap(tr.dy)); g.lineTo(tr.dx + 3, snap(tr.dy)); g.stroke();
                 g.fillStyle = `rgba(225, 240, 255, ${0.85 * a * tr.v})`;
                 g.fillText('_' + tr.id, tr.dx + 3, tr.dy - 1);
                 return;
             }
             if (tr.fill === 'ascii') { drawAscii(tr, x0, y0, w, h, T); }
-            else if (tr.fill === 'invert') { gi.fillStyle = `rgba(255,255,255,${tr.v})`; gi.fillRect(x0, y0, w, h); }
+            else if (tr.fill === 'invert') { gi.fillStyle = `rgba(255,255,255,${tr.v})`; gi.fillRect(x0 + 1.5, y0 + 1.5, w - 3, h - 3); }   // на пиксель внутрь от контура
             else if (tr.fill === 'tint') { g.fillStyle = `rgba(${tr.col[0]},${tr.col[1]},${tr.col[2]},${0.35 * a * tr.v})`; g.fillRect(x0, y0, w, h); }
             else if (tr.fill === 'glitch') {
                 try {                                                        // кусок картинки из соседнего места
@@ -333,7 +405,7 @@
                 } catch (e) { /* кадр недоступен */ }
                 g.globalAlpha = 1;
             }
-            g.strokeStyle = `rgba(222, 238, 255, ${0.8 * a * tr.v})`;
+            g.strokeStyle = `rgba(${RGB}, ${LA * a * tr.v * (tr.tiny ? 0.7 : 1)})`;   // крошечные — чуть тусклее
             g.strokeRect(x0, y0, w, h);
             g.fillStyle = `rgba(225, 240, 255, ${0.85 * a * tr.v})`;
             g.fillText(String(tr.id), x0 + w + 2, y0 + 7);
