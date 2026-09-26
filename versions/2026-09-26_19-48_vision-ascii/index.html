@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#000102">
+    <meta name="color-scheme" content="dark">
+    <title>Dark Peony Hub - Layout Assembly</title>
+    <link rel="stylesheet" href="css/main.css">
+</head>
+<body>
+
+    <canvas id="hudCanvas"></canvas>
+
+    <div id="ui">
+        <button id="btnMorph" class="btn" type="button">MORPH (SPACE)</button>
+        <button id="btnToggle" class="btn" type="button">POINTS MODE (M)</button>
+    </div>
+    <div id="ui-overlay">Dark Peony Hub • Layout Assembly</div>
+    <div id="fatal" role="alert"></div>
+    <noscript><div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#d0e5ff">Для работы сайта нужен JavaScript.</div></noscript>
+
+    <script>
+        window.DP = window.DP || {};
+        DP.showFatal = function (msg) {
+            var el = document.getElementById('fatal');
+            if (el) { el.textContent = msg; el.className = 'show'; }
+        };
+        window.addEventListener('error', function (e) {
+            if (!window.THREE && e && e.target && e.target.tagName === 'SCRIPT') DP.showFatal('Не удалось загрузить графический движок. Обновите страницу.');
+        }, true);
+    </script>
+
+    <!-- three.js r134 (MIT) лежит в репозитории: нет зависимости от CDN, работает и офлайн -->
+    <script src="vendor/three.r134.min.js"></script>
+
+    <!-- ядро -->
+    <script src="js/core/dp.js"></script>
+    <script src="js/core/morph.js"></script>
+    <script src="js/core/stage.js"></script>
+    <script src="js/core/flowsim.js"></script>
+    <script src="js/core/smokesim.js"></script>
+    <script src="js/core/orchestrator.js"></script>
+
+    <!-- фигуры: каждая — отдельный файл, регистрируется в DP.figures -->
+    <script src="js/figures/peony.js"></script>
+    <script src="js/figures/jellyfish.js"></script>
+    <script src="js/figures/star.js"></script>
+
+    <!-- запуск -->
+    <script src="js/core/vision.js"></script>
+    <script src="js/main.js"></script>
+    <!-- ?tune — панель настройки морфинга: цикл, замедление, ползунки -->
+    <script src="js/core/tune.js"></script>
+</body>
+</html>
