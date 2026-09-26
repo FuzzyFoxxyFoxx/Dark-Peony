@@ -550,6 +550,7 @@
         uniform float uBodyAng;          // угловой радиус тела на орбите: внутри тела орбиту не видно
         uniform vec4 uParent;            // орбита спутника едет вместе с планетой: орбита планеты (R, наклон, узел, фаза)
         uniform float uParentOmega;      // скорость планеты; < 0 — орбита неподвижна
+        uniform float uParentPhase0;     // фаза планеты в покое (геометрия орбиты построена при ней; не «пристёгивается»)
         attribute float aAng;
         varying float vA;
         ${orbitGlsl}
@@ -557,7 +558,7 @@
             vec3 dpRest = position;
             vec3 pos = position;
             if (uParentOmega >= 0.0) pos += dpOrbitPos(uParent.x, uParent.y, uParent.z, uParent.w + uParentOmega * uTime)
-                                          - dpOrbitPos(uParent.x, uParent.y, uParent.z, uParent.w);
+                                          - dpOrbitPos(uParent.x, uParent.y, uParent.z, uParentPhase0);
             vec4 mv = viewMatrix * dpMorph(dpRest, pos);
             gl_Position = projectionMatrix * mv;
             float dist = max(-mv.z, 0.1);
@@ -1053,7 +1054,8 @@
         const orbits = data.orbits.map(o => pts(orbitVertex, orbitFragment, { uSize: { value: 2.0 }, uPlanet: { value: new THREE.Vector4(o.O.phase, o.O.omega, o.O.n || 1, o.atom ? -Math.PI * 4 / 3 : o.parent ? -Math.PI * 2 : 1.6) },
                               uBodyAng: { value: (o.atom ? o.O.r * 1.25 : o.O.planet.r) / o.O.R },
                               uParent: { value: o.parent ? new THREE.Vector4(o.parent.R, o.parent.incl, o.parent.node, o.parent.phase) : new THREE.Vector4() },
-                              uParentOmega: { value: o.parent ? o.parent.omega : -1 } }));   // −4π/3: след у астероидов на 240°, у спутника −2π — 360°
+                              uParentOmega: { value: o.parent ? o.parent.omega : -1 },
+                              uParentPhase0: { value: o.parent ? o.parent.phase : 0 } }));   // −4π/3: след у астероидов на 240°, у спутника −2π — 360°
         const bodyUniforms = (b) => ({
             uOrbit: { value: new THREE.Vector4(b.orbit.R, b.orbit.incl, b.orbit.node, b.orbit.phase) },
             uOrbit2: { value: new THREE.Vector4(b.orbit.omega, b.orbit.spin, 0, 0) },
