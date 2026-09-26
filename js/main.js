@@ -73,11 +73,21 @@
     let last = null;
     const manual = DP.params.has('manual'); // для автотестов: время двигает DP.debug.step()
 
+    // Угол сцены вокруг Y копится по шагам: обычное медленное вращение + раскрутка морфинга. Фигура с faceViewer
+    // (серафим) не вращается: пока она на экране и морфинга нет, сцена плавно доворачивается лицом к зрителю.
+    let stageAngle = 0, prevSpin = 0;
     function tick(dt, draw = true) {
         time += dt;
         DP.shared.uTime.value = time;
         spinStep(dt);
-        DP.stage.figureStage.rotation.y = time * cfg.stageRotationSpeed + spinAngle;
+        const def = DP.figures.get(orchestrator.current);
+        const face = def && def.faceViewer && !orchestrator.isMorphing;
+        stageAngle += spinAngle - prevSpin; prevSpin = spinAngle;
+        if (face) {
+            const target = Math.round(stageAngle / (Math.PI * 2)) * Math.PI * 2;
+            stageAngle += (target - stageAngle) * Math.min(1, dt * 1.6);
+        } else stageAngle += dt * cfg.stageRotationSpeed;
+        DP.stage.figureStage.rotation.y = stageAngle;
         orchestrator.update(time, dt);
         if (draw) DP.stage.render(dt);
         if (DP.vision && draw) DP.vision.update(time, dt);   // «компьютерное зрение» поверх сцены (отдельный модуль)
