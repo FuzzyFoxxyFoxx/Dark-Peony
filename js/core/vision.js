@@ -7,8 +7,11 @@
 //    места (локальные максимумы) — это «находки». Находки сопоставляются с дорожками (tracks) прошлых кадров:
 //    рамки ездят за видимыми деталями и перескакивают, как у трекера. Нет доступа к кадру (или track = 0) —
 //    находки берутся из точек фигуры (раскладка морфинга) и движущихся тел (instance.visionAnchors()).
-//  • Сеансы разной силы: лёгкий (3–6 рамок), средний (10–20), всплеск (30–50, коротко); паузы случайные.
-//  • Рой: у сеанса есть место интереса — большинство рамок там, часть бродит по кадру.
+//  • Ритм (автор): «зрение» на экране почти всегда — слабый фон (2–5 небольших рамок в разных частях фигуры);
+//    каждые 5–9 с всплеск на 2–3 с (12–30 рамок роем, густая сеть, иногда до 40); изредка пропадает на 1–3 с.
+//  • Рой: у всплеска есть место интереса — большинство рамок там, часть бродит по кадру.
+//  • Рамки с символами (1–2 во всплеске): фрагмент кадра под рамкой символами — плотность символа = яркость
+//    (шкала плотности считается при загрузке), символы всё время меняются на равные по плотности.
 //  • Быстрая смена: рамка живёт 0.1–1 с, номера растут, как у трекера.
 //  • Сеть: у каждой рамки 2–4 соседа + несколько длинных линий; голые метки «_номер» без рамки.
 //  • Размеры по уровням: много крошечных, немного средних (по размеру пятна), редкие крупные.
@@ -22,11 +25,17 @@
     const C = DP.config.vision = Object.assign({
         enabled: DP.params.get('vision') === '0' ? 0 : 1,
         track: 1,                   // 1 — рамки по самой картинке (чтение уменьшенного кадра), 0 — по точкам фигуры
-        gapMin: 6, gapMax: 22,      // пауза между сеансами, с (случайно, чаще короткие; иногда повтор сразу)
-        durMin: 1.5, durMax: 5,     // длительность сеанса, с (всплеск — короче)
+        baseMin: 2, baseMax: 5,     // слабый фон: рамок
+        surgeMin: 12, surgeMax: 30, // всплеск: рамок
+        surgeEvery: 7,              // всплеск примерно раз в столько секунд (±30%)
+        surgeDur: 2.5,              // длительность всплеска, с (±20%)
+        strong: 0.2,                // доля сильных всплесков (до 40 рамок)
+        offEvery: 10, offDur: 2,    // изредка пропадает: примерно раз в … с на … с (случайно, 0.3–1.5×)
         density: 1,                 // множитель числа рамок
-        medium: 0.35, burst: 0.15,  // вероятность среднего сеанса и всплеска (остальное — лёгкий)
-        cluster: 0.7,               // доля рамок в рое у места интереса
+        ascii: 1.5,                 // рамок с символами во всплеске (в среднем; 0 — выкл.)
+        asciiCell: 7,               // высота знакоместа, px
+        asciiGain: 1.6,             // контраст символов: больше — полутона тоньше, плотные знаки только в самых ярких местах
+        cluster: 0.7,               // доля рамок в рое у места интереса (во всплеске)
         links: 3,                   // соседей у рамки (в среднем)
         invert: 0.2, tint: 0.2, glitch: 0.1,   // доли рамок с инверсией / заливкой цветом / куском картинки
         bare: 0.3,                  // доля голых меток без рамки
@@ -58,10 +67,34 @@
     window.addEventListener('resize', resize);
     resize();
 
+    // ---------- шкала плотности символов ----------
+    // Латиница, цифры, знаки, кириллица и узкая катакана; плотность = доля закрашенных пикселей в знакоместе.
+    const GLYPHS = ".,'`:;-_~^\"!|/\\()[]{}<>+=*?irlcvxzjtfnuoaeskyhpqbdgmwIJLTCZXYVUNSOQGDKRAEFHPBMW0123456789$&%#@" +
+                   "абвгдежзийклмнопрстуфхцчшщъыьэюяБГДЖЗИЛПФЦЧШЩЪЫЭЮЯ" +
+                   "ｦｧｨｩｪｫｬｭｮｯｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ";
+    const FONT = 'ui-monospace, SFMono-Regular, Menlo, "Hiragino Sans", monospace';
+    const LEVELS = 14;
+    const buckets = (function () {
+        const c = document.createElement('canvas'), x = c.getContext('2d', { willReadFrequently: true });
+        const cw = 12, ch = 20; c.width = cw; c.height = ch;
+        x.font = `16px ${FONT}`; x.textBaseline = 'middle'; x.textAlign = 'center';
+        const list = [...GLYPHS].map(chr => {
+            x.clearRect(0, 0, cw, ch); x.fillStyle = '#fff'; x.fillText(chr, cw / 2, ch / 2);
+            const d = x.getImageData(0, 0, cw, ch).data; let s = 0;
+            for (let i = 3; i < d.length; i += 4) s += d[i];
+            return { chr, cov: s / (255 * cw * ch) };
+        }).filter(e => e.cov > 0.005).sort((a, b) => a.cov - b.cov);
+        const maxCov = list[list.length - 1].cov, b = [];
+        for (let l = 0; l < LEVELS; l++) b.push([]);
+        list.forEach(e => b[Math.min(LEVELS - 1, Math.floor(e.cov / maxCov * LEVELS))].push(e.chr));
+        for (let l = 0; l < LEVELS; l++) if (!b[l].length) b[l] = l ? b[l - 1] : ['.'];
+        return b;
+    })();
+    const ac = document.createElement('canvas'), ag = ac.getContext('2d', { willReadFrequently: true });
+
     const rnd = Math.random;
     const lerp = (a, b, t) => a + (b - a) * t;
     let nextId = 3900 + Math.floor(rnd() * 80);
-    let next = 4 + rnd() * 4;
     let session = null, lastFigure = null, wasMorphing = false, trackOk = true, forceKind = null;
     const v3 = new THREE.Vector3();
 
@@ -127,25 +160,48 @@
         return out.sort((a, b) => b.score - a.score);
     }
 
-    // ---------- сеанс ----------
+    // ---------- ритм: слабый фон, всплески, пропадания ----------
     function newSession(T) {
-        const u = rnd();
-        const kind = forceKind || (u < C.burst ? 'burst' : u < C.burst + C.medium ? 'medium' : 'light');
-        forceKind = null;
-        const range = kind === 'burst' ? [30, 50] : kind === 'medium' ? [10, 20] : [3, 6];
-        const dur = kind === 'burst' ? lerp(1, 2, rnd()) : lerp(C.durMin, C.durMax, rnd());
-        return { kind, T0: T, dur, target: Math.max(1, Math.round(lerp(range[0], range[1], rnd()) * C.density)),
-                 focus: null, tracks: [], links: [], nextDetect: 0 };
+        return { T0: T, target: 3, surge: false, off: false, strongSurge: false, focus: null, tracks: [], links: [], nextDetect: 0,
+                 nextSurge: T + lerp(1.5, 3, rnd()), surgeEnd: 0, nextOff: T + C.offEvery * lerp(0.6, 1.6, rnd()), offEnd: 0,
+                 baseN: lerp(C.baseMin, C.baseMax, rnd()), asciiLeft: 0 };
+    }
+    function rhythm(S, T) {
+        if (forceKind) { S.nextSurge = T; S.strongSurge = forceKind === 'burst'; S.forced = true; forceKind = null; }
+        if (!S.surge && !S.off && T >= S.nextOff && C.offDur > 0) {       // пропадание: всё гаснет почти сразу
+            S.off = true; S.offEnd = T + C.offDur * lerp(0.4, 1.5, rnd());
+            S.tracks.forEach(tr => { tr.life = Math.min(tr.life, T - tr.born + lerp(0.05, 0.25, rnd())); });
+        }
+        if (S.off && T >= S.offEnd) { S.off = false; S.nextOff = T + C.offEvery * lerp(0.4, 1.8, rnd()); S.nextSurge = Math.max(S.nextSurge, T + 1); }
+        if (!S.surge && !S.off && T >= S.nextSurge) {
+            S.surge = true; S.surgeEnd = T + C.surgeDur * lerp(0.8, 1.2, rnd());
+            if (!S.forced) S.strongSurge = rnd() < C.strong;
+            S.forced = false; S.focus = null;
+            const a = C.ascii; S.asciiLeft = Math.floor(a) + (rnd() < a - Math.floor(a) ? 1 : 0);
+            S.surgeN = S.strongSurge ? lerp(32, 42, rnd()) : lerp(C.surgeMin, C.surgeMax, rnd());
+        }
+        if (S.surge && T >= S.surgeEnd) { S.surge = false; S.nextSurge = T + C.surgeEvery * lerp(0.7, 1.3, rnd()); S.baseN = lerp(C.baseMin, C.baseMax, rnd()); }
+        S.kind = S.surge ? (S.strongSurge ? 'burst' : 'medium') : 'light';
+        S.target = S.off ? 0 : Math.max(1, Math.round((S.surge ? S.surgeN : S.baseN) * C.density));
     }
     function spawn(S, det, T) {
+        const farFromAscii = S.tracks.every(o => o.fill !== 'ascii' || Math.abs(o.x - det.x) > (o.size * o.aspect + 200) / 2 + 20);
+        if (S.surge && S.asciiLeft > 0 && rnd() < 0.25 && farFromAscii) {   // рамка с символами — крупная, вертикальная, не налезает на другую
+            S.asciiLeft--;
+            const h = Math.min(H * 0.42, lerp(190, 320, rnd()));
+            S.tracks.push({ id: nextId += 1 + Math.floor(rnd() * 2), x: det.x, y: det.y, size: h, aspect: lerp(0.5, 0.75, rnd()),
+                born: T, life: lerp(1.6, 3, rnd()), seen: T, sticky: true, bare: false, fill: 'ascii', col: det.col,
+                coords: rnd() < 0.5, gx: 0, gy: 0, jx: 0, jy: 0, jt: 0, cells: null });
+            return;
+        }
         const t = rnd();
-        const tier = t < 0.6 ? 'tiny' : t < 0.92 ? 'mid' : 'big';
+        const tier = S.surge ? (t < 0.6 ? 'tiny' : t < 0.92 ? 'mid' : 'big') : (t < 0.55 ? 'tiny' : 'mid');   // в фоне — небольшие
         const size = tier === 'tiny' ? lerp(5, 13, rnd()) : tier === 'mid' ? Math.min(60, Math.max(16, det.size * lerp(1, 1.8, rnd()))) : lerp(55, 115, rnd());
         const f = rnd();
         const fill = tier === 'tiny' ? 'none' : f < C.invert ? 'invert' : f < C.invert + C.tint ? 'tint' : f < C.invert + C.tint + C.glitch ? 'glitch' : 'none';
         S.tracks.push({
             id: nextId += 1 + Math.floor(rnd() * 2), x: det.x, y: det.y, size, aspect: lerp(0.65, 1.5, rnd()),
-            born: T, life: lerp(0.1, 1.0, Math.pow(rnd(), 0.8)) * (S.kind === 'burst' ? 0.7 : 1), seen: T,
+            born: T, life: S.surge ? lerp(0.1, 1.0, Math.pow(rnd(), 0.8)) * (S.strongSurge ? 0.7 : 1) : lerp(0.8, 2.5, rnd()), seen: T,   // фон — спокойнее
             bare: tier === 'tiny' && rnd() < C.bare / 0.6, fill, col: det.col,
             coords: rnd() < C.coords, gx: (rnd() - 0.5) * 80, gy: (rnd() - 0.5) * 80, jx: 0, jy: 0, jt: 0
         });
@@ -163,11 +219,11 @@
                 dets.forEach((d, i) => { if (used.has(i)) return; const dd = Math.hypot(d.x - tr.x, d.y - tr.y); if (dd < bd) { bd = dd; bi = i; } });
                 if (bi >= 0) { used.add(bi); const d = dets[bi]; tr.x = lerp(tr.x, d.x, 0.7); tr.y = lerp(tr.y, d.y, 0.7); tr.seen = T; tr.col = d.col; }
             });
-            if (T <= S.T0 + S.dur) {                                        // сеанс идёт — пополняем
+            {                                                               // пополнение до текущей цели
                 const sig = Math.min(W, H) * 0.16;
                 const want = S.target - S.tracks.length;
                 for (let k = 0; k < want && dets.length; k++) {
-                    const inCluster = rnd() < C.cluster && S.focus;
+                    const inCluster = S.surge && rnd() < C.cluster && S.focus;
                     let pick = -1;
                     for (let tries = 0; tries < 12 && pick < 0; tries++) {
                         const di = Math.floor(Math.pow(rnd(), 2) * dets.length), d = dets[di];
@@ -179,16 +235,17 @@
                 }
                 if (S.focus && dets.length) { const d = dets[0]; S.focus.x = lerp(S.focus.x, d.x, 0.02); S.focus.y = lerp(S.focus.y, d.y, 0.02); }
             }
-            S.tracks = S.tracks.filter(tr => T - tr.born < tr.life && T - tr.seen < 0.3);
+            S.tracks = S.tracks.filter(tr => T - tr.born < tr.life && (tr.sticky || T - tr.seen < 0.3));
+            if (S.tracks.length > S.target + 4) S.tracks.sort((p, q) => (p.sticky ? 1 : 0) - (q.sticky ? 1 : 0)).splice(0, S.tracks.length - S.target - 4);
             // связи: 2–4 ближайших + несколько длинных
             const tr = S.tracks;
             S.links = [];
             tr.forEach((a, i) => {
-                const k = Math.max(1, Math.round(C.links + (rnd() - 0.5) * 2));
+                const k = S.surge ? Math.max(1, Math.round(C.links + (rnd() - 0.5) * 2)) : (rnd() < 0.6 ? 1 : 0);   // в фоне связей мало
                 tr.map((b, j) => [j, (a.x - b.x) ** 2 + (a.y - b.y) ** 2]).filter(e => e[0] !== i).sort((p, q) => p[1] - q[1])
                   .slice(0, k).forEach(e => { if (e[0] > i || rnd() < 0.3) S.links.push([tr[i], tr[e[0]]]); });
             });
-            const nLong = Math.round(tr.length * 0.12);
+            const nLong = S.surge ? Math.round(tr.length * 0.12) : 0;
             for (let k = 0; k < nLong && tr.length > 3; k++) S.links.push([tr[Math.floor(rnd() * tr.length)], tr[Math.floor(rnd() * tr.length)]]);
         } else {
             S.tracks = S.tracks.filter(tr => T - tr.born < tr.life);
@@ -204,6 +261,39 @@
         if (t > tr.life - 0.05) return Math.floor(t * 60) % 2 ? 0.7 : 0;      // выход миганием
         return 1;
     }
+    // Рамка с символами: фрагмент кадра под рамкой → сетка знакомест → символ по яркости; символы «кипят».
+    function drawAscii(tr, x0, y0, w, h, T) {
+        const chH = C.asciiCell, chW = chH * 0.62;
+        const cols = Math.max(4, Math.floor(w / chW)), rows = Math.max(4, Math.floor(h / chH));
+        try {
+            const k = glCanvas.width / W;
+            if (ac.width !== cols || ac.height !== rows) { ac.width = cols; ac.height = rows; }
+            ag.drawImage(glCanvas, x0 * k, y0 * k, w * k, h * k, 0, 0, cols, rows);
+            const d = ag.getImageData(0, 0, cols, rows).data;
+            if (!tr.cells || tr.cells.length !== cols * rows) tr.cells = new Array(cols * rows).fill(null).map(() => ({ l: -1, chr: ' ', t: 0 }));
+            g.fillStyle = `rgba(0, 3, 9, ${0.93 * tr.v})`;
+            g.fillRect(x0, y0, w, h);
+            g.font = `${chH}px ${FONT}`; g.textBaseline = 'top';
+            // яркость — относительно самого яркого места рамки (почти максимум), чтобы форма читалась
+            const n = cols * rows, Ls = new Float32Array(n);
+            for (let i = 0; i < n; i++) Ls[i] = (d[i * 4] * 0.3 + d[i * 4 + 1] * 0.55 + d[i * 4 + 2] * 0.15) / 255;
+            const sorted = Float32Array.from(Ls).sort(), top = Math.max(0.04, sorted[Math.floor(n * 0.97)]);
+            tr.top = tr.top ? lerp(tr.top, top, 0.2) : top;                   // плавно, без мигания уровня
+            for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+                const i = r * cols + c, cell = tr.cells[i];
+                const x = Math.min(1, Ls[i] / tr.top);
+                const lv = Math.min(LEVELS - 1, Math.floor(Math.pow(x, C.asciiGain) * LEVELS));   // больше «усиление» — тоньше полутона
+                if (lv < 2) { cell.l = 0; continue; }
+                if (lv !== cell.l || T > cell.t) {                               // другой уровень или пора «перекипеть»
+                    const b = buckets[lv];
+                    cell.chr = b[Math.floor(rnd() * b.length)]; cell.l = lv; cell.t = T + lerp(0.08, 0.35, rnd());
+                }
+                g.fillStyle = `rgba(${Math.round(lerp(150, 235, lv / LEVELS))}, ${Math.round(lerp(195, 245, lv / LEVELS))}, 255, ${(0.55 + 0.45 * lv / LEVELS) * C.alpha * tr.v})`;
+                g.fillText(cell.chr, x0 + c * chW, y0 + r * chH);
+            }
+        } catch (e) { /* кадр недоступен */ }
+    }
+
     function draw(T) {
         g.clearRect(0, 0, W, H); gi.clearRect(0, 0, W, H);
         const S = session;
@@ -232,7 +322,8 @@
                 g.fillText('_' + tr.id, tr.dx + 3, tr.dy - 1);
                 return;
             }
-            if (tr.fill === 'invert') { gi.fillStyle = `rgba(255,255,255,${tr.v})`; gi.fillRect(x0, y0, w, h); }
+            if (tr.fill === 'ascii') { drawAscii(tr, x0, y0, w, h, T); }
+            else if (tr.fill === 'invert') { gi.fillStyle = `rgba(255,255,255,${tr.v})`; gi.fillRect(x0, y0, w, h); }
             else if (tr.fill === 'tint') { g.fillStyle = `rgba(${tr.col[0]},${tr.col[1]},${tr.col[2]},${0.35 * a * tr.v})`; g.fillRect(x0, y0, w, h); }
             else if (tr.fill === 'glitch') {
                 try {                                                        // кусок картинки из соседнего места
@@ -267,22 +358,14 @@
                 draw(T);
                 return;
             }
-            if (wasMorphing) { wasMorphing = false; next = T + lerp(1.5, 3, rnd()); }   // фигура собралась — вскоре сеанс
+            if (wasMorphing) { wasMorphing = false; session = null; }            // фигура собралась — «зрение» начинает заново
             if (orch.current !== lastFigure) { lastFigure = orch.current; session = null; }
-            if (session) {
-                step(session, T, inst);
-                if (T > session.T0 + session.dur && !session.tracks.length) {
-                    session = null;
-                    next = rnd() < 0.2 ? T + lerp(0.8, 3, rnd())                              // иногда — сразу ещё один
-                                       : T + lerp(C.gapMin, C.gapMax, Math.pow(rnd(), 1.4));  // чаще короткие паузы
-                }
-            } else if (T >= next) {
-                session = newSession(T);
-                step(session, T, inst);
-            }
+            if (!session) session = newSession(T);
+            rhythm(session, T);
+            step(session, T, inst);
             draw(T);
         },
-        now(kind) { next = 0; session = null; forceKind = kind || null; },   // для настройки: сеанс сразу ('light' | 'medium' | 'burst')
+        now(kind) { forceKind = kind || 'medium'; },   // для настройки: всплеск сейчас ('medium' | 'burst')
         get session() { return session; },
         get tracking() { return !!(C.track && trackOk); }
     };
