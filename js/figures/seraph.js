@@ -46,13 +46,14 @@
         light: 0.8,                   // источник света (сверху-слева-спереди): сила светотени на коже и яблоке
         fadeWave: 0.25, fadeSpeed: 0.0, fadeStart: 0.05,   // переход в прозрачность: неровность контура, скорость «гуляния», где начинается спад (доля радиуса)
         creaseDepth: 0.10, creaseBulge: 0.16,   // складка верхнего века: глубина борозды, выпуклость кожи над ней
-        creaseY: 0.95, creaseW: 0.09,           // высота борозды над центром разреза, ширина борозды
+        creaseY: 0.78, creaseW: 0.09,           // высота борозды над центром разреза, ширина борозды
+        creaseHalf: 1.55, creaseEnd: 0.22, creaseFlat: 0.6,   // полудлина линии складки, высота её концов, где начинает выравниваться (доля полудлины)
         bulgeDy: 0.40, bulgeW: 0.35,            // где (выше борозды) и насколько широко кожа выпячивается
         lidShadowTop: 0.55,                     // тень верхнего века на яблоке шире, чем нижнего (меньше — шире)
         halo: 2.2,                   // ореол складки над глазом (спереди)
         lidShadow: 0.5                // тень век на яблоке: у краёв разреза яблоко темнее
     }, DP.config.seraphEye || {});
-    const eyeLook = new THREE.Vector4(), eyeLook2 = new THREE.Vector4(), eyeFade = new THREE.Vector4(), eyeCr = new THREE.Vector4(), eyeCr2 = new THREE.Vector4();
+    const eyeLook = new THREE.Vector4(), eyeLook2 = new THREE.Vector4(), eyeFade = new THREE.Vector4(), eyeCr = new THREE.Vector4(), eyeCr2 = new THREE.Vector4(), eyeCr3 = new THREE.Vector4();
     // Доводим по частям, как медузу и светило ('' — все). ?parts= в адресе важнее.
     // petals — лепестки, eye — центральный глаз, eyes — малые глаза, tendrils — усики, rings — кольца.
     const DEFAULT_PARTS = 'eye';
@@ -136,13 +137,17 @@
         float eLid(float x) { return max(0.0, 1.0 - x * x); }                       // форма миндалины
         // Профиль кожи по радиусу r (набросок автора): до r0 — по сфере (веко облегает яблоко), от r0 кожа сходит
         // с неё по касательной и пологой S-кривой (кубика Эрмита) опускается на плоскость к r1.
-        uniform vec4 uCrease, uCrease2;      // x глубина борозды, y выпуклость, z высота, w ширина борозды; (bulgeDy, bulgeW, xw, тень верха)
+        uniform vec4 uCrease, uCrease2, uCrease3;      // x глубина борозды, y выпуклость, z высота, w ширина борозды; (bulgeDy, bulgeW, xw, тень верха)
         float eCrease(vec2 q) {              // складка верхнего века: борозда + нависающая кожа над ней; сходит на нет к уголкам
             if (q.y <= 0.0) return 0.0;
-            float xn = q.x / uCrease2.z, fx = sqrt(max(0.0, 1.0 - xn * xn));
-            float yc = E_HH * eLid(q.x) + (uCrease.z - E_HH) * fx;
+            // линия складки — плавная арка (по наброску автора): максимум в середине, к концам плавно опускается к y0;
+            // амплитуда (борозда и выпуклость) держится до uCrease3.x длины и плавно (smoothstep, без углов) уходит в ноль на концах
+            float u = min(1.0, abs(q.x) / uCrease2.z);
+            float arch = pow(max(0.0, 0.5 + 0.5 * cos(3.14159265 * u)), 0.75);
+            float yc = uCrease3.y + (uCrease.z - uCrease3.y) * arch;
+            float env = 1.0 - smoothstep(uCrease3.x, 1.0, u);
             float g = (q.y - yc) / uCrease.w, b = (q.y - yc - uCrease2.x) / uCrease2.y;
-            return fx * (-uCrease.x * exp(-g * g) + uCrease.y * exp(-b * b));
+            return env * (-uCrease.x * exp(-g * g) + uCrease.y * exp(-b * b));
         }
         float eDomeBase(vec2 q) {
             float R = E_RB + E_LID, r = length(vec2(q.x / 1.12, q.y));
@@ -459,9 +464,10 @@
             const domeC = (x, y) => {                                             // + складка верхнего века (= eCrease, GLSL)
                 let z = dome0(x, y);
                 if (y > 0) {
-                    const C = DP.config.seraphEye, xn = x / 1.7, fx = Math.sqrt(Math.max(0, 1 - xn * xn)), yc = EYE.hh * lid(x) + (C.creaseY - EYE.hh) * fx;
-                    const g = (y - yc) / C.creaseW, b = (y - yc - C.bulgeDy) / C.bulgeW;
-                    z += fx * (-C.creaseDepth * Math.exp(-g * g) + C.creaseBulge * Math.exp(-b * b));
+                    const C = DP.config.seraphEye, u = Math.min(1, Math.abs(x) / C.creaseHalf), arch = Math.pow(Math.max(0, 0.5 + 0.5 * Math.cos(Math.PI * u)), 0.75);
+                    const yc = C.creaseEnd + (C.creaseY - C.creaseEnd) * arch, t = Math.min(1, Math.max(0, (u - C.creaseFlat) / (1 - C.creaseFlat)));
+                    const env = 1 - t * t * (3 - 2 * t), g = (y - yc) / C.creaseW, b = (y - yc - C.bulgeDy) / C.bulgeW;
+                    z += env * (-C.creaseDepth * Math.exp(-g * g) + C.creaseBulge * Math.exp(-b * b));
                 }
                 return z;
             };
@@ -671,7 +677,8 @@
             const mEye = mat(eyeVertex, eyeFragment, { uSize: { value: 1.9 },
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
                 uCrease: { get value() { return eyeCr.set(EL.creaseDepth, EL.creaseBulge, EL.creaseY, EL.creaseW); } },
-                uCrease2: { get value() { return eyeCr2.set(EL.bulgeDy, EL.bulgeW, 1.7, EL.lidShadowTop); } },
+                uCrease2: { get value() { return eyeCr2.set(EL.bulgeDy, EL.bulgeW, EL.creaseHalf, EL.lidShadowTop); } },
+                uCrease3: { get value() { return eyeCr3.set(EL.creaseFlat, EL.creaseEnd, 0, 0); } },
                 uEyeFade: { get value() { return eyeFade.set(EL.fadeWave, EL.fadeSpeed, EL.fadeStart, 0); } },
                 uEyeLook2: { get value() { return eyeLook2.set(EL.light, EL.lidShadow, EL.halo, 0); } },
                 uRimW: { get value() { return EL.rimWidth; } }, uGaze: { value: gz.gaze }, uEyeC: { value: eyeC }, uEyeR: { value: eyeR } });
