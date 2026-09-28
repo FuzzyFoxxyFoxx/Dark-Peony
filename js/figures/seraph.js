@@ -114,14 +114,25 @@
     // яблоком и к краям уходит в ноль по прозрачности; в нём продольный разрез-миндалина: верхнее и нижнее веко
     // управляются отдельно (при закрытии кожа тянется к щели). Глазное яблоко — сфера под кожей, видна только в
     // разрезе; радужка и зрачок лежат на сфере, взгляд — поворот сферы (радужка сжимается в овал, уходит под веко).
-    const EYE = { ax: 1.55, ay: 0.95, hh: 0.42, dome: 0.3, rb: 1.05, zb: -0.78, iris: 0.38, pupil: 0.36 };
+    const EYE = { ax: 1.55, ay: 0.95, hh: 0.42, rb: 1.05, zb: -0.78, iris: 0.38, pupil: 0.36,
+                  lid: 0.05, flat: 0.12, hugIn: 0.55, hugOut: 1.3 };
+    // Профиль кожи (набросок автора): у разреза кожа облегает яблоко с зазором lid (толщина века), дальше
+    // S-образно спускается в ровную плоскость на уровне zb + flat (около середины яблока); hugIn…hugOut — где
+    // облегание переходит в плоскость (эллиптический радиус).
     const eyeGlsl = `
         const float E_AX = ${EYE.ax.toFixed(3)}, E_AY = ${EYE.ay.toFixed(3)}, E_HH = ${EYE.hh.toFixed(3)};
-        const float E_DOME = ${EYE.dome.toFixed(3)}, E_RB = ${EYE.rb.toFixed(3)}, E_ZB = ${EYE.zb.toFixed(3)};
+        const float E_RB = ${EYE.rb.toFixed(3)}, E_ZB = ${EYE.zb.toFixed(3)};
+        const float E_LID = ${EYE.lid.toFixed(3)}, E_FLAT = ${EYE.flat.toFixed(3)}, E_HIN = ${EYE.hugIn.toFixed(3)}, E_HOUT = ${EYE.hugOut.toFixed(3)};
         const float E_IRIS = ${EYE.iris.toFixed(3)}, E_PUP = ${EYE.pupil.toFixed(3)};
         float eLid(float x) { return max(0.0, 1.0 - x * x); }                       // форма миндалины
-        float eDome(vec2 q) { float e = (q.x / E_AX) * (q.x / E_AX) + (q.y / E_AY) * (q.y / E_AY);
-                              return E_DOME * pow(max(0.0, 1.0 - e), 0.7); }
+        float eDome(vec2 q) {
+            float R = E_RB + E_LID;
+            float hug = E_ZB + sqrt(max(0.0, R * R - dot(q, q)));                     // облегает яблоко
+            float el = length(vec2(q.x / 1.15, q.y / 0.9));
+            float w = 1.0 - smoothstep(E_HIN, E_HOUT, el);
+            w = w * w * (3.0 - 2.0 * w);                                              // S-образный спуск
+            return mix(E_ZB + E_FLAT, hug, w);
+        }
         // Точка кожи из положения в покое (глаз открыт) в текущее: веко oU/oL (0 — закрыто, 1 — открыто).
         vec2 eSkin(vec2 q, float oU, float oL) {
             float x = q.x;
@@ -401,7 +412,12 @@
                 ee.push(i, kind, 0, 0); eq.push(qx, qy); eS.push(sx, sy, sz);
                 ef.push(seededRandom(sd), seededRandom(sd * 1.7)); eatt.push(...E.att); es.push(seededRandom(sd * 2.3));
             };
-            const dome = (x, y) => { const e = (x / EYE.ax) ** 2 + (y / EYE.ay) ** 2; return EYE.dome * Math.pow(Math.max(0, 1 - e), 0.7); };
+            const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+            const dome = (x, y) => {                                              // = eDome (GLSL)
+                const R = EYE.rb + EYE.lid, hug = EYE.zb + Math.sqrt(Math.max(0, R * R - x * x - y * y));
+                let w = 1 - sm(EYE.hugIn, EYE.hugOut, Math.hypot(x / 1.15, y / 0.9)); w = w * w * (3 - 2 * w);
+                return EYE.zb + EYE.flat + (hug - EYE.zb - EYE.flat) * w;
+            };
             let sd = i * 977.1;
             // кожа: сетка рядками (как у лепестков), без точек в разрезе (глаз открыт)
             const hStep = 0.0105 / wShow * Math.sqrt(1 / Math.max(0.3, q));
