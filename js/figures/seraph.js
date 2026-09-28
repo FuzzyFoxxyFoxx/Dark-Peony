@@ -41,14 +41,18 @@
     // Вид глаза (ползунки ?tune — «Серафим: глаз»).
     DP.config.seraphEye = Object.assign({
         rim: 2.2, rimWidth: 0.06,      // кант по краю разреза: яркость, ширина (доли полуширины глаза)
-        ball: 2.4,                    // яркость глазного яблока (в середине; к краям — в тень)
+        ball: 4.8,                   // яркость глазного яблока (в середине; к краям — в тень)
         skinBase: 0.12, skinCurve: 0.8,  // кожа: базовая видимость, свечение изгибов (френель купола)
         light: 0.8,                   // источник света (сверху-слева-спереди): сила светотени на коже и яблоке
         fadeWave: 0.25, fadeSpeed: 0.0, fadeStart: 0.05,   // переход в прозрачность: неровность контура, скорость «гуляния», где начинается спад (доля радиуса)
-        halo: 2.2,                    // ореол складки над глазом (спереди)
+        creaseDepth: 0.10, creaseBulge: 0.16,   // складка верхнего века: глубина борозды, выпуклость кожи над ней
+        creaseY: 0.95, creaseW: 0.09,           // высота борозды над центром разреза, ширина борозды
+        bulgeDy: 0.40, bulgeW: 0.35,            // где (выше борозды) и насколько широко кожа выпячивается
+        lidShadowTop: 0.55,                     // тень верхнего века на яблоке шире, чем нижнего (меньше — шире)
+        halo: 2.2,                   // ореол складки над глазом (спереди)
         lidShadow: 0.5                // тень век на яблоке: у краёв разреза яблоко темнее
     }, DP.config.seraphEye || {});
-    const eyeLook = new THREE.Vector4(), eyeLook2 = new THREE.Vector4(), eyeFade = new THREE.Vector4();
+    const eyeLook = new THREE.Vector4(), eyeLook2 = new THREE.Vector4(), eyeFade = new THREE.Vector4(), eyeCr = new THREE.Vector4(), eyeCr2 = new THREE.Vector4();
     // Доводим по частям, как медузу и светило ('' — все). ?parts= в адресе важнее.
     // petals — лепестки, eye — центральный глаз, eyes — малые глаза, tendrils — усики, rings — кольца.
     const DEFAULT_PARTS = 'eye';
@@ -132,7 +136,15 @@
         float eLid(float x) { return max(0.0, 1.0 - x * x); }                       // форма миндалины
         // Профиль кожи по радиусу r (набросок автора): до r0 — по сфере (веко облегает яблоко), от r0 кожа сходит
         // с неё по касательной и пологой S-кривой (кубика Эрмита) опускается на плоскость к r1.
-        float eDome(vec2 q) {
+        uniform vec4 uCrease, uCrease2;      // x глубина борозды, y выпуклость, z высота, w ширина борозды; (bulgeDy, bulgeW, xw, тень верха)
+        float eCrease(vec2 q) {              // складка верхнего века: борозда + нависающая кожа над ней; сходит на нет к уголкам
+            if (q.y <= 0.0) return 0.0;
+            float xn = q.x / uCrease2.z, fx = sqrt(max(0.0, 1.0 - xn * xn));
+            float yc = E_HH * eLid(q.x) + (uCrease.z - E_HH) * fx;
+            float g = (q.y - yc) / uCrease.w, b = (q.y - yc - uCrease2.x) / uCrease2.y;
+            return fx * (-uCrease.x * exp(-g * g) + uCrease.y * exp(-b * b));
+        }
+        float eDomeBase(vec2 q) {
             float R = E_RB + E_LID, r = length(vec2(q.x / 1.12, q.y));
             float r0 = R * E_HIN, r1 = R * E_HOUT;
             float z0 = sqrt(R * R - r0 * r0), s0 = -r0 / z0, zf = E_FLAT;
@@ -141,6 +153,7 @@
             float L = r1 - r0, t = (r - r0) / L, t2 = t * t, t3 = t2 * t;
             return E_ZB + (2.0 * t3 - 3.0 * t2 + 1.0) * z0 + (t3 - 2.0 * t2 + t) * s0 * L + (-2.0 * t3 + 3.0 * t2) * zf;
         }
+        float eDome(vec2 q) { return eDomeBase(q) + eCrease(q); }
         // Точка кожи из положения в покое (глаз открыт) в текущее: веко oU/oL (0 — закрыто, 1 — открыто).
         vec2 eSkin(vec2 q, float oU, float oL) {
             float x = q.x;
@@ -231,7 +244,7 @@
                 vFres = sp.z;                                  // яблоко: к краям уходит в тень
                 vLit = dot(sp, E_LIGHT);
                 float lq = E_HH * eLid(loc.x), yU2 = mix(-lq * 0.85, lq, oU), yL2 = mix(lq * 0.1, -lq, oL);
-                float dS = abs(loc.x) < 1.0 ? min(yU2 - loc.y, loc.y - yL2) : 0.0;
+                float dS = abs(loc.x) < 1.0 ? min((yU2 - loc.y) * uCrease2.w, loc.y - yL2) : 0.0;
                 vShade = smoothstep(0.0, 0.32, dS);            // тень век: у края разреза темнее
             }
             float c = cos(er.x), s = sin(er.x);
@@ -442,6 +455,16 @@
                 const L = r1 - r0, t = (r - r0) / L, t2 = t * t, t3 = t2 * t;
                 return EYE.zb + (2 * t3 - 3 * t2 + 1) * z0 + (t3 - 2 * t2 + t) * s0 * L + (-2 * t3 + 3 * t2) * zf;
             };
+            const dome0 = dome;
+            const domeC = (x, y) => {                                             // + складка верхнего века (= eCrease, GLSL)
+                let z = dome0(x, y);
+                if (y > 0) {
+                    const C = DP.config.seraphEye, xn = x / 1.7, fx = Math.sqrt(Math.max(0, 1 - xn * xn)), yc = EYE.hh * lid(x) + (C.creaseY - EYE.hh) * fx;
+                    const g = (y - yc) / C.creaseW, b = (y - yc - C.bulgeDy) / C.bulgeW;
+                    z += fx * (-C.creaseDepth * Math.exp(-g * g) + C.creaseBulge * Math.exp(-b * b));
+                }
+                return z;
+            };
             let sd = i * 977.1;
             // кожа: сетка рядками (как у лепестков), без точек в разрезе (глаз открыт)
             const hStep = 0.0105 / wShow * Math.sqrt(1 / Math.max(0.3, q));
@@ -453,7 +476,7 @@
                 if (ee > 1) continue;
                 if (seededRandom(sd += 0.37) > 1 - 0.7 * Math.min(1, Math.max(0, (ee - 0.15) / 0.85))) continue;   // к краям реже
                 if (Math.abs(x) < 1 && Math.abs(y) < EYE.hh * lid(x)) continue;
-                push(0, x, y, x, y, dome(x, y), sd += 0.3);
+                push(0, x, y, x, y, domeC(x, y), sd += 0.3);
             }
             // радужка: волокна от зрачка к краю, на сфере яблока
             const nF = Math.round(260 * wShow / 0.46 * Math.sqrt(q)), nP = Math.round(24 * wShow / 0.46 * Math.sqrt(q) + 6);
@@ -647,6 +670,8 @@
             const EL = DP.config.seraphEye;
             const mEye = mat(eyeVertex, eyeFragment, { uSize: { value: 1.9 },
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
+                uCrease: { get value() { return eyeCr.set(EL.creaseDepth, EL.creaseBulge, EL.creaseY, EL.creaseW); } },
+                uCrease2: { get value() { return eyeCr2.set(EL.bulgeDy, EL.bulgeW, 1.7, EL.lidShadowTop); } },
                 uEyeFade: { get value() { return eyeFade.set(EL.fadeWave, EL.fadeSpeed, EL.fadeStart, 0); } },
                 uEyeLook2: { get value() { return eyeLook2.set(EL.light, EL.lidShadow, EL.halo, 0); } },
                 uRimW: { get value() { return EL.rimWidth; } }, uGaze: { value: gz.gaze }, uEyeC: { value: eyeC }, uEyeR: { value: eyeR } });
