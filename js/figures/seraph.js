@@ -45,7 +45,7 @@
         skinBase: 0.12, skinCurve: 0.8,  // кожа: базовая видимость, свечение изгибов (френель купола)
         light: 0.8,                   // источник света (сверху-слева-спереди): сила светотени на коже и яблоке
         halo: 2.2,                    // ореол складки над глазом (спереди)
-        lidShadow: 0.8                // тень век на яблоке: у краёв разреза яблоко темнее
+        lidShadow: 0.5                // тень век на яблоке: у краёв разреза яблоко темнее
     }, DP.config.seraphEye || {});
     const eyeLook = new THREE.Vector4(), eyeLook2 = new THREE.Vector4();
     // Доводим по частям, как медузу и светило ('' — все). ?parts= в адресе важнее.
@@ -127,7 +127,7 @@
         const float E_RB = ${EYE.rb.toFixed(3)}, E_ZB = ${EYE.zb.toFixed(3)};
         const float E_LID = ${EYE.lid.toFixed(3)}, E_FLAT = ${EYE.flat.toFixed(3)}, E_HIN = ${EYE.hugIn.toFixed(3)}, E_HOUT = ${EYE.hugOut.toFixed(3)};
         const float E_IRIS = ${EYE.iris.toFixed(3)}, E_PUP = ${EYE.pupil.toFixed(3)};
-        const vec3 E_LIGHT = vec3(-0.41, 0.68, 0.61);
+        const vec3 E_LIGHT = vec3(0.41, -0.68, 0.61);      // свет снизу-справа-спереди: тень складки ложится НАД глазом (как складка верхнего века)
         float eLid(float x) { return max(0.0, 1.0 - x * x); }                       // форма миндалины
         // Профиль кожи по радиусу r (набросок автора): до r0 — по сфере (веко облегает яблоко), от r0 кожа сходит
         // с неё по касательной и пологой S-кривой (кубика Эрмита) опускается на плоскость к r1.
@@ -201,7 +201,7 @@
                 vec2 d = vec2(eDome(q + vec2(0.02, 0.0)) - eDome(q - vec2(0.02, 0.0)), eDome(q + vec2(0.0, 0.02)) - eDome(q - vec2(0.0, 0.02))) / 0.04;
                 vFres = length(d);                             // крутизна купола — «френель» кожи
                 vec3 nrm = normalize(vec3(-d, 1.0));
-                vHalo = smoothstep(0.7, 1.5, vFres) * (0.2 + 0.8 * max(0.0, nrm.y));   // ореол складки над глазом (спереди: там, где склон круче и смотрит вверх)
+                vHalo = smoothstep(0.7, 1.5, vFres) * (0.2 + 0.8 * max(0.0, -nrm.y));   // ореол складки над глазом (спереди: там, где склон круче и смотрит вверх)
                 vLit = dot(nrm, E_LIGHT) - E_LIGHT.z;   // светотень: склоны к свету светлее, от света темнее
                 vA *= 1.0 - eInSlit(q, oU, oL);                // в разрезе кожи нет
                 // кант: край разреза подсвечен (как кромки лепестков пиона); в уголках глаза — тоже
@@ -255,7 +255,7 @@
             if (vKind < 0.5) k = max(0.0, (uEyeLook.z + uEyeLook.w * min(1.0, vFres * 1.4)) * (1.0 + uEyeLook2.x * vLit * 2.2)) + uEyeLook.x * vRim + uEyeLook2.z * vHalo;   // кожа (со светотенью) + кант + ореол складки
             else if (vKind < 2.5) k = 0.5 * (0.35 + 0.65 * vFres);          // радужка: тоже темнеет к краю яблока
             else if (vKind < 3.5) k = 0.18;                                 // лучи
-            else k = uEyeLook.y * (0.03 + 0.9 * pow(1.0 - max(0.0, vFres), 2.2) * (0.6 + 0.6 * uEyeLook2.x * max(0.0, vLit))) * mix(1.0, vShade, uEyeLook2.y);   // яблоко: середина почти невидима, к краям — френель (как у светила), у век — тень
+            else k = uEyeLook.y * (0.14 + 0.9 * pow(1.0 - max(0.0, vFres), 1.2) * (0.6 + 0.6 * uEyeLook2.x * max(0.0, vLit))) * mix(1.0, vShade, uEyeLook2.y);   // яблоко: середина почти невидима, к краям — френель (как у светила), у век — тень
             vec3 color = vKind < 2.5 && vKind > 1.5 ? vec3(0.7, 0.86, 1.0) : vec3(0.82, 0.93, 1.0);
             float a = tex.a * k * vA;
             a = a / (0.45 + a * 1.6) * vDepthK;
