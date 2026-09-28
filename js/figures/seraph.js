@@ -38,6 +38,10 @@
         { x: 0, y: -0.62, w: 0.22 }
     ];
     const ORDER_NOISE = 0.25;
+    // Доводим по частям, как медузу и светило ('' — все). ?parts= в адресе важнее.
+    // petals — лепестки, eye — центральный глаз, eyes — малые глаза, tendrils — усики, rings — кольца.
+    const DEFAULT_PARTS = 'eye';
+    const EYE_STUDY = 2.2;            // когда показан только центральный глаз — он крупнее, для разглядывания
 
     // ==========================================
     // GLSL
@@ -150,8 +154,9 @@
             vKind = kind;
             float sz = kind < 1.5 ? 1.25 : (kind < 2.5 ? 1.0 : 0.85);
             gl_PointSize = uSize * uViewportScale * (0.7 + aSizeScale * 0.5) * sz / (0.35 + 0.06 * dist);
-            if (vA < 0.01) gl_PointSize = 0.0;
             dpMorphFinish();
+            // спрятать: глаз не показан или точка закрыта веком (размер 0 на Metal не прячет — выносим за экран)
+            if (er.y < 0.5 || vA < 0.01) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; }
         }
     `;
     const eyeFragment = (G) => `
@@ -510,10 +515,14 @@
             const mat = (vs, fs, extra) => { const m = new THREE.ShaderMaterial(Object.assign({}, DP.pointsMaterialConfig, {
                 uniforms: Object.assign({}, common, extra, mu), vertexShader: vs(G), fragmentShader: fs(G) })); list.push(m); return m; };
             const gz = createGaze(data);
+            const partsParam = DP.params.get('parts') || DEFAULT_PARTS;
+            const show = (k) => !partsParam || partsParam.split(',').indexOf(k) >= 0;
+            const study = partsParam === 'eye' ? EYE_STUDY : 1;
             const eyeC = [], eyeR = [];
             for (let i = 0; i < MAX_EYES; i++) {
-                const E = data.eyes[i] || data.eyes[0];
-                eyeC.push(new THREE.Vector4(E.c[0], E.c[1], E.c[2], E.w)); eyeR.push(new THREE.Vector4(E.roll, 0, 0, 0));
+                const E = data.eyes[i] || data.eyes[0], main = i === 0;
+                eyeC.push(new THREE.Vector4(E.c[0], E.c[1], E.c[2], E.w * (main ? study : 1)));
+                eyeR.push(new THREE.Vector4(E.roll, (main ? show('eye') : show('eyes')) && i < data.eyes.length ? 1 : 0, 0, 0));
             }
             const uT0 = { value: 0 };
             const mPetal = mat(petalVertex, petalFragment, { uSize: { value: 2.0 } });
@@ -525,8 +534,10 @@
             const root = new THREE.Group();
             const meshRoot = new THREE.Group(), pointsRoot = new THREE.Group();
             root.add(meshRoot, pointsRoot);
-            pointsRoot.add(new THREE.Points(data.petalGeo, mPetal), new THREE.Points(data.eyeGeo, mEye),
-                           new THREE.Points(data.tendGeo, mTend), new THREE.Points(data.ringGeo, mRing));
+            if (show('petals')) pointsRoot.add(new THREE.Points(data.petalGeo, mPetal));
+            if (show('eye') || show('eyes')) pointsRoot.add(new THREE.Points(data.eyeGeo, mEye));
+            if (show('tendrils')) pointsRoot.add(new THREE.Points(data.tendGeo, mTend));
+            if (show('rings')) pointsRoot.add(new THREE.Points(data.ringGeo, mRing));
             const meshMat = new THREE.ShaderMaterial({
                 uniforms: Object.assign({}, mu),
                 vertexShader: `${G.meshVertex} varying vec3 vN, vV; void main(){ vDpOrder = aOrder; vec4 mv = modelViewMatrix * vec4(position, 1.0);
@@ -537,7 +548,7 @@
                 side: THREE.DoubleSide, transparent: true, depthWrite: false
             });
             list.push(meshMat);
-            data.meshes.forEach(g => meshRoot.add(new THREE.Mesh(g, meshMat)));
+            if (show('petals')) data.meshes.forEach(g => meshRoot.add(new THREE.Mesh(g, meshMat)));
 
             let lastT = -1e9;
             return {
