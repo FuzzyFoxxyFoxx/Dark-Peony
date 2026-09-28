@@ -45,19 +45,18 @@
         skinBase: 0.12, skinCurve: 0.8,  // кожа: базовая видимость, свечение изгибов (френель купола)
         light: 0.8,                   // источник света (сверху-слева-спереди): сила светотени на коже и яблоке
         fadeWave: 0.25, fadeSpeed: 0.0, fadeStart: 0.05,   // переход в прозрачность: неровность контура, скорость «гуляния», где начинается спад (доля радиуса)
-        // Кожа: гладкая база (веко облегает яблоко, потом S-спуск на плоскость; парабола вида сверху уводит плоскость назад к
-        // носу/уху) + складка верхнего века по профилю с рисунка автора (борозда и нависающая губа — круглые, к краям уходят в ноль).
-        lidT: 0.12,                   // толщина века у разреза (зазор до яблока); к уголкам сходит на нет
-        planeZ: 0.35, lowerSq: 1.35,  // уровень «плоскости лица» (0 — на уровне центра яблока); сжатие снизу (S-переход в скулу ближе)
-        paraA: 1.0, paraW: 1.25,      // парабола вида сверху: насколько плоскость уходит назад и с какой ширины
-        grooveDepth: 0.09, grooveW: 0.13, grooveS: 0.30,   // борозда: глубина, ширина, высота над краем разреза
-        bulge: 0.14, bulgeW: 0.26, bulgeDs: 0.22,          // нависающая складка над бороздой: высота, ширина, смещение вверх
-        creaseHalf: 1.4, creaseFlat: 0.35,   // полудлина борозды по x и где она начинает уходить в ноль (доля)
+        // Профиль кожи по референсу автора («Simple beginner version», вид сбоку): центральный профиль (PROF_UP/PROF_LO) +
+        // почти плоский краевой профиль, между ними плавный переход по x; сверху парабола (выгиб по горизонтали).
+        profDepth: 1.0,               // контрастность центрального профиля относительно краевого (1 — как на референсе, 0 — без борозды)
+        lidT: 0.10,                   // толщина века у разреза (зазор до яблока); к уголкам сходит на нет
+        lowerSq: 1.3,                 // сжатие нижнего профиля по y (S-переход в скулу ближе)
+        paraA: 1.35, paraW: 1.25,     // парабола вид сверху: насколько кожа уходит назад к носу/уху и с какой ширины
+        creaseHalf: 1.4, creaseFlat: 0.35,   // полудлина центрального профиля по x; где начинает переходить в краевой (доля)
         lidShadowTop: 0.55,           // тень верхнего века на яблоке шире, чем нижнего (меньше — шире)
         halo: 2.2,                   // ореол складки над глазом (спереди)
         lidShadow: 0.5                // тень век на яблоке: у краёв разреза яблоко темнее
     }, DP.config.seraphEye || {});
-    const eyeLook = new THREE.Vector4(), eyeLook2 = new THREE.Vector4(), eyeFade = new THREE.Vector4(), eyeCr = new THREE.Vector4(), eyeCr2 = new THREE.Vector4(), eyeCr3 = new THREE.Vector4(), eyeCr4 = new THREE.Vector4();
+    const eyeLook = new THREE.Vector4(), eyeLook2 = new THREE.Vector4(), eyeFade = new THREE.Vector4(), eyeCr = new THREE.Vector4(), eyeCr2 = new THREE.Vector4(), eyeCr3 = new THREE.Vector4();
     // Доводим по частям, как медузу и светило ('' — все). ?parts= в адресе важнее.
     // petals — лепестки, eye — центральный глаз, eyes — малые глаза, tendrils — усики, rings — кольца.
     const DEFAULT_PARTS = 'eye';
@@ -127,27 +126,52 @@
     // яблоком и к краям уходит в ноль по прозрачности; в нём продольный разрез-миндалина: верхнее и нижнее веко
     // управляются отдельно (при закрытии кожа тянется к щели). Глазное яблоко — сфера под кожей, видна только в
     // разрезе; радужка и зрачок лежат на сфере, взгляд — поворот сферы (радужка сжимается в овал, уходит под веко).
+    // Центральный профиль: (расстояние от края разреза, глубина z). Числа сняты с рисунка автора: z — вперёд от плоскости,
+    // вершина роговицы = 0.27. Верх: ресничный край → губа века → борозда (V) → надбровье; низ: край нижнего века → скула.
+    // Верх (центр): ресничный край → губа века → круглая борозда → круглое надбровье → плавно назад к плоскости.
+    const PROF_UP = [[0, 0.43], [0.10, 0.41], [0.20, 0.375], [0.31, 0.345], [0.43, 0.37], [0.58, 0.46], [0.78, 0.555], [1.0, 0.585], [1.35, 0.52], [1.8, 0.36], [2.4, 0.22]];
+    // Верх (у уголков): тот же ресничный край и губа века, но без борозды и надбровья — плавный спад.
+    const PROF_UPE = [[0, 0.43], [0.5, 0.405], [1.2, 0.35], [1.8, 0.28], [2.4, 0.20]];
+    // Низ: край нижнего века (на яблоке) → мягкий S-переход в скулу → плавно назад.
+    const PROF_LO = [[0, 0.30], [0.25, 0.26], [0.6, 0.14], [1.0, 0.02], [1.5, -0.08], [2.2, -0.14]];
+    const profTangents = (P) => P.map((p, i) => {                       // монотонные касательные; на дальнем конце наклон 0 (выход на плоскость)
+        const d = (k) => (P[k + 1][1] - P[k][1]) / (P[k + 1][0] - P[k][0]);
+        if (i === 0) return new THREE.Vector3(p[0], p[1], d(0));
+        if (i === P.length - 1) return new THREE.Vector3(p[0], p[1], 0);
+        const a = d(i - 1), b = d(i);
+        return new THREE.Vector3(p[0], p[1], a * b <= 0 ? 0 : 2 * a * b / (a + b));
+    });
+    const profU = profTangents(PROF_UP), profUE = profTangents(PROF_UPE), profL = profTangents(PROF_LO);
+    const profEval = (T, s) => {                                        // кубика Эрмита по узлам (s, z, наклон)
+        s = Math.min(T[T.length - 1].x, Math.max(T[0].x, s));
+        for (let i = 0; i < T.length - 1; i++) if (s <= T[i + 1].x) {
+            const a = T[i], b = T[i + 1], h = b.x - a.x, t = (s - a.x) / h, t2 = t * t, t3 = t2 * t;
+            return (2 * t3 - 3 * t2 + 1) * a.y + (t3 - 2 * t2 + t) * h * a.z + (-2 * t3 + 3 * t2) * b.y + (t3 - t2) * h * b.z;
+        }
+        return T[T.length - 1].y;
+    };
+    const profGlsl = (fn, un, n) => `
+        float ${fn}(float s) {
+            s = clamp(s, ${un}[0].x, ${un}[${n - 1}].x);
+            float z = ${un}[${n - 1}].y;
+            for (int i = 0; i < ${n - 1}; i++) { vec3 a = ${un}[i], b = ${un}[i + 1];
+                if (s >= a.x && s <= b.x) { float h = b.x - a.x, t = (s - a.x) / h, t2 = t * t, t3 = t2 * t;
+                    z = (2.0 * t3 - 3.0 * t2 + 1.0) * a.y + (t3 - 2.0 * t2 + t) * h * a.z + (-2.0 * t3 + 3.0 * t2) * b.y + (t3 - t2) * h * b.z; } }
+            return z;
+        }`;
     const smoothS = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
-    const eyeLidJS = (x) => Math.pow(Math.max(0, 1 - x * x), 0.55);       // = eLid (GLSL): скруглённая миндалина
+    const eyeLidJS = (x) => Math.pow(Math.max(0, 1 - x * x), 0.55);       // = eLid (GLSL): миндалина со скруглёнными уголками
+    const smax = (a, b, k) => 0.5 * (a + b + Math.sqrt((a - b) * (a - b) + k * k));
     const eyeSurfZ = (x, y) => {                                        // = eSurf(...).z (GLSL), для положений точек в покое
-        const C = DP.config.seraphEye, E = { rb: 1.05, zb: -0.78, hh: 0.42, hugIn: 0.85, hugOut: 1.5 };
-        const R = E.rb + C.lidT * (1 - smoothS(0.35, 1.0, Math.abs(x))), yy = y < 0 ? y * C.lowerSq : y;
-        const r = Math.hypot(x / 1.12, yy), r0 = R * E.hugIn, r1 = R * E.hugOut, xp = x / C.paraW;
-        const zf = C.planeZ - C.paraA * (1 - Math.exp(-xp * xp));
+        const C = DP.config.seraphEye, aa = eyeLidJS(x), lf = 0.42 * 0.5 * (aa + Math.sqrt(aa * aa + 0.01));
         let z;
-        if (r <= r0) z = E.zb + Math.sqrt(Math.max(0, R * R - r * r));
-        else if (r >= r1) z = E.zb + zf;
-        else {
-            const z0 = Math.sqrt(Math.max(1e-4, R * R - r0 * r0)), s0 = -r0 / z0, L = r1 - r0, t = (r - r0) / L, t2 = t * t, t3 = t2 * t;
-            z = E.zb + (2 * t3 - 3 * t2 + 1) * z0 + (t3 - 2 * t2 + t) * s0 * L + (-2 * t3 + 3 * t2) * zf;
-        }
-        if (y > 0) {
-            const aa = eyeLidJS(x), lf = E.hh * 0.5 * (aa + Math.sqrt(aa * aa + 0.01)), sd = y - lf;
-            const env = 1 - smoothS(C.creaseFlat * C.creaseHalf, C.creaseHalf, Math.abs(x));
-            const g = (sd - C.grooveS) / C.grooveW, b = (sd - C.grooveS - C.bulgeDs) / C.bulgeW;
-            z += env * (-C.grooveDepth * Math.exp(-g * g) + C.bulge * Math.exp(-b * b));
-        }
-        return z;
+        if (y >= 0) {
+            const sc = Math.max(0, y - lf), w = 1 - smoothS(C.creaseFlat, 1, Math.min(1, Math.abs(x) / C.creaseHalf)), ze = profEval(profUE, sc);
+            z = ze + C.profDepth * (profEval(profU, sc) - ze) * w;
+        } else z = profEval(profL, Math.max(0, -y - lf) * C.lowerSq);
+        z -= C.paraA * (1 - Math.exp(-(x / C.paraW) * (x / C.paraW)));
+        const R = 1.05 + C.lidT * (1 - smoothS(0.35, 1.0, Math.abs(x))), rr = x * x + y * y;   // век не уходит внутрь яблока
+        return rr < R * R ? smax(z, -0.78 + Math.sqrt(R * R - rr), 0.03) : z;
     };
     const EYE = { ax: 2.9, ay: 2.2, hh: 0.42, rb: 1.05, zb: -0.78, iris: 0.38, pupil: 0.36,
                   lid: 0.05, flat: 0.0, hugIn: 0.85, hugOut: 1.5, fadeIn: 0.2 };   // hugIn/hugOut — доли радиуса яблока: где кожа сходит с него и где ложится на плоскость
@@ -161,33 +185,29 @@
         const float E_IRIS = ${EYE.iris.toFixed(3)}, E_PUP = ${EYE.pupil.toFixed(3)};
         const vec3 E_LIGHT = vec3(0.41, -0.68, 0.61);      // свет снизу-справа-спереди: тень складки ложится НАД глазом (как складка верхнего века)
         float eLid(float x) { return pow(max(0.0, 1.0 - x * x), 0.55); }             // форма миндалины со скруглёнными уголками
-        // Профиль кожи по радиусу r (набросок автора): до r0 — по сфере (веко облегает яблоко), от r0 кожа сходит
-        // с неё по касательной и пологой S-кривой (кубика Эрмита) опускается на плоскость к r1.
-        uniform vec4 uCrease, uCrease2, uCrease3, uCrease4;   // (grooveDepth, grooveW, grooveS, bulge); (creaseFlat, creaseHalf, bulgeW, тень верха); (lidT, planeZ, paraA, paraW); (bulgeDs, lowerSq)
-        // База кожи: до r0 — по сфере (веко на зазоре lidT от яблока, к уголкам зазор → 0), от r0 — S-спуск (кубика Эрмита) на плоскость
-        // лица к r1; плоскость уходит назад по параболе вида сверху. Снизу масштаб по y больше — переход в скулу ближе.
-        float eDomeBase(vec2 q) {
-            float R = E_RB + uCrease3.x * (1.0 - smoothstep(0.35, 1.0, abs(q.x)));
-            float yy = q.y < 0.0 ? q.y * uCrease4.y : q.y;
-            float r = length(vec2(q.x / 1.12, yy));
-            float r0 = R * E_HIN, r1 = R * E_HOUT, xp = q.x / uCrease3.w;
-            float zf = uCrease3.y - uCrease3.z * (1.0 - exp(-xp * xp));
-            if (r <= r0) return E_ZB + sqrt(max(0.0, R * R - r * r));
-            if (r >= r1) return E_ZB + zf;
-            float z0 = sqrt(max(1e-4, R * R - r0 * r0)), s0 = -r0 / z0;
-            float L = r1 - r0, t = (r - r0) / L, t2 = t * t, t3 = t2 * t;
-            return E_ZB + (2.0 * t3 - 3.0 * t2 + 1.0) * z0 + (t3 - 2.0 * t2 + t) * s0 * L + (-2.0 * t3 + 3.0 * t2) * zf;
-        }
-        // Складка верхнего века: борозда и нависающая губа (круглые Гауссы), считаются от края разреза, поэтому повторяют его
-        // форму; по x уходят в ноль (uCrease2.x — где начинают, uCrease2.y — где кончаются).
+        uniform vec4 uCrease, uCrease2, uCrease3;   // (profDepth, lidT, paraA, paraW); (creaseFlat, creaseHalf, -, тень верхнего века); (lowerSq, -, -, -)
+        uniform vec3 uPU[${profU.length}], uPUE[${profUE.length}], uPL[${profL.length}];   // профили: (s, z, наклон)
+        ${profGlsl('ePU', 'uPU', profU.length)}
+        ${profGlsl('ePUE', 'uPUE', profUE.length)}
+        ${profGlsl('ePL', 'uPL', profL.length)}
+        float eSMax(float a, float b, float k) { return 0.5 * (a + b + sqrt((a - b) * (a - b) + k * k)); }
+        // Кожа по профилю с рисунка автора (вид сбоку). Профили отсчитываются от края разреза (миндалина сглажена, поэтому
+        // складка повторяет его форму). Верх: центральный профиль (борозда + надбровье) переходит по x в краевой (без них) —
+        // борозда уходит в ноль к концам. Низ: край века → S-переход в скулу (сжат по y на uCrease3.x). Парабола вида сверху
+        // уводит плоскость назад к носу/уху. Век не уходит внутрь яблока: сглаженный максимум с поверхностью яблока + толщина
+        // века (к уголкам толщина сходит на нет).
         vec3 eSurf(vec2 q) {
-            float z = eDomeBase(q);
-            if (q.y > 0.0) {
-                float aa = eLid(q.x), lf = E_HH * 0.5 * (aa + sqrt(aa * aa + 0.01));
-                float sd = q.y - lf, env = 1.0 - smoothstep(uCrease2.x * uCrease2.y, uCrease2.y, abs(q.x));
-                float g = (sd - uCrease.z) / uCrease.y, b = (sd - uCrease.z - uCrease4.x) / uCrease2.z;
-                z += env * (-uCrease.x * exp(-g * g) + uCrease.w * exp(-b * b));
-            }
+            float aa = eLid(q.x), lf = E_HH * 0.5 * (aa + sqrt(aa * aa + 0.01));
+            float z;
+            if (q.y >= 0.0) {
+                float sc = max(0.0, q.y - lf), u = min(1.0, abs(q.x) / uCrease2.y), w = 1.0 - smoothstep(uCrease2.x, 1.0, u);
+                float ze = ePUE(sc);
+                z = ze + uCrease.x * (ePU(sc) - ze) * w;
+            } else z = ePL(max(0.0, -q.y - lf) * uCrease3.x);
+            float xp = q.x / uCrease.w;
+            z -= uCrease.z * (1.0 - exp(-xp * xp));
+            float R = E_RB + uCrease.y * (1.0 - smoothstep(0.35, 1.0, abs(q.x))), rr = q.x * q.x + q.y * q.y;
+            if (rr < R * R) z = eSMax(z, E_ZB + sqrt(R * R - rr), 0.03);
             return vec3(q, z);
         }
         float eDome(vec2 q) { return eSurf(q).z; }
@@ -693,10 +713,10 @@
             const EL = DP.config.seraphEye;
             const mEye = mat(eyeVertex, eyeFragment, { uSize: { value: 1.9 },
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
-                uCrease: { get value() { return eyeCr.set(EL.grooveDepth, EL.grooveW, EL.grooveS, EL.bulge); } },
-                uCrease2: { get value() { return eyeCr2.set(EL.creaseFlat, EL.creaseHalf, EL.bulgeW, EL.lidShadowTop); } },
-                uCrease3: { get value() { return eyeCr3.set(EL.lidT, EL.planeZ, EL.paraA, EL.paraW); } },
-                uCrease4: { get value() { return eyeCr4.set(EL.bulgeDs, EL.lowerSq, 0, 0); } },
+                uCrease: { get value() { return eyeCr.set(EL.profDepth, EL.lidT, EL.paraA, EL.paraW); } },
+                uCrease3: { get value() { return eyeCr3.set(EL.lowerSq, 0, 0, 0); } },
+                uCrease2: { get value() { return eyeCr2.set(EL.creaseFlat, EL.creaseHalf, 0, EL.lidShadowTop); } },
+                uPU: { value: profU }, uPUE: { value: profUE }, uPL: { value: profL },
                 uEyeFade: { get value() { return eyeFade.set(EL.fadeWave, EL.fadeSpeed, EL.fadeStart, 0); } },
                 uEyeLook2: { get value() { return eyeLook2.set(EL.light, EL.lidShadow, EL.halo, 0); } },
                 uRimW: { get value() { return EL.rimWidth; } }, uGaze: { value: gz.gaze }, uEyeC: { value: eyeC }, uEyeR: { value: eyeR } });
