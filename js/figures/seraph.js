@@ -45,10 +45,10 @@
         skinBase: 0.12, skinCurve: 0.8,  // кожа: базовая видимость, свечение изгибов (френель купола)
         light: 0.8,                   // источник света (сверху-слева-спереди): сила светотени на коже и яблоке
         fadeWave: 0.25, fadeSpeed: 0.0, fadeStart: 0.05,   // переход в прозрачность: неровность контура, скорость «гуляния», где начинается спад (доля радиуса)
-        creaseDepth: 0.10, creaseBulge: 0.16,   // складка верхнего века: глубина борозды, выпуклость кожи над ней
+        creaseDepth: 0.10, creaseBulge: 0.13, creaseOver: 0.26,   // складка верхнего века: глубина борозды, выпуклость кожи над ней
         creaseY: 0.78, creaseW: 0.09,           // высота борозды над центром разреза, ширина борозды
         creaseHalf: 1.55, creaseEnd: 0.22, creaseFlat: 0.6,   // полудлина линии складки, высота её концов, где начинает выравниваться (доля полудлины)
-        bulgeDy: 0.40, bulgeW: 0.35,            // где (выше борозды) и насколько широко кожа выпячивается
+        bulgeDy: 0.40, bulgeW: 0.30,            // где (выше борозды) и насколько широко кожа выпячивается
         lidShadowTop: 0.55,                     // тень верхнего века на яблоке шире, чем нижнего (меньше — шире)
         halo: 2.2,                   // ореол складки над глазом (спереди)
         lidShadow: 0.5                // тень век на яблоке: у краёв разреза яблоко темнее
@@ -138,17 +138,8 @@
         // Профиль кожи по радиусу r (набросок автора): до r0 — по сфере (веко облегает яблоко), от r0 кожа сходит
         // с неё по касательной и пологой S-кривой (кубика Эрмита) опускается на плоскость к r1.
         uniform vec4 uCrease, uCrease2, uCrease3;      // x глубина борозды, y выпуклость, z высота, w ширина борозды; (bulgeDy, bulgeW, xw, тень верха)
-        float eCrease(vec2 q) {              // складка верхнего века: борозда + нависающая кожа над ней; сходит на нет к уголкам
-            if (q.y <= 0.0) return 0.0;
-            // линия складки — плавная арка (по наброску автора): максимум в середине, к концам плавно опускается к y0;
-            // амплитуда (борозда и выпуклость) держится до uCrease3.x длины и плавно (smoothstep, без углов) уходит в ноль на концах
-            float u = min(1.0, abs(q.x) / uCrease2.z);
-            float arch = pow(max(0.0, 0.5 + 0.5 * cos(3.14159265 * u)), 0.75);
-            float yc = uCrease3.y + (uCrease.z - uCrease3.y) * arch;
-            float env = 1.0 - smoothstep(uCrease3.x, 1.0, u);
-            float g = (q.y - yc) / uCrease.w, b = (q.y - yc - uCrease2.x) / uCrease2.y;
-            return env * (-uCrease.x * exp(-g * g) + uCrease.y * exp(-b * b));
-        }
+        // Складка — не «холм над плоскостью», а настоящий навес: верхняя губа складки смещается не только вперёд (z),
+        // но и вниз по y (к глазу), поэтому нависает над бороздой (профиль с загибом, как у настоящего века).
         float eDomeBase(vec2 q) {
             float R = E_RB + E_LID, r = length(vec2(q.x / 1.12, q.y));
             float r0 = R * E_HIN, r1 = R * E_HOUT;
@@ -158,7 +149,20 @@
             float L = r1 - r0, t = (r - r0) / L, t2 = t * t, t3 = t2 * t;
             return E_ZB + (2.0 * t3 - 3.0 * t2 + 1.0) * z0 + (t3 - 2.0 * t2 + t) * s0 * L + (-2.0 * t3 + 3.0 * t2) * zf;
         }
-        float eDome(vec2 q) { return eDomeBase(q) + eCrease(q); }
+        vec3 eSurf(vec2 q) {                 // точка кожи (x, y, z) для точки лоскута q
+            float zz = eDomeBase(q);
+            if (q.y <= 0.0) return vec3(q, zz);
+            // линия складки — плавная арка (по наброску автора): максимум в середине, к концам опускается к uCrease3.y;
+            // амплитуда держится до uCrease3.x длины и плавно (smoothstep) уходит в ноль на концах
+            float u = min(1.0, abs(q.x) / uCrease2.z);
+            float arch = pow(max(0.0, 0.5 + 0.5 * cos(3.14159265 * u)), 0.75);
+            float yc = uCrease3.y + (uCrease.z - uCrease3.y) * arch;
+            float env = 1.0 - smoothstep(uCrease3.x, 1.0, u);
+            float g = (q.y - yc) / uCrease.w, b = (q.y - yc - uCrease2.x) / uCrease2.y;
+            float G = env * exp(-b * b);                     // губа складки над бороздой
+            return vec3(q.x, q.y - uCrease3.z * G, zz - env * uCrease.x * exp(-g * g) + uCrease.y * G);
+        }
+        float eDome(vec2 q) { return eSurf(q).z; }
         // Точка кожи из положения в покое (глаз открыт) в текущее: веко oU/oL (0 — закрыто, 1 — открыто).
         vec2 eSkin(vec2 q, float oU, float oL) {
             float x = q.x;
@@ -215,7 +219,7 @@
             vec3 loc; vA = 1.0; vFres = 0.0; vRim = 0.0; vLit = 0.0; vShade = 1.0; vHalo = 0.0;
             if (kind < 0.5) {                                  // кожа
                 vec2 q = eSkin(aQ, oU, oL);
-                loc = vec3(q, eDome(q));
+                loc = eSurf(q);
                 float e = (q.x / E_AX) * (q.x / E_AX) + (q.y / E_AY) * (q.y / E_AY);
                 // прозрачность к краю лоскута: широкий мягкий переход; контур неровный — сумма синусоид с разным шагом и размахом (uEyeFade.x — размах, .y — скорость «гуляния»)
                 float th = atan(q.y / E_AY, q.x / E_AX), tt = uTime * uEyeFade.y + float(ei) * 1.7;
@@ -223,11 +227,14 @@
                 float rr = sqrt(e) * (1.0 + uEyeFade.x * (0.5 + 0.5 * wob));   // контур уходит только внутрь
                 vA = 1.0 - smoothstep(uEyeFade.z, 1.0, rr);
                 vA *= vA;                                                   // хвост мягче
-                vec2 d = vec2(eDome(q + vec2(0.02, 0.0)) - eDome(q - vec2(0.02, 0.0)), eDome(q + vec2(0.0, 0.02)) - eDome(q - vec2(0.0, 0.02))) / 0.04;
-                vFres = length(d);                             // крутизна купола — «френель» кожи
-                vec3 nrm = normalize(vec3(-d, 1.0));
-                vHalo = smoothstep(0.7, 1.5, vFres) * (0.2 + 0.8 * max(0.0, -nrm.y));   // ореол складки над глазом (спереди: там, где склон круче и смотрит вверх)
-                vLit = dot(nrm, E_LIGHT) - E_LIGHT.z;   // светотень: склоны к свету светлее, от света темнее
+                vec2 d = vec2(eDomeBase(q + vec2(0.02, 0.0)) - eDomeBase(q - vec2(0.02, 0.0)), eDomeBase(q + vec2(0.0, 0.02)) - eDomeBase(q - vec2(0.0, 0.02))) / 0.04;
+                vFres = length(d);                             // крутизна гладкого S-профиля — «френель» кожи (без складки, чтобы не давала лишних слоёв)
+                vec3 nb = normalize(vec3(-d, 1.0));
+                vHalo = smoothstep(0.7, 1.5, vFres) * (0.2 + 0.8 * max(0.0, -nb.y));   // ореол складки (спереди): склон круче и смотрит вниз
+                // светотень — по настоящей нормали поверхности со складкой (с навесом)
+                vec3 sx = eSurf(q + vec2(0.015, 0.0)) - eSurf(q - vec2(0.015, 0.0)), sy = eSurf(q + vec2(0.0, 0.015)) - eSurf(q - vec2(0.0, 0.015));
+                vec3 nrm = normalize(cross(sx, sy));
+                vLit = dot(nrm, E_LIGHT) - E_LIGHT.z;
                 vA *= 1.0 - eInSlit(q, oU, oL);                // в разрезе кожи нет
                 // кант: край разреза подсвечен (как кромки лепестков пиона); в уголках глаза — тоже
                 float l = E_HH * eLid(q.x);
@@ -678,7 +685,7 @@
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
                 uCrease: { get value() { return eyeCr.set(EL.creaseDepth, EL.creaseBulge, EL.creaseY, EL.creaseW); } },
                 uCrease2: { get value() { return eyeCr2.set(EL.bulgeDy, EL.bulgeW, EL.creaseHalf, EL.lidShadowTop); } },
-                uCrease3: { get value() { return eyeCr3.set(EL.creaseFlat, EL.creaseEnd, 0, 0); } },
+                uCrease3: { get value() { return eyeCr3.set(EL.creaseFlat, EL.creaseEnd, EL.creaseOver, 0); } },
                 uEyeFade: { get value() { return eyeFade.set(EL.fadeWave, EL.fadeSpeed, EL.fadeStart, 0); } },
                 uEyeLook2: { get value() { return eyeLook2.set(EL.light, EL.lidShadow, EL.halo, 0); } },
                 uRimW: { get value() { return EL.rimWidth; } }, uGaze: { value: gz.gaze }, uEyeC: { value: eyeC }, uEyeR: { value: eyeR } });
