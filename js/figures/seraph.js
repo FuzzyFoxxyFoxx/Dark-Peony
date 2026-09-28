@@ -44,6 +44,7 @@
         ball: 2.4,                    // яркость глазного яблока (в середине; к краям — в тень)
         skinBase: 0.12, skinCurve: 0.8,  // кожа: базовая видимость, свечение изгибов (френель купола)
         light: 0.8,                   // источник света (сверху-слева-спереди): сила светотени на коже и яблоке
+        halo: 2.2,                    // ореол складки над глазом (спереди)
         lidShadow: 0.8                // тень век на яблоке: у краёв разреза яблоко темнее
     }, DP.config.seraphEye || {});
     const eyeLook = new THREE.Vector4(), eyeLook2 = new THREE.Vector4();
@@ -117,7 +118,7 @@
     // управляются отдельно (при закрытии кожа тянется к щели). Глазное яблоко — сфера под кожей, видна только в
     // разрезе; радужка и зрачок лежат на сфере, взгляд — поворот сферы (радужка сжимается в овал, уходит под веко).
     const EYE = { ax: 2.9, ay: 2.2, hh: 0.42, rb: 1.05, zb: -0.78, iris: 0.38, pupil: 0.36,
-                  lid: 0.05, flat: 0.0, hugIn: 0.85, hugOut: 1.5, fadeIn: 0.62 };   // hugIn/hugOut — доли радиуса яблока: где кожа сходит с него и где ложится на плоскость
+                  lid: 0.05, flat: 0.0, hugIn: 0.85, hugOut: 1.5, fadeIn: 0.2 };   // hugIn/hugOut — доли радиуса яблока: где кожа сходит с него и где ложится на плоскость
     // Профиль кожи (набросок автора): у разреза кожа облегает яблоко с зазором lid (толщина века), дальше
     // S-образно спускается в ровную плоскость на уровне zb + flat (около середины яблока); hugIn…hugOut — где
     // облегание переходит в плоскость (эллиптический радиус).
@@ -184,14 +185,14 @@
         attribute vec3 aS;
         attribute float aSizeScale;
         uniform float uRimW;
-        varying float vA, vKind, vFres, vRim, vLit, vShade;
+        varying float vA, vKind, vFres, vRim, vLit, vShade, vHalo;
         void main() {
             int ei = int(aE.x + 0.5);
             vec4 gz = uGaze[0], ec = uEyeC[0], er = uEyeR[0];
             for (int i = 0; i < ${MAX_EYES}; i++) if (i == ei) { gz = uGaze[i]; ec = uEyeC[i]; er = uEyeR[i]; }
             float kind = aE.y;
             float oU = gz.w, oL = 0.82 + 0.18 * gz.w;           // нижнее веко почти не двигается
-            vec3 loc; vA = 1.0; vFres = 0.0; vRim = 0.0; vLit = 0.0; vShade = 1.0;
+            vec3 loc; vA = 1.0; vFres = 0.0; vRim = 0.0; vLit = 0.0; vShade = 1.0; vHalo = 0.0;
             if (kind < 0.5) {                                  // кожа
                 vec2 q = eSkin(aQ, oU, oL);
                 loc = vec3(q, eDome(q));
@@ -199,7 +200,9 @@
                 vA = 1.0 - smoothstep(${EYE.fadeIn.toFixed(3)}, 1.0, e);   // в ноль — только на краю, уже на «равнине»
                 vec2 d = vec2(eDome(q + vec2(0.02, 0.0)) - eDome(q - vec2(0.02, 0.0)), eDome(q + vec2(0.0, 0.02)) - eDome(q - vec2(0.0, 0.02))) / 0.04;
                 vFres = length(d);                             // крутизна купола — «френель» кожи
-                vLit = dot(normalize(vec3(-d, 1.0)), E_LIGHT) - E_LIGHT.z;   // светотень: склоны к свету светлее, от света темнее
+                vec3 nrm = normalize(vec3(-d, 1.0));
+                vHalo = smoothstep(0.7, 1.5, vFres) * (0.2 + 0.8 * max(0.0, nrm.y));   // ореол складки над глазом (спереди: там, где склон круче и смотрит вверх)
+                vLit = dot(nrm, E_LIGHT) - E_LIGHT.z;   // светотень: склоны к свету светлее, от света темнее
                 vA *= 1.0 - eInSlit(q, oU, oL);                // в разрезе кожи нет
                 // кант: край разреза подсвечен (как кромки лепестков пиона); в уголках глаза — тоже
                 float l = E_HH * eLid(q.x);
@@ -234,7 +237,7 @@
             float dist = max(-mv.z, 0.1);
             ${depthVert}
             vKind = kind;
-            gl_PointSize = uSize * uViewportScale * (0.7 + aSizeScale * 0.5) / (0.35 + 0.06 * dist);
+            gl_PointSize = uSize * uViewportScale * (0.7 + aSizeScale * 0.5) * (kind > 3.5 ? 0.7 : 1.0) / (0.35 + 0.06 * dist);
             dpMorphFinish();
             // спрятать: глаз не показан или точка закрыта (размер 0 на Metal не прячет — выносим за экран)
             if (er.y < 0.5 || vA < 0.01) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; }
@@ -244,15 +247,15 @@
         ${G.pointsFragment}
         uniform sampler2D uTexture;
         uniform vec4 uEyeLook, uEyeLook2;           // x — кант, y — яркость яблока, z — кожа: база, w — кожа: изгибы
-        varying float vA, vKind, vFres, vRim, vLit, vShade, vDepthK;
+        varying float vA, vKind, vFres, vRim, vLit, vShade, vHalo, vDepthK;
         void main() {
             vec4 tex = texture2D(uTexture, gl_PointCoord);
             if (tex.a < 0.01) discard;
             float k;
-            if (vKind < 0.5) k = max(0.0, (uEyeLook.z + uEyeLook.w * min(1.0, vFres * 1.4)) * (1.0 + uEyeLook2.x * vLit * 2.2)) + uEyeLook.x * vRim;   // кожа (со светотенью) + кант
+            if (vKind < 0.5) k = max(0.0, (uEyeLook.z + uEyeLook.w * min(1.0, vFres * 1.4)) * (1.0 + uEyeLook2.x * vLit * 2.2)) + uEyeLook.x * vRim + uEyeLook2.z * vHalo;   // кожа (со светотенью) + кант + ореол складки
             else if (vKind < 2.5) k = 0.5 * (0.35 + 0.65 * vFres);          // радужка: тоже темнеет к краю яблока
             else if (vKind < 3.5) k = 0.18;                                 // лучи
-            else k = uEyeLook.y * (0.05 + pow(max(0.0, vFres), 2.4) * (0.75 + 0.5 * uEyeLook2.x * max(0.0, vLit))) * mix(1.0, vShade, uEyeLook2.y);   // яблоко: светлое в середине, края и тень век — темнее
+            else k = uEyeLook.y * (0.03 + 0.9 * pow(1.0 - max(0.0, vFres), 2.2) * (0.6 + 0.6 * uEyeLook2.x * max(0.0, vLit))) * mix(1.0, vShade, uEyeLook2.y);   // яблоко: середина почти невидима, к краям — френель (как у светила), у век — тень
             vec3 color = vKind < 2.5 && vKind > 1.5 ? vec3(0.7, 0.86, 1.0) : vec3(0.82, 0.93, 1.0);
             float a = tex.a * k * vA;
             a = a / (0.45 + a * 1.6) * vDepthK;
@@ -457,13 +460,17 @@
                     push(2, t, ph, x, y, z, sd += 0.3);
                 }
             }
-            // белок: точки по сфере яблока (кроме дальней задней шапки — она в разрез никогда не попадает)
-            const nS = Math.round(8000 * (wShow / 0.46) ** 2 * q);
-            for (let k = 0; k < nS; k++) {
-                const zz = 0.12 + seededRandom(sd += 1.9) * 0.88, a = seededRandom(sd += 2.1) * Math.PI * 2, r = Math.sqrt(1 - zz * zz);
-                const sx = r * Math.cos(a), sy = r * Math.sin(a);
-                if (Math.acos(zz) < EYE.iris * 1.02) continue;                  // под радужкой белка нет
-                push(4, 0, 0, sx * EYE.rb, sy * EYE.rb, zz * EYE.rb + EYE.zb, sd += 0.5, sx, sy, zz);
+            // белок: точки по сфере яблока рядками-параллелями (как ядро светила), без хаоса; дальняя задняя шапка в разрез не попадает
+            const dRow = hStep * 1.25 / EYE.rb, dAlong = hStep / EYE.rb;
+            for (let yy = -1 + dRow * 0.5; yy < 1; yy += dRow) {
+                const rr = Math.sqrt(1 - yy * yy), nA = Math.max(6, Math.ceil(2 * Math.PI * rr / dAlong)), a0 = seededRandom(sd += 1.7) * 6.28;
+                for (let k = 0; k < nA; k++) {
+                    const a = a0 + (k + (seededRandom(sd += 2.1) - 0.5) * 0.3) / nA * Math.PI * 2;
+                    const yj = yy + (seededRandom(sd += 1.9) - 0.5) * 0.3 * dRow;      // разброс поперёк рядка ±0.15
+                    const r2 = Math.sqrt(Math.max(0, 1 - yj * yj)), sx = r2 * Math.sin(a), sz = r2 * Math.cos(a), sy = yj;
+                    if (sz < 0.12 || Math.acos(sz) < EYE.iris * 1.02) continue;    // под радужкой белка нет
+                    push(4, 0, 0, sx * EYE.rb, sy * EYE.rb, sz * EYE.rb + EYE.zb, sd += 0.5, sx, sy, sz);
+                }
             }
             // лучи вокруг большого глаза
             if (E.main) {
@@ -633,7 +640,7 @@
             const EL = DP.config.seraphEye;
             const mEye = mat(eyeVertex, eyeFragment, { uSize: { value: 1.9 },
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
-                uEyeLook2: { get value() { return eyeLook2.set(EL.light, EL.lidShadow, 0, 0); } },
+                uEyeLook2: { get value() { return eyeLook2.set(EL.light, EL.lidShadow, EL.halo, 0); } },
                 uRimW: { get value() { return EL.rimWidth; } }, uGaze: { value: gz.gaze }, uEyeC: { value: eyeC }, uEyeR: { value: eyeR } });
             const mTend = mat(tendrilVertex, tendrilFragment, { uSize: { value: 2.0 } });
             const ringU = data.RINGS.map(R => new THREE.Vector4(R.axis[0], R.axis[1], R.axis[2], R.speed));
