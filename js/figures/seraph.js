@@ -114,8 +114,8 @@
     // яблоком и к краям уходит в ноль по прозрачности; в нём продольный разрез-миндалина: верхнее и нижнее веко
     // управляются отдельно (при закрытии кожа тянется к щели). Глазное яблоко — сфера под кожей, видна только в
     // разрезе; радужка и зрачок лежат на сфере, взгляд — поворот сферы (радужка сжимается в овал, уходит под веко).
-    const EYE = { ax: 1.55, ay: 0.95, hh: 0.42, rb: 1.05, zb: -0.78, iris: 0.38, pupil: 0.36,
-                  lid: 0.05, flat: 0.12, hugIn: 0.55, hugOut: 1.3 };
+    const EYE = { ax: 2.9, ay: 2.2, hh: 0.42, rb: 1.05, zb: -0.78, iris: 0.38, pupil: 0.36,
+                  lid: 0.05, flat: 0.0, hugIn: 0.7, hugOut: 2.1, fadeIn: 0.62 };   // hugIn/hugOut — доли радиуса яблока: где кожа сходит с него и где ложится на плоскость
     // Профиль кожи (набросок автора): у разреза кожа облегает яблоко с зазором lid (толщина века), дальше
     // S-образно спускается в ровную плоскость на уровне zb + flat (около середины яблока); hugIn…hugOut — где
     // облегание переходит в плоскость (эллиптический радиус).
@@ -125,13 +125,16 @@
         const float E_LID = ${EYE.lid.toFixed(3)}, E_FLAT = ${EYE.flat.toFixed(3)}, E_HIN = ${EYE.hugIn.toFixed(3)}, E_HOUT = ${EYE.hugOut.toFixed(3)};
         const float E_IRIS = ${EYE.iris.toFixed(3)}, E_PUP = ${EYE.pupil.toFixed(3)};
         float eLid(float x) { return max(0.0, 1.0 - x * x); }                       // форма миндалины
+        // Профиль кожи по радиусу r (набросок автора): до r0 — по сфере (веко облегает яблоко), от r0 кожа сходит
+        // с неё по касательной и пологой S-кривой (кубика Эрмита) опускается на плоскость к r1.
         float eDome(vec2 q) {
-            float R = E_RB + E_LID;
-            float hug = E_ZB + sqrt(max(0.0, R * R - dot(q, q)));                     // облегает яблоко
-            float el = length(vec2(q.x / 1.15, q.y / 0.9));
-            float w = 1.0 - smoothstep(E_HIN, E_HOUT, el);
-            w = w * w * (3.0 - 2.0 * w);                                              // S-образный спуск
-            return mix(E_ZB + E_FLAT, hug, w);
+            float R = E_RB + E_LID, r = length(vec2(q.x / 1.12, q.y));
+            float r0 = R * E_HIN, r1 = R * E_HOUT;
+            float z0 = sqrt(R * R - r0 * r0), s0 = -r0 / z0, zf = E_FLAT;
+            if (r <= r0) return E_ZB + sqrt(max(0.0, R * R - r * r));
+            if (r >= r1) return E_ZB + zf;
+            float L = r1 - r0, t = (r - r0) / L, t2 = t * t, t3 = t2 * t;
+            return E_ZB + (2.0 * t3 - 3.0 * t2 + 1.0) * z0 + (t3 - 2.0 * t2 + t) * s0 * L + (-2.0 * t3 + 3.0 * t2) * zf;
         }
         // Точка кожи из положения в покое (глаз открыт) в текущее: веко oU/oL (0 — закрыто, 1 — открыто).
         vec2 eSkin(vec2 q, float oU, float oL) {
@@ -190,7 +193,7 @@
                 vec2 q = eSkin(aQ, oU, oL);
                 loc = vec3(q, eDome(q));
                 float e = (q.x / E_AX) * (q.x / E_AX) + (q.y / E_AY) * (q.y / E_AY);
-                vA = 1.0 - smoothstep(0.25, 1.0, e);           // к краям лоскута — в ноль
+                vA = 1.0 - smoothstep(${EYE.fadeIn.toFixed(3)}, 1.0, e);   // в ноль — только на краю, уже на «равнине»
                 vec2 d = vec2(eDome(q + vec2(0.02, 0.0)) - eDome(q - vec2(0.02, 0.0)), eDome(q + vec2(0.0, 0.02)) - eDome(q - vec2(0.0, 0.02))) / 0.04;
                 vFres = length(d);                             // крутизна купола — «френель» кожи
                 vA *= 1.0 - eInSlit(q, oU, oL);                // в разрезе кожи нет
@@ -210,7 +213,7 @@
                 } else sp = aS;
                 sp = eRotGaze(sp, gz.xy);
                 loc = sp * E_RB + vec3(0.0, 0.0, E_ZB);
-                vA = step(0.0, sp.z) * eInSlit(loc.xy, oU, oL);
+                vA = smoothstep(0.2, 0.3, sp.z) * eInSlit(loc.xy, oU, oL);    // только передняя часть яблока — та, что видна в разрезе
                 vFres = sp.z;                                  // яблоко: к краям уходит в тень
             }
             float c = cos(er.x), s = sin(er.x);
@@ -414,9 +417,12 @@
             };
             const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
             const dome = (x, y) => {                                              // = eDome (GLSL)
-                const R = EYE.rb + EYE.lid, hug = EYE.zb + Math.sqrt(Math.max(0, R * R - x * x - y * y));
-                let w = 1 - sm(EYE.hugIn, EYE.hugOut, Math.hypot(x / 1.15, y / 0.9)); w = w * w * (3 - 2 * w);
-                return EYE.zb + EYE.flat + (hug - EYE.zb - EYE.flat) * w;
+                const R = EYE.rb + EYE.lid, r = Math.hypot(x / 1.12, y), r0 = R * EYE.hugIn, r1 = R * EYE.hugOut;
+                const z0 = Math.sqrt(R * R - r0 * r0), s0 = -r0 / z0, zf = EYE.flat;
+                if (r <= r0) return EYE.zb + Math.sqrt(Math.max(0, R * R - r * r));
+                if (r >= r1) return EYE.zb + zf;
+                const L = r1 - r0, t = (r - r0) / L, t2 = t * t, t3 = t2 * t;
+                return EYE.zb + (2 * t3 - 3 * t2 + 1) * z0 + (t3 - 2 * t2 + t) * s0 * L + (-2 * t3 + 3 * t2) * zf;
             };
             let sd = i * 977.1;
             // кожа: сетка рядками (как у лепестков), без точек в разрезе (глаз открыт)
@@ -425,7 +431,9 @@
             for (let a = 0; a <= nX; a++) for (let b = 0; b <= nY; b++) for (let m = 0; m < 2; m++) {
                 const x = -EYE.ax + (a + (seededRandom(sd += 1.1) - 0.5) * 0.8) * hStep;
                 const y = -EYE.ay + (b + (seededRandom(sd += 1.3) - 0.5) * 0.3) * hStep * 1.25;
-                if ((x / EYE.ax) ** 2 + (y / EYE.ay) ** 2 > 1) continue;
+                const ee = (x / EYE.ax) ** 2 + (y / EYE.ay) ** 2;
+                if (ee > 1) continue;
+                if (seededRandom(sd += 0.37) > 1 - 0.7 * Math.min(1, Math.max(0, (ee - 0.15) / 0.85))) continue;   // к краям реже
                 if (Math.abs(x) < 1 && Math.abs(y) < EYE.hh * lid(x)) continue;
                 push(0, x, y, x, y, dome(x, y), sd += 0.3);
             }
@@ -444,7 +452,7 @@
             // белок: точки по сфере яблока (кроме дальней задней шапки — она в разрез никогда не попадает)
             const nS = Math.round(8000 * (wShow / 0.46) ** 2 * q);
             for (let k = 0; k < nS; k++) {
-                const zz = seededRandom(sd += 1.9) * 1.6 - 0.6, a = seededRandom(sd += 2.1) * Math.PI * 2, r = Math.sqrt(1 - zz * zz);
+                const zz = 0.12 + seededRandom(sd += 1.9) * 0.88, a = seededRandom(sd += 2.1) * Math.PI * 2, r = Math.sqrt(1 - zz * zz);
                 const sx = r * Math.cos(a), sy = r * Math.sin(a);
                 if (Math.acos(zz) < EYE.iris * 1.02) continue;                  // под радужкой белка нет
                 push(4, 0, 0, sx * EYE.rb, sy * EYE.rb, zz * EYE.rb + EYE.zb, sd += 0.5, sx, sy, zz);
