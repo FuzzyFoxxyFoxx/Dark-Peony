@@ -70,7 +70,8 @@
 
     // Наклон сцены под фигуру (stageTilt, рад): вращение вокруг оси X поверх вращения вокруг Y.
     // Вихрь морфинга живёт в пространстве сцены, поэтому наклон можно плавно менять во время морфинга.
-    function setTilt(a) { DP.stage.figureStage.rotation.x = a; }
+    // Наклон хранится отдельно: поверх него — временный поворот взгляда мышью (DP.view, панель ?tune).
+    function setTilt(a) { DP.stage.tiltBase = a; DP.stage.figureStage.rotation.x = a + (DP.view ? DP.view.pitch : 0); }
 
     function release(entry) {
         DP.stage.figureStage.remove(entry.instance.root);
@@ -111,7 +112,7 @@
         to.uniforms.uMorphActive.value = 1;   to.uniforms.uMorphRole.value = 1;   to.uniforms.uMorphTime.value = 0;
 
         morph = { from, to, time: 0, duration, resolve };
-        morph.tilt0 = DP.stage.figureStage.rotation.x;
+        morph.tilt0 = DP.stage.tiltBase != null ? DP.stage.tiltBase : DP.stage.figureStage.rotation.x;
         applyVisibility();
         events.emit('morphstart', { from: from.name, to: name, duration });
     }
