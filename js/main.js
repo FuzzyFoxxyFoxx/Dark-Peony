@@ -76,6 +76,22 @@
     // Угол сцены вокруг Y копится по шагам: обычное медленное вращение + раскрутка морфинга. Фигура с faceViewer
     // (серафим) не вращается: пока она на экране и морфинга нет, сцена плавно доворачивается лицом к зрителю.
     let stageAngle = 0, prevSpin = 0;
+    // Временный взгляд с разных сторон (только с ?tune): перетаскивание мышью/пальцем по сцене поворачивает её,
+    // двойной щелчок — вернуть как было. На фигуры и морфинг не влияет.
+    DP.view = { yaw: 0, pitch: 0 };
+    if (DP.params.has('tune')) {
+        const cvs = DP.stage.renderer.domElement;
+        let drag = null;
+        cvs.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY }; try { cvs.setPointerCapture(e.pointerId); } catch (_) {} });
+        cvs.addEventListener('pointermove', e => {
+            if (!drag) return;
+            DP.view.yaw += (e.clientX - drag.x) * 0.006;
+            DP.view.pitch = Math.max(-1.4, Math.min(1.4, DP.view.pitch + (e.clientY - drag.y) * 0.006));
+            drag = { x: e.clientX, y: e.clientY };
+        });
+        window.addEventListener('pointerup', () => { drag = null; });
+        cvs.addEventListener('dblclick', () => { DP.view.yaw = 0; DP.view.pitch = 0; });
+    }
     function tick(dt, draw = true) {
         time += dt;
         DP.shared.uTime.value = time;
@@ -87,8 +103,9 @@
             const target = Math.round(stageAngle / (Math.PI * 2)) * Math.PI * 2;
             stageAngle += (target - stageAngle) * Math.min(1, dt * 1.6);
         } else stageAngle += dt * cfg.stageRotationSpeed;
-        DP.stage.figureStage.rotation.y = stageAngle;
+        DP.stage.figureStage.rotation.y = stageAngle + DP.view.yaw;
         orchestrator.update(time, dt);
+        if (DP.stage.tiltBase != null) DP.stage.figureStage.rotation.x = DP.stage.tiltBase + DP.view.pitch;
         if (draw) DP.stage.render(dt);
         if (DP.vision && draw) DP.vision.update(time, dt);   // «компьютерное зрение» поверх сцены (отдельный модуль)
     }
