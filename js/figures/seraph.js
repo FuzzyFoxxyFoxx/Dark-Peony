@@ -51,7 +51,7 @@
         lidT: 0.10,                   // толщина века у разреза (зазор до яблока); к уголкам сходит на нет
         lowerSq: 1.3,                 // сжатие нижнего профиля по y (S-переход в скулу ближе)
         archDrop: 0.40,               // насколько арка борозды опускается к уголкам
-        paraA: 1.35, paraW: 1.25,     // парабола вид сверху: насколько кожа уходит назад к носу/уху и с какой ширины
+        paraA: 1.35, paraW: 1.2, paraP: 3.0,     // парабола вид сверху: насколько кожа уходит назад к носу/уху и с какой ширины
         creaseHalf: 1.4, creaseFlat: 0.35,   // полудлина центрального профиля по x; где начинает переходить в краевой (доля)
         lidShadowTop: 0.55,           // тень верхнего века на яблоке шире, чем нижнего (меньше — шире)
         halo: 2.2,                   // ореол складки над глазом (спереди)
@@ -169,7 +169,7 @@
         let ye = y + C.archDrop * arch * smoothS(0.2, 0.6, y);
         ye *= 1 + (C.lowerSq - 1) * (1 - smoothS(-0.6, 0.0, y));
         const w = 1 - smoothS(C.creaseFlat, 1, u), zS = profEval(profS, ye), zC = profEval(profC, ye);
-        const z = zS + C.profDepth * (zC - zS) * w - C.paraA * (1 - Math.exp(-(x / C.paraW) * (x / C.paraW)));
+        const z = zS + C.profDepth * (zC - zS) * w - C.paraA * (1 - Math.exp(-Math.pow(Math.abs(x) / C.paraW, C.paraP)));
         const R = 1.05 + C.lidT * (1 - smoothS(0.35, 1.0, Math.abs(x))), rr = x * x + y * y;   // век не уходит внутрь яблока
         return rr < R * R ? smax(z, -0.78 + Math.sqrt(R * R - rr), 0.03) : z;
     };
@@ -201,8 +201,7 @@
             ye *= 1.0 + (uCrease3.x - 1.0) * (1.0 - smoothstep(-0.6, 0.0, q.y));
             float w = 1.0 - smoothstep(uCrease2.x, 1.0, u), zS = eVS(ye);
             float z = zS + uCrease.x * (eVC(ye) - zS) * w;
-            float xp = q.x / uCrease.w;
-            z -= uCrease.z * (1.0 - exp(-xp * xp));
+            z -= uCrease.z * (1.0 - exp(-pow(abs(q.x) / uCrease.w, uCrease3.z)));   // вид сверху: супер-гауссиана (плоская вершина, круче к краям) ≈ дуга шара
             float R = E_RB + uCrease.y * (1.0 - smoothstep(0.35, 1.0, abs(q.x))), rr = q.x * q.x + q.y * q.y;
             if (rr < R * R) z = eSMax(z, E_ZB + sqrt(R * R - rr), 0.03);
             return vec3(q, z);
@@ -711,7 +710,7 @@
             const mEye = mat(eyeVertex, eyeFragment, { uSize: { value: 1.9 },
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
                 uCrease: { get value() { return eyeCr.set(EL.profDepth, EL.lidT, EL.paraA, EL.paraW); } },
-                uCrease3: { get value() { return eyeCr3.set(EL.lowerSq, EL.archDrop, 0, 0); } },
+                uCrease3: { get value() { return eyeCr3.set(EL.lowerSq, EL.archDrop, EL.paraP, 0); } },
                 uCrease2: { get value() { return eyeCr2.set(EL.creaseFlat, EL.creaseHalf, 0, EL.lidShadowTop); } },
                 uVC: { value: profC }, uVS: { value: profS },
                 uEyeFade: { get value() { return eyeFade.set(EL.fadeWave, EL.fadeSpeed, EL.fadeStart, 0); } },
