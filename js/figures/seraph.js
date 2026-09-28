@@ -44,10 +44,11 @@
         ball: 2.4,                    // яркость глазного яблока (в середине; к краям — в тень)
         skinBase: 0.12, skinCurve: 0.8,  // кожа: базовая видимость, свечение изгибов (френель купола)
         light: 0.8,                   // источник света (сверху-слева-спереди): сила светотени на коже и яблоке
+        fadeWave: 0.25, fadeSpeed: 0.0, fadeStart: 0.05,   // переход в прозрачность: неровность контура, скорость «гуляния», где начинается спад (доля радиуса)
         halo: 2.2,                    // ореол складки над глазом (спереди)
         lidShadow: 0.5                // тень век на яблоке: у краёв разреза яблоко темнее
     }, DP.config.seraphEye || {});
-    const eyeLook = new THREE.Vector4(), eyeLook2 = new THREE.Vector4();
+    const eyeLook = new THREE.Vector4(), eyeLook2 = new THREE.Vector4(), eyeFade = new THREE.Vector4();
     // Доводим по частям, как медузу и светило ('' — все). ?parts= в адресе важнее.
     // petals — лепестки, eye — центральный глаз, eyes — малые глаза, tendrils — усики, rings — кольца.
     const DEFAULT_PARTS = 'eye';
@@ -180,6 +181,7 @@
         uniform vec4 uGaze[${MAX_EYES}];
         uniform vec4 uEyeC[${MAX_EYES}];     // центр (x, y, z) и полуширина
         uniform vec4 uEyeR[${MAX_EYES}];     // x — поворот в плоскости, y — глаз показан
+        uniform vec4 uEyeFade;               // x — неровность контура прозрачности, y — скорость, z — где начинается спад
         attribute vec4 aE, aP;
         attribute vec2 aQ, aF;
         attribute vec3 aS;
@@ -197,7 +199,12 @@
                 vec2 q = eSkin(aQ, oU, oL);
                 loc = vec3(q, eDome(q));
                 float e = (q.x / E_AX) * (q.x / E_AX) + (q.y / E_AY) * (q.y / E_AY);
-                vA = 1.0 - smoothstep(${EYE.fadeIn.toFixed(3)}, 1.0, e);   // в ноль — только на краю, уже на «равнине»
+                // прозрачность к краю лоскута: широкий мягкий переход; контур неровный — сумма синусоид с разным шагом и размахом (uEyeFade.x — размах, .y — скорость «гуляния»)
+                float th = atan(q.y / E_AY, q.x / E_AX), tt = uTime * uEyeFade.y + float(ei) * 1.7;
+                float wob = 0.42 * sin(2.0 * th + 1.3 + tt * 0.9) + 0.30 * sin(3.0 * th + 4.1 - tt * 0.7) + 0.20 * sin(5.0 * th + 2.2 + tt * 1.3) + 0.12 * sin(8.0 * th + 0.4 - tt * 1.1);
+                float rr = sqrt(e) * (1.0 + uEyeFade.x * (0.5 + 0.5 * wob));   // контур уходит только внутрь
+                vA = 1.0 - smoothstep(uEyeFade.z, 1.0, rr);
+                vA *= vA;                                                   // хвост мягче
                 vec2 d = vec2(eDome(q + vec2(0.02, 0.0)) - eDome(q - vec2(0.02, 0.0)), eDome(q + vec2(0.0, 0.02)) - eDome(q - vec2(0.0, 0.02))) / 0.04;
                 vFres = length(d);                             // крутизна купола — «френель» кожи
                 vec3 nrm = normalize(vec3(-d, 1.0));
@@ -640,6 +647,7 @@
             const EL = DP.config.seraphEye;
             const mEye = mat(eyeVertex, eyeFragment, { uSize: { value: 1.9 },
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
+                uEyeFade: { get value() { return eyeFade.set(EL.fadeWave, EL.fadeSpeed, EL.fadeStart, 0); } },
                 uEyeLook2: { get value() { return eyeLook2.set(EL.light, EL.lidShadow, EL.halo, 0); } },
                 uRimW: { get value() { return EL.rimWidth; } }, uGaze: { value: gz.gaze }, uEyeC: { value: eyeC }, uEyeR: { value: eyeR } });
             const mTend = mat(tendrilVertex, tendrilFragment, { uSize: { value: 2.0 } });
