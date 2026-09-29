@@ -52,7 +52,8 @@
         lowerSq: 1.0,                // сжатие нижнего профиля по y (S-переход в скулу ближе)
         grooveDepth: 0.13, grooveW: 0.075, grooveY: 0.72,   // борозда (орбитопальпебральная): глубина, ширина, высота — гауссов провал поверх гладкого профиля, идёт вместе со складками, к уголкам гаснет
         edgeFade: 0.035,              // ширина перехода в ноль у края разреза (локальные единицы; ≈ 3 частицы)
-        cornea: 0.08,                 // роговица: насколько купол выступает над сферой яблока (доля радиуса)
+        lidFollow: 0.35,              // веки следят за взглядом (0 — не двигаются)
+        cornea: 0.16,                 // роговица: насколько купол выступает над сферой яблока (доля радиуса)
         archDrop: 1.0,                // насколько складки повторяют форму разреза (0 — параллельны оси x)
         paraA: 1.35, paraW: 1.55, paraP: 2.6,     // парабола вид сверху: насколько кожа уходит назад к носу/уху и с какой ширины
         creaseHalf: 1.2, creaseFlat: 0.6,   // полудлина центрального профиля по x; где начинает переходить в краевой (доля)
@@ -242,7 +243,7 @@
             float R = E_RB + uCrease.y * (1.0 - smoothstep(0.35, 1.0, abs(q.x))), rr = q.x * q.x + q.y * q.y;
             if (rr < R * R) {
                 vec2 dc = q - gCornea.xy;
-                float zA = E_ZB + sqrt(R * R - rr) + gCornea.z * exp(-dot(dc, dc) / (E_IRIS * E_IRIS * E_RB * E_RB * 2.2));   // веки облегают выпуклость роговицы
+                float zA = E_ZB + sqrt(R * R - rr) + gCornea.z * exp(-dot(dc, dc) / (E_IRIS * E_IRIS * E_RB * E_RB * 3.0));   // веки облегают выпуклость роговицы
                 z = eSMax(z, zA, 0.03);
             }
             return vec3(q, z);
@@ -289,7 +290,7 @@
         uniform vec4 uGaze[${MAX_EYES}];
         uniform vec4 uEyeC[${MAX_EYES}];     // центр (x, y, z) и полуширина
         uniform vec4 uEyeR[${MAX_EYES}];     // x — поворот в плоскости, y — глаз показан
-        uniform float uEdgeFade, uCornea;
+        uniform float uEdgeFade, uCornea, uLidFollow;
         uniform vec4 uEyeFade;               // x — неровность контура прозрачности, y — скорость, z — где начинается спад
         attribute vec4 aE, aP;
         attribute vec2 aQ, aF;
@@ -303,7 +304,7 @@
             for (int i = 0; i < ${MAX_EYES}; i++) if (i == ei) { gz = uGaze[i]; ec = uEyeC[i]; er = uEyeR[i]; }
             float kind = aE.y;
             { vec3 pc = eRotGaze(vec3(0.0, 0.0, 1.0), gz.xy); gCornea = vec3(pc.xy * E_RB, uCornea * E_RB); }
-            float oU = gz.w, oL = 0.82 + 0.18 * gz.w;           // нижнее веко почти не двигается
+            float oU = gz.w + uLidFollow * gz.y * gz.w, oL = (0.82 + 0.18 * gz.w) - uLidFollow * 0.9 * max(0.0, gz.y) * gz.w + uLidFollow * 0.25 * max(0.0, -gz.y);   // веки следят за взглядом: вверх — верхнее поднимается, нижнее чуть подтягивается; вниз — верхнее опускается
             vec3 loc, nrmW = vec3(0.0, 0.0, 1.0); vA = 1.0; vFres = 0.0; vRim = 0.0; vLit = 0.0; vShade = 1.0; vHalo = 0.0;
             if (kind < 0.5) {                                  // кожа
                 vec2 q = eSkin(aQ, oU, oL);
@@ -695,7 +696,7 @@
         let focused = false;
         const fixedGaze = DP.params.get('gaze') === 'fixed';               // ?gaze=fixed — взгляд прямо, без моргания (для сверки с референсом)
         function update(T, dt, root) {
-            if (fixedGaze) { const op = parseFloat(DP.params.get('open') || '1'); for (let i = 0; i < MAX_EYES; i++) gaze[i].set(0, 0, 1, 0.03 + 0.97 * op); return; }
+            if (fixedGaze) { const op = parseFloat(DP.params.get('open') || '1'), gx = parseFloat(DP.params.get('gx') || '0'), gy = parseFloat(DP.params.get('gy') || '0'); for (let i = 0; i < MAX_EYES; i++) gaze[i].set(gx, gy, 1, 0.03 + 0.97 * op); return; }
             const now = performance.now() / 1000;
             const focus = now - pointer.t < 1.6;
             if (focus && !focused) st.forEach(s => { s.tp = 0.62; });            // навелись — зрачки сузились
@@ -763,6 +764,7 @@
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
                 uEdgeFade: { get value() { return EL.edgeFade; } },
                 uCornea: { get value() { return EL.cornea; } },
+                uLidFollow: { get value() { return EL.lidFollow; } },
                 uCrease: { get value() { return eyeCr.set(EL.profDepth, EL.lidT, EL.paraA, EL.paraW); } },
                 uCrease3: { get value() { return eyeCr3.set(EL.lowerSq, EL.archDrop, EL.paraP, EL.grooveDepth); } },
                 uGroove: { get value() { return eyeGr.set(EL.grooveY, EL.grooveW, 0, 0); } },
