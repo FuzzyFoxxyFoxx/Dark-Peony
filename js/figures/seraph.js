@@ -51,6 +51,8 @@
         lidT: 0.005,                   // толщина века у разреза (зазор до яблока); к уголкам сходит на нет
         lowerSq: 1.0,                // сжатие нижнего профиля по y (S-переход в скулу ближе)
         grooveDepth: 0.13, grooveW: 0.075, grooveY: 0.72,   // борозда (орбитопальпебральная): глубина, ширина, высота — гауссов провал поверх гладкого профиля, идёт вместе со складками, к уголкам гаснет
+        edgeFade: 0.035,              // ширина перехода в ноль у края разреза (локальные единицы; ≈ 3 частицы)
+        cornea: 0.08,                 // роговица: насколько купол выступает над сферой яблока (доля радиуса)
         archDrop: 1.0,                // насколько складки повторяют форму разреза (0 — параллельны оси x)
         paraA: 1.35, paraW: 1.55, paraP: 2.6,     // парабола вид сверху: насколько кожа уходит назад к носу/уху и с какой ширины
         creaseHalf: 1.2, creaseFlat: 0.6,   // полудлина центрального профиля по x; где начинает переходить в краевой (доля)
@@ -210,6 +212,7 @@
         const float E_RB = ${EYE.rb.toFixed(3)}, E_ZB = ${EYE.zb.toFixed(3)};
         const float E_LID = ${EYE.lid.toFixed(3)}, E_FLAT = ${EYE.flat.toFixed(3)}, E_HIN = ${EYE.hugIn.toFixed(3)}, E_HOUT = ${EYE.hugOut.toFixed(3)};
         const float E_IRIS = ${EYE.iris.toFixed(3)}, E_PUP = ${EYE.pupil.toFixed(3)};
+        vec3 gCornea = vec3(0.0);                 // положение вершины роговицы в координатах глаза (xy) и её высота (z) — для реакции век
         const vec3 E_LIGHT = vec3(0.41, -0.68, 0.61);      // свет снизу-справа-спереди: тень складки ложится НАД глазом (как складка верхнего века)
         // Разрез — «лимончик»: верхняя и нижняя кромки (полувысота у центра E_HH / E_HL, показатели E_PU / E_PL) сходятся в острые уголки.
         float eHU(float x) { return E_HH * pow(max(0.0, 1.0 - x * x), E_PU); }
@@ -237,7 +240,11 @@
             float z = zS + uCrease.x * (eVC(ye) - zS) * w - uCrease3.w * w * exp(-gg * gg);
             z -= uCrease.z * (1.0 - exp(-pow(abs(r.x) / uCrease.w, uCrease3.z)));   // вид сверху: супер-гауссиана (плоская вершина, круче к краям) ≈ дуга шара
             float R = E_RB + uCrease.y * (1.0 - smoothstep(0.35, 1.0, abs(q.x))), rr = q.x * q.x + q.y * q.y;
-            if (rr < R * R) z = eSMax(z, E_ZB + sqrt(R * R - rr), 0.03);
+            if (rr < R * R) {
+                vec2 dc = q - gCornea.xy;
+                float zA = E_ZB + sqrt(R * R - rr) + gCornea.z * exp(-dot(dc, dc) / (E_IRIS * E_IRIS * E_RB * E_RB * 2.2));   // веки облегают выпуклость роговицы
+                z = eSMax(z, zA, 0.03);
+            }
             return vec3(q, z);
         }
         vec3 eSurf(vec2 q) { return eSurf2(q, q); }
@@ -282,6 +289,7 @@
         uniform vec4 uGaze[${MAX_EYES}];
         uniform vec4 uEyeC[${MAX_EYES}];     // центр (x, y, z) и полуширина
         uniform vec4 uEyeR[${MAX_EYES}];     // x — поворот в плоскости, y — глаз показан
+        uniform float uEdgeFade, uCornea;
         uniform vec4 uEyeFade;               // x — неровность контура прозрачности, y — скорость, z — где начинается спад
         attribute vec4 aE, aP;
         attribute vec2 aQ, aF;
@@ -294,6 +302,7 @@
             vec4 gz = uGaze[0], ec = uEyeC[0], er = uEyeR[0];
             for (int i = 0; i < ${MAX_EYES}; i++) if (i == ei) { gz = uGaze[i]; ec = uEyeC[i]; er = uEyeR[i]; }
             float kind = aE.y;
+            { vec3 pc = eRotGaze(vec3(0.0, 0.0, 1.0), gz.xy); gCornea = vec3(pc.xy * E_RB, uCornea * E_RB); }
             float oU = gz.w, oL = 0.82 + 0.18 * gz.w;           // нижнее веко почти не двигается
             vec3 loc, nrmW = vec3(0.0, 0.0, 1.0); vA = 1.0; vFres = 0.0; vRim = 0.0; vLit = 0.0; vShade = 1.0; vHalo = 0.0;
             if (kind < 0.5) {                                  // кожа
@@ -323,6 +332,7 @@
                 float yU = mix(-ll * 0.96, lu, oU), yL = mix(-ll * 0.96, -ll, oL);
                 float dE = abs(q.x) < 1.0 ? (q.y >= 0.0 ? q.y - yU : yL - q.y) : length(vec2(abs(q.x) - 1.0, q.y));
                 vRim = exp(-dE * dE / (uRimW * uRimW));
+                vA *= smoothstep(0.0, uEdgeFade, dE);          // последние 2–3 частицы у края разреза уходят в ноль (≈ 5% → 30% → 70%): без «пикселя» на кромке
             } else if (kind < 3.5 && kind > 2.5) {             // лучи
                 loc = vec3(aQ, 0.0);
             } else {                                           // яблоко: радужка / белок
@@ -332,8 +342,10 @@
                     float ph = aQ.y + 0.03 * sin(uTime * 0.7 + aF.y * 6.0);
                     sp = vec3(sin(th) * cos(ph), sin(th) * sin(ph), cos(th));
                 } else sp = aS;
+                float th0 = acos(clamp(sp.z, -1.0, 1.0));
+                float cornea = 1.0 - smoothstep(0.0, E_IRIS * 1.7, th0);              // купол роговицы: гладкая «нашлёпка» на сфере (линза), плавно сходит на нет
                 sp = eRotGaze(sp, gz.xy);
-                loc = sp * E_RB + vec3(0.0, 0.0, E_ZB);
+                loc = sp * E_RB * (1.0 + uCornea * cornea * cornea * (3.0 - 2.0 * cornea)) + vec3(0.0, 0.0, E_ZB);
                 vA = smoothstep(0.2, 0.3, sp.z) * eInSlit(loc.xy, oU, oL);    // только передняя часть яблока — та, что видна в разрезе
                 vFres = sp.z;                                  // яблоко: к краям уходит в тень
                 vLit = dot(sp, E_LIGHT);
@@ -749,6 +761,8 @@
             const EL = DP.config.seraphEye;
             const mEye = mat(eyeVertex, eyeFragment, { uSize: { value: 1.9 },
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
+                uEdgeFade: { get value() { return EL.edgeFade; } },
+                uCornea: { get value() { return EL.cornea; } },
                 uCrease: { get value() { return eyeCr.set(EL.profDepth, EL.lidT, EL.paraA, EL.paraW); } },
                 uCrease3: { get value() { return eyeCr3.set(EL.lowerSq, EL.archDrop, EL.paraP, EL.grooveDepth); } },
                 uGroove: { get value() { return eyeGr.set(EL.grooveY, EL.grooveW, 0, 0); } },
