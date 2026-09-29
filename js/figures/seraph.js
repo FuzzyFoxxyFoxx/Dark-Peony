@@ -174,12 +174,13 @@
             return z;
         }`;
     const smoothS = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
-    const eyeHU = (x) => EYE.hh * Math.pow(Math.max(0, 1 - x * x), EYE.pu), eyeHL = (x) => EYE.hl * Math.pow(Math.max(0, 1 - x * x), EYE.pl);   // = eHU/eHL (GLSL): «лимончик»
+    const eyeHU = (x) => EYE.hh * Math.pow(Math.max(0, 1 - x * x / 0.81), EYE.pu), eyeHL = (x) => EYE.hl * Math.pow(Math.max(0, 1 - x * x / 0.81), EYE.pl);   // = eHU/eHL (GLSL): «лимончик»
     const smax = (a, b, k) => 0.5 * (a + b + Math.sqrt((a - b) * (a - b) + k * k));
     const eyeSurfZ = (x, y) => {                                        // = eSurf(...).z (GLSL), для положений точек в покое
         const C = DP.config.seraphEye, u = Math.min(1, Math.abs(x) / (C.creaseHalf * (0.95 + 0.05 * smoothS(-0.25, 0.25, y)))), arch = 0.5 * (1 - Math.cos(Math.PI * u));
         const hu = eyeHU(x), hl = eyeHL(x);
-        let ye = y + (EYE.hh - hu) * C.archDrop * smoothS(0.0, 0.12, y) - (EYE.hl - hl) * C.archDrop * smoothS(0.0, 0.12, -y);
+        const fx = 1 - smoothS(0.55, 0.95, Math.abs(x));
+        let ye = y + (EYE.hh - hu) * C.archDrop * fx * smoothS(0.0, 0.12, y) - (EYE.hl - hl) * C.archDrop * fx * smoothS(0.0, 0.12, -y);
         ye *= 1 + (C.lowerSq - 1) * (1 - smoothS(-0.6, 0.0, y));
         const w = 1 - smoothS(C.creaseFlat, 1, u), zS = profEval(profS, ye), zC = profEval(profC, ye);
         const z = zS + C.profDepth * (zC - zS) * w - C.paraA * (1 - Math.exp(-Math.pow(Math.abs(x) / C.paraW, C.paraP)));
@@ -199,8 +200,8 @@
         const float E_IRIS = ${EYE.iris.toFixed(3)}, E_PUP = ${EYE.pupil.toFixed(3)};
         const vec3 E_LIGHT = vec3(0.41, -0.68, 0.61);      // свет снизу-справа-спереди: тень складки ложится НАД глазом (как складка верхнего века)
         // Разрез — «лимончик»: верхняя и нижняя кромки (полувысота у центра E_HH / E_HL, показатели E_PU / E_PL) сходятся в острые уголки.
-        float eHU(float x) { return E_HH * pow(max(0.0, 1.0 - x * x), E_PU); }
-        float eHL(float x) { return E_HL * pow(max(0.0, 1.0 - x * x), E_PL); }
+        float eHU(float x) { return E_HH * pow(max(0.0, 1.0 - x * x / 0.81), E_PU); }   // полудлина разреза 0.9: кончик уголка не доходит до зоны сглаживания у края
+        float eHL(float x) { return E_HL * pow(max(0.0, 1.0 - x * x / 0.81), E_PL); }
         uniform vec4 uCrease, uCrease2, uCrease3;   // (profDepth, lidT, paraA, paraW); (creaseFlat, creaseHalf, -, тень верхнего века); (lowerSq, archDrop, -, -)
         uniform vec3 uVC[${profC.length}], uVS[${profS.length}];   // вертикальные профили: (y, z, наклон)
         ${profGlsl('eVC', 'uVC', profC.length)}
@@ -215,7 +216,7 @@
             float u = min(1.0, abs(r.x) / (uCrease2.y * mix(0.95, 1.0, smoothstep(-0.25, 0.25, r.y))));   // низ: складка сходит в гладкий профиль раньше (у уголков нижнего века складок нет)
             // складки повторяют форму разреза: вертикальная координата профиля сдвигается на разницу между краем разреза в центре и
             // на данном x (веса плавно набираются от y = 0 до края разреза), так что линии складок идут параллельно кромке
-            float hu = eHU(r.x), hl = eHL(r.x), du = (E_HH - hu) * uCrease3.y, dl = (E_HL - hl) * uCrease3.y;
+            float hu = eHU(r.x), hl = eHL(r.x), fx = 1.0 - smoothstep(0.55, 0.95, abs(r.x)), du = (E_HH - hu) * uCrease3.y * fx, dl = (E_HL - hl) * uCrease3.y * fx;   // у уголков смещение гаснет: иначе профиль сжимается в крутую полосу вдоль y = 0 (тёмная «щель» от уголка)
             float ye = r.y + du * smoothstep(0.0, 0.12, r.y) - dl * smoothstep(0.0, 0.12, -r.y);   // все складки сдвигаются ровно на смещение кромки — идут параллельно разрезу; у уголков профиль и так гладкий (w→0)
             ye *= 1.0 + (uCrease3.x - 1.0) * (1.0 - smoothstep(-0.6, 0.0, r.y));
             float w = 1.0 - smoothstep(uCrease2.x, 1.0, u), zS = eVS(ye);
@@ -245,7 +246,7 @@
         float eInSlit(vec2 q, float oU, float oL) {
             float lu = eHU(q.x), ll = eHL(q.x);
             float yU = mix(-ll * 0.96, lu, oU), yL = mix(-ll * 0.96, -ll, oL);
-            return step(abs(q.x), 0.99) * smoothstep(-0.015, 0.015, yU - q.y) * smoothstep(-0.015, 0.015, q.y - yL);
+            return step(abs(q.x), 1.0) * smoothstep(-0.015, 0.015, yU - q.y) * smoothstep(-0.015, 0.015, q.y - yL);
         }
         vec3 eRotGaze(vec3 p, vec2 g) {                                                  // поворот яблока взглядом
             float yaw = g.x * 0.55, pitch = g.y * 0.42;
@@ -319,12 +320,12 @@
                 } else sp = aS;
                 sp = eRotGaze(sp, gz.xy);
                 loc = sp * E_RB + vec3(0.0, 0.0, E_ZB);
-                vA = smoothstep(0.2, 0.3, sp.z) * eInSlit(loc.xy, oU, oL);    // только передняя часть яблока — та, что видна в разрезе
+                vA = smoothstep(0.015, 0.07, sp.z) * eInSlit(loc.xy, oU, oL);    // только передняя часть яблока — та, что видна в разрезе
                 vFres = sp.z;                                  // яблоко: к краям уходит в тень
                 vLit = dot(sp, E_LIGHT);
                 float lu2 = eHU(loc.x), ll2 = eHL(loc.x), yU2 = mix(-ll2 * 0.96, lu2, oU), yL2 = mix(-ll2 * 0.96, -ll2, oL);
                 float dS = abs(loc.x) < 1.0 ? min((yU2 - loc.y) * uCrease2.w, loc.y - yL2) : 0.0;
-                vShade = smoothstep(0.0, 0.32, dS);            // тень век: у края разреза темнее
+                vShade = smoothstep(0.0, 0.32 * min(1.0, (lu2 + ll2) / 0.5 + 0.04), dS);   // ширина тени века пропорциональна раскрытию разреза: у уголков тени нет (не «разрез» в уголке)            // тень век: у края разреза темнее
             }
             float c = cos(er.x), s = sin(er.x);
             vec3 pos = ec.xyz + vec3(loc.x * c - loc.y * s, loc.x * s + loc.y * c, loc.z) * ec.w;
