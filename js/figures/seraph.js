@@ -268,6 +268,20 @@
             }
             return q;
         }
+        // Растяжение кожи века при смыкании (во сколько раз вертикальный шаг точек больше, чем в покое): при закрытии кожа
+        // между кромкой и бороздой тянется через яблоко, точки расходятся и место темнеет («тёмное пятно» при моргании) —
+        // компенсируем размером и яркостью точек.
+        float eStretch(vec2 r, float oU, float oL) {
+            float x = r.x, s = 1.0;
+            if (abs(x) < 1.0) {
+                float lu = eHU(x), ll = eHL(x), g = pow(max(0.0, 1.0 - x * x), 0.8);
+                if (r.y >= 0.0) { float top = lu + 0.42 * g, y1 = mix(-ll * 0.96, lu, oU + gLid.y * lidBell(x));
+                    if (r.y > lu && r.y < top) s = (top - y1) / max(1e-3, top - lu); }
+                else { float bot = -ll - 0.42 * g, y1 = mix(-ll * 0.96, -ll, oL + gLid.z * lidBell(x));
+                    if (r.y < -ll && r.y > bot) s = (y1 - bot) / max(1e-3, -ll - bot); }
+            }
+            return max(1.0, s);
+        }
         // В разрезе ли точка (x, y) при веках oU/oL.
         float eInSlit(vec2 q, float oU, float oL) {
             float lu = eHU(q.x), ll = eHL(q.x);
@@ -315,9 +329,12 @@
                 gLid = vec4(sin(gz.x * 0.55) * E_RB, gu * uLidLocal, gl * uLidLocal, uLidW);
                 oU += gu * (1.0 - uLidLocal); oL += gl * (1.0 - uLidLocal);
             }
+            float stretch = 1.0;
             vec3 loc, nrmW = vec3(0.0, 0.0, 1.0); vA = 1.0; vFres = 0.0; vRim = 0.0; vLit = 0.0; vShade = 1.0; vHalo = 0.0;
             if (kind < 0.5) {                                  // кожа
                 vec2 q = eSkin(aQ, oU, oL);
+                stretch = eStretch(aQ, oU, oL);
+                vA *= min(1.7, pow(stretch, 0.45));
                 loc = eSurf2(aQ, q);
                 float e = (q.x / E_AX) * (q.x / E_AX) + (q.y / E_AY) * (q.y / E_AY);
                 // прозрачность к краю лоскута: широкий мягкий переход; контур неровный — сумма синусоид с разным шагом и размахом (uEyeFade.x — размах, .y — скорость «гуляния»)
@@ -375,7 +392,7 @@
             float dist = max(-mv.z, 0.1);
             ${depthVert}
             vKind = kind;
-            gl_PointSize = uSize * uViewportScale * (0.7 + aSizeScale * 0.5) * (kind > 3.5 ? 0.7 : 1.0) / (0.35 + 0.06 * dist);
+            gl_PointSize = uSize * uViewportScale * (0.7 + aSizeScale * 0.5) * (kind > 3.5 ? 0.7 : 1.0) * min(2.2, sqrt(stretch)) / (0.35 + 0.06 * dist);
             dpMorphFinish();
             // спрятать: глаз не показан или точка закрыта (размер 0 на Metal не прячет — выносим за экран)
             if (er.y < 0.5 || vA < 0.01) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; }
