@@ -232,18 +232,18 @@
             if (abs(x) < 1.0) {
                 float lu = eHU(x), ll = eHL(x);
                 if (q.y >= 0.0) { float top = lu + 0.42 * pow(max(0.0, 1.0 - x * x), 0.8);   // борозда (верх подвижной части века): кожа для смыкания берётся оттуда, сама борозда стоит на месте
-                    float y0 = lu, y1 = mix(-lu * 0.85, lu, oU);
+                    float y0 = lu, y1 = mix(-ll * 0.96, lu, oU);
                     if (q.y > y0 && q.y < top) q.y = y1 + (q.y - y0) * (top - y1) / max(1e-3, top - y0); }
-                else { float bot = -E_AY * sqrt(max(0.0, 1.0 - (x / E_AX) * (x / E_AX)));
-                    float y0 = -ll, y1 = mix(ll * 0.1, -ll, oL);
-                    if (q.y < y0) q.y = y1 + (q.y - y0) * (bot - y1) / min(-1e-3, bot - y0); }
+                else { float bot = -ll - 0.42 * pow(max(0.0, 1.0 - x * x), 0.8);   // граница нижнего века и скулы (неподвижная часть — скула)
+                    float y0 = -ll, y1 = mix(-ll * 0.96, -ll, oL);
+                    if (q.y < y0 && q.y > bot) q.y = y1 + (q.y - y0) * (bot - y1) / min(-1e-3, bot - y0); }
             }
             return q;
         }
         // В разрезе ли точка (x, y) при веках oU/oL.
         float eInSlit(vec2 q, float oU, float oL) {
             float lu = eHU(q.x), ll = eHL(q.x);
-            float yU = mix(-lu * 0.85, lu, oU), yL = mix(ll * 0.1, -ll, oL);
+            float yU = mix(-ll * 0.96, lu, oU), yL = mix(-ll * 0.96, -ll, oL);
             return step(abs(q.x), 0.99) * smoothstep(-0.015, 0.015, yU - q.y) * smoothstep(-0.015, 0.015, q.y - yL);
         }
         vec3 eRotGaze(vec3 p, vec2 g) {                                                  // поворот яблока взглядом
@@ -304,7 +304,7 @@
                 vA *= 1.0 - eInSlit(q, oU, oL);                // в разрезе кожи нет
                 // кант: край разреза подсвечен (как кромки лепестков пиона); в уголках глаза — тоже
                 float lu = eHU(q.x), ll = eHL(q.x);
-                float yU = mix(-lu * 0.85, lu, oU), yL = mix(ll * 0.1, -ll, oL);
+                float yU = mix(-ll * 0.96, lu, oU), yL = mix(-ll * 0.96, -ll, oL);
                 float dE = abs(q.x) < 1.0 ? (q.y >= 0.0 ? q.y - yU : yL - q.y) : length(vec2(abs(q.x) - 1.0, q.y));
                 vRim = exp(-dE * dE / (uRimW * uRimW));
             } else if (kind < 3.5 && kind > 2.5) {             // лучи
@@ -321,7 +321,7 @@
                 vA = smoothstep(0.2, 0.3, sp.z) * eInSlit(loc.xy, oU, oL);    // только передняя часть яблока — та, что видна в разрезе
                 vFres = sp.z;                                  // яблоко: к краям уходит в тень
                 vLit = dot(sp, E_LIGHT);
-                float lu2 = eHU(loc.x), ll2 = eHL(loc.x), yU2 = mix(-lu2 * 0.85, lu2, oU), yL2 = mix(ll2 * 0.1, -ll2, oL);
+                float lu2 = eHU(loc.x), ll2 = eHL(loc.x), yU2 = mix(-ll2 * 0.96, lu2, oU), yL2 = mix(-ll2 * 0.96, -ll2, oL);
                 float dS = abs(loc.x) < 1.0 ? min((yU2 - loc.y) * uCrease2.w, loc.y - yL2) : 0.0;
                 vShade = smoothstep(0.0, 0.32, dS);            // тень век: у края разреза темнее
             }
