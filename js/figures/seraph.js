@@ -50,7 +50,7 @@
         profDepth: 1.0,               // контрастность центрального профиля относительно краевого (1 — как на референсе, 0 — без борозды)
         lidT: 0.005,                   // толщина века у разреза (зазор до яблока); к уголкам сходит на нет
         lowerSq: 1.3,                 // сжатие нижнего профиля по y (S-переход в скулу ближе)
-        archDrop: 0.40,               // насколько арка борозды опускается к уголкам
+        archDrop: 1.0,                // насколько складки повторяют форму разреза (0 — параллельны оси x)
         paraA: 1.35, paraW: 1.2, paraP: 3.0,     // парабола вид сверху: насколько кожа уходит назад к носу/уху и с какой ширины
         creaseHalf: 1.4, creaseFlat: 0.35,   // полудлина центрального профиля по x; где начинает переходить в краевой (доля)
         lidShadowTop: 0.55,           // тень верхнего века на яблоке шире, чем нижнего (меньше — шире)
@@ -163,29 +163,32 @@
             return z;
         }`;
     const smoothS = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
-    const eyeLidJS = (x) => Math.pow(Math.max(0, 1 - x * x), 0.55);       // = eLid (GLSL): миндалина со скруглёнными уголками
+    const eyeHU = (x) => EYE.hh * Math.pow(Math.max(0, 1 - x * x), EYE.pu), eyeHL = (x) => EYE.hl * Math.pow(Math.max(0, 1 - x * x), EYE.pl);   // = eHU/eHL (GLSL): «лимончик»
     const smax = (a, b, k) => 0.5 * (a + b + Math.sqrt((a - b) * (a - b) + k * k));
     const eyeSurfZ = (x, y) => {                                        // = eSurf(...).z (GLSL), для положений точек в покое
         const C = DP.config.seraphEye, u = Math.min(1, Math.abs(x) / C.creaseHalf), arch = 0.5 * (1 - Math.cos(Math.PI * u));
-        let ye = y + C.archDrop * arch * smoothS(0.2, 0.6, y);
+        const hu = eyeHU(x), hl = eyeHL(x);
+        let ye = y + (EYE.hh - hu) * C.archDrop * smoothS(0.0, hu + 0.08, y) - (EYE.hl - hl) * C.archDrop * smoothS(0.0, hl + 0.08, -y);
         ye *= 1 + (C.lowerSq - 1) * (1 - smoothS(-0.6, 0.0, y));
         const w = 1 - smoothS(C.creaseFlat, 1, u), zS = profEval(profS, ye), zC = profEval(profC, ye);
         const z = zS + C.profDepth * (zC - zS) * w - C.paraA * (1 - Math.exp(-Math.pow(Math.abs(x) / C.paraW, C.paraP)));
         const R = 1.0 + C.lidT * (1 - smoothS(0.35, 1.0, Math.abs(x))), rr = x * x + y * y;   // век не уходит внутрь яблока
         return rr < R * R ? smax(z, -0.76 + Math.sqrt(R * R - rr), 0.03) : z;
     };
-    const EYE = { ax: 2.9, ay: 2.2, hh: 0.42, rb: 1.0, zb: -0.76, iris: 0.38, pupil: 0.36,
+    const EYE = { ax: 2.9, ay: 2.2, hh: 0.38, hl: 0.34, pu: 1.15, pl: 1.0, rb: 1.0, zb: -0.76, iris: 0.38, pupil: 0.36,
                   lid: 0.05, flat: 0.0, hugIn: 0.85, hugOut: 1.5, fadeIn: 0.2 };   // hugIn/hugOut — доли радиуса яблока: где кожа сходит с него и где ложится на плоскость
     // Профиль кожи (набросок автора): у разреза кожа облегает яблоко с зазором lid (толщина века), дальше
     // S-образно спускается в ровную плоскость на уровне zb + flat (около середины яблока); hugIn…hugOut — где
     // облегание переходит в плоскость (эллиптический радиус).
     const eyeGlsl = `
-        const float E_AX = ${EYE.ax.toFixed(3)}, E_AY = ${EYE.ay.toFixed(3)}, E_HH = ${EYE.hh.toFixed(3)};
+        const float E_AX = ${EYE.ax.toFixed(3)}, E_AY = ${EYE.ay.toFixed(3)}, E_HH = ${EYE.hh.toFixed(3)}, E_HL = ${EYE.hl.toFixed(3)}, E_PU = ${EYE.pu.toFixed(3)}, E_PL = ${EYE.pl.toFixed(3)};
         const float E_RB = ${EYE.rb.toFixed(3)}, E_ZB = ${EYE.zb.toFixed(3)};
         const float E_LID = ${EYE.lid.toFixed(3)}, E_FLAT = ${EYE.flat.toFixed(3)}, E_HIN = ${EYE.hugIn.toFixed(3)}, E_HOUT = ${EYE.hugOut.toFixed(3)};
         const float E_IRIS = ${EYE.iris.toFixed(3)}, E_PUP = ${EYE.pupil.toFixed(3)};
         const vec3 E_LIGHT = vec3(0.41, -0.68, 0.61);      // свет снизу-справа-спереди: тень складки ложится НАД глазом (как складка верхнего века)
-        float eLid(float x) { return pow(max(0.0, 1.0 - x * x), 0.55); }             // форма миндалины со скруглёнными уголками
+        // Разрез — «лимончик»: верхняя и нижняя кромки (полувысота у центра E_HH / E_HL, показатели E_PU / E_PL) сходятся в острые уголки.
+        float eHU(float x) { return E_HH * pow(max(0.0, 1.0 - x * x), E_PU); }
+        float eHL(float x) { return E_HL * pow(max(0.0, 1.0 - x * x), E_PL); }
         uniform vec4 uCrease, uCrease2, uCrease3;   // (profDepth, lidT, paraA, paraW); (creaseFlat, creaseHalf, -, тень верхнего века); (lowerSq, archDrop, -, -)
         uniform vec3 uVC[${profC.length}], uVS[${profS.length}];   // вертикальные профили: (y, z, наклон)
         ${profGlsl('eVC', 'uVC', profC.length)}
@@ -197,8 +200,11 @@
         // Разрез (миндалина) вырезается отдельно. Век не уходит внутрь яблока: сглаженный максимум с поверхностью яблока + толщина
         // века (к уголкам → 0).
         vec3 eSurf(vec2 q) {
-            float u = min(1.0, abs(q.x) / uCrease2.y), arch = 0.5 * (1.0 - cos(3.14159265 * u));
-            float ye = q.y + uCrease3.y * arch * smoothstep(0.2, 0.6, q.y);
+            float u = min(1.0, abs(q.x) / uCrease2.y);
+            // складки повторяют форму разреза: вертикальная координата профиля сдвигается на разницу между краем разреза в центре и
+            // на данном x (веса плавно набираются от y = 0 до края разреза), так что линии складок идут параллельно кромке
+            float hu = eHU(q.x), hl = eHL(q.x), du = (E_HH - hu) * uCrease3.y, dl = (E_HL - hl) * uCrease3.y;
+            float ye = q.y + du * smoothstep(0.0, hu + 0.08, q.y) - dl * smoothstep(0.0, hl + 0.08, -q.y);
             ye *= 1.0 + (uCrease3.x - 1.0) * (1.0 - smoothstep(-0.6, 0.0, q.y));
             float w = 1.0 - smoothstep(uCrease2.x, 1.0, u), zS = eVS(ye);
             float z = zS + uCrease.x * (eVC(ye) - zS) * w;
@@ -212,20 +218,20 @@
         vec2 eSkin(vec2 q, float oU, float oL) {
             float x = q.x;
             if (abs(x) < 1.0) {
-                float l = E_HH * eLid(x);
+                float lu = eHU(x), ll = eHL(x);
                 if (q.y >= 0.0) { float top = E_AY * sqrt(max(0.0, 1.0 - (x / E_AX) * (x / E_AX)));
-                    float y0 = l, y1 = mix(-l * 0.85, l, oU);
+                    float y0 = lu, y1 = mix(-lu * 0.85, lu, oU);
                     if (q.y > y0) q.y = y1 + (q.y - y0) * (top - y1) / max(1e-3, top - y0); }
                 else { float bot = -E_AY * sqrt(max(0.0, 1.0 - (x / E_AX) * (x / E_AX)));
-                    float y0 = -l, y1 = mix(l * 0.1, -l, oL);
+                    float y0 = -ll, y1 = mix(ll * 0.1, -ll, oL);
                     if (q.y < y0) q.y = y1 + (q.y - y0) * (bot - y1) / min(-1e-3, bot - y0); }
             }
             return q;
         }
         // В разрезе ли точка (x, y) при веках oU/oL.
         float eInSlit(vec2 q, float oU, float oL) {
-            float l = E_HH * eLid(q.x);
-            float yU = mix(-l * 0.85, l, oU), yL = mix(l * 0.1, -l, oL);
+            float lu = eHU(q.x), ll = eHL(q.x);
+            float yU = mix(-lu * 0.85, lu, oU), yL = mix(ll * 0.1, -ll, oL);
             return step(abs(q.x), 0.99) * smoothstep(-0.015, 0.015, yU - q.y) * smoothstep(-0.015, 0.015, q.y - yL);
         }
         vec3 eRotGaze(vec3 p, vec2 g) {                                                  // поворот яблока взглядом
@@ -261,7 +267,7 @@
             for (int i = 0; i < ${MAX_EYES}; i++) if (i == ei) { gz = uGaze[i]; ec = uEyeC[i]; er = uEyeR[i]; }
             float kind = aE.y;
             float oU = gz.w, oL = 0.82 + 0.18 * gz.w;           // нижнее веко почти не двигается
-            vec3 loc; vA = 1.0; vFres = 0.0; vRim = 0.0; vLit = 0.0; vShade = 1.0; vHalo = 0.0;
+            vec3 loc, nrmW = vec3(0.0, 0.0, 1.0); vA = 1.0; vFres = 0.0; vRim = 0.0; vLit = 0.0; vShade = 1.0; vHalo = 0.0;
             if (kind < 0.5) {                                  // кожа
                 vec2 q = eSkin(aQ, oU, oL);
                 loc = eSurf(q);
@@ -280,10 +286,12 @@
                 vec3 sx = eSurf(q + vec2(0.015, 0.0)) - eSurf(q - vec2(0.015, 0.0)), sy = eSurf(q + vec2(0.0, 0.015)) - eSurf(q - vec2(0.0, 0.015));
                 vec3 nrm = normalize(cross(sx, sy));
                 vLit = dot(nrm, E_LIGHT) - E_LIGHT.z;
+                float c0 = cos(er.x), s0 = sin(er.x);
+                nrmW = vec3(nrm.x * c0 - nrm.y * s0, nrm.x * s0 + nrm.y * c0, nrm.z);   // нормаль кожи в мировых осях — для скрытия обратных сторон
                 vA *= 1.0 - eInSlit(q, oU, oL);                // в разрезе кожи нет
                 // кант: край разреза подсвечен (как кромки лепестков пиона); в уголках глаза — тоже
-                float l = E_HH * eLid(q.x);
-                float yU = mix(-l * 0.85, l, oU), yL = mix(l * 0.1, -l, oL);
+                float lu = eHU(q.x), ll = eHL(q.x);
+                float yU = mix(-lu * 0.85, lu, oU), yL = mix(ll * 0.1, -ll, oL);
                 float dE = abs(q.x) < 1.0 ? (q.y >= 0.0 ? q.y - yU : yL - q.y) : length(vec2(abs(q.x) - 1.0, q.y));
                 vRim = exp(-dE * dE / (uRimW * uRimW));
             } else if (kind < 3.5 && kind > 2.5) {             // лучи
@@ -300,7 +308,7 @@
                 vA = smoothstep(0.2, 0.3, sp.z) * eInSlit(loc.xy, oU, oL);    // только передняя часть яблока — та, что видна в разрезе
                 vFres = sp.z;                                  // яблоко: к краям уходит в тень
                 vLit = dot(sp, E_LIGHT);
-                float lq = E_HH * eLid(loc.x), yU2 = mix(-lq * 0.85, lq, oU), yL2 = mix(lq * 0.1, -lq, oL);
+                float lu2 = eHU(loc.x), ll2 = eHL(loc.x), yU2 = mix(-lu2 * 0.85, lu2, oU), yL2 = mix(ll2 * 0.1, -ll2, oL);
                 float dS = abs(loc.x) < 1.0 ? min((yU2 - loc.y) * uCrease2.w, loc.y - yL2) : 0.0;
                 vShade = smoothstep(0.0, 0.32, dS);            // тень век: у края разреза темнее
             }
@@ -310,6 +318,7 @@
             pos.y += dpBob();
             vec3 dpRest = position;
             vec4 mv = viewMatrix * dpMorph(dpRest, pos);
+            if (kind < 0.5) vA *= smoothstep(-0.1, 0.12, dot(mat3(viewMatrix) * nrmW, normalize(-mv.xyz)));   // кожа непрозрачна: стороны, повёрнутые от камеры, скрыты
             gl_Position = projectionMatrix * mv;
             float dist = max(-mv.z, 0.1);
             ${depthVert}
@@ -495,7 +504,6 @@
         });
         const partsNow = DP.params.get('parts') || DEFAULT_PARTS;
         const ep = [], ee = [], eq = [], ef = [], eatt = [], es = [], eS = [];
-        const lid = eyeLidJS;
         eyes.forEach((E, i) => {
             const wShow = E.w * (E.main && partsNow === 'eye' ? EYE_STUDY : 1);     // размер на экране — для плотности точек
             const push = (kind, qx, qy, lx, ly, lz, sd, sx = 0, sy = 0, sz = 0) => {
@@ -515,7 +523,7 @@
                 const ee = (x / EYE.ax) ** 2 + (y / EYE.ay) ** 2;
                 if (ee > 1) continue;
                 if (seededRandom(sd += 0.37) > 1 - 0.7 * Math.min(1, Math.max(0, (ee - 0.15) / 0.85))) continue;   // к краям реже
-                if (Math.abs(x) < 1 && Math.abs(y) < EYE.hh * lid(x)) continue;
+                if (Math.abs(x) < 1 && y < eyeHU(x) && y > -eyeHL(x)) continue;
                 push(0, x, y, x, y, domeC(x, y), sd += 0.3);
             }
             // радужка: волокна от зрачка к краю, на сфере яблока
@@ -644,7 +652,9 @@
         const gaze = [], v = new THREE.Vector3();
         for (let i = 0; i < MAX_EYES; i++) gaze.push(new THREE.Vector4(0, 0, 1, 1));
         let focused = false;
+        const fixedGaze = DP.params.get('gaze') === 'fixed';               // ?gaze=fixed — взгляд прямо, без моргания (для сверки с референсом)
         function update(T, dt, root) {
+            if (fixedGaze) { for (let i = 0; i < MAX_EYES; i++) gaze[i].set(0, 0, 1, 1); return; }
             const now = performance.now() / 1000;
             const focus = now - pointer.t < 1.6;
             if (focus && !focused) st.forEach(s => { s.tp = 0.62; });            // навелись — зрачки сузились
