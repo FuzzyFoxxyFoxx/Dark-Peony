@@ -50,6 +50,7 @@
         profDepth: 1.0,               // контрастность центрального профиля относительно краевого (1 — как на референсе, 0 — без борозды)
         lidT: 0.005,                   // толщина века у разреза (зазор до яблока); к уголкам сходит на нет
         lowerSq: 1.0,                // сжатие нижнего профиля по y (S-переход в скулу ближе)
+        grooveDepth: 0.13, grooveW: 0.075, grooveY: 0.72,   // борозда (орбитопальпебральная): глубина, ширина, высота — гауссов провал поверх гладкого профиля, идёт вместе со складками, к уголкам гаснет
         archDrop: 1.0,                // насколько складки повторяют форму разреза (0 — параллельны оси x)
         paraA: 1.35, paraW: 1.55, paraP: 2.6,     // парабола вид сверху: насколько кожа уходит назад к носу/уху и с какой ширины
         creaseHalf: 1.2, creaseFlat: 0.6,   // полудлина центрального профиля по x; где начинает переходить в краевой (доля)
@@ -57,7 +58,7 @@
         halo: 2.2,                   // ореол складки над глазом (спереди)
         lidShadow: 0.5                // тень век на яблоке: у краёв разреза яблоко темнее
     }, DP.config.seraphEye || {});
-    const eyeLook = new THREE.Vector4(), eyeLook2 = new THREE.Vector4(), eyeFade = new THREE.Vector4(), eyeCr = new THREE.Vector4(), eyeCr2 = new THREE.Vector4(), eyeCr3 = new THREE.Vector4();
+    const eyeLook = new THREE.Vector4(), eyeLook2 = new THREE.Vector4(), eyeFade = new THREE.Vector4(), eyeCr = new THREE.Vector4(), eyeCr2 = new THREE.Vector4(), eyeCr3 = new THREE.Vector4(), eyeGr = new THREE.Vector4();
     // Доводим по частям, как медузу и светило ('' — все). ?parts= в адресе важнее.
     // petals — лепестки, eye — центральный глаз, eyes — малые глаза, tendrils — усики, rings — кольца.
     const DEFAULT_PARTS = 'eye';
@@ -194,7 +195,7 @@
         let ye = y + du * smoothS(0.0, 0.12 + du * 0.8, y) - dl * smoothS(0.0, 0.12 + dl * 0.8, -y);
         ye *= 1 + (C.lowerSq - 1) * (1 - smoothS(-0.6, 0.0, y));
         const w = 1 - smoothS(C.creaseFlat, 1, u), zS = profEval(profS, ye), zC = profEval(profC, ye);
-        const z = zS + C.profDepth * (zC - zS) * w - C.paraA * (1 - Math.exp(-Math.pow(Math.abs(x) / C.paraW, C.paraP)));
+        const gg = (ye - C.grooveY) / C.grooveW, z = zS + C.profDepth * (zC - zS) * w - C.grooveDepth * w * Math.exp(-gg * gg) - C.paraA * (1 - Math.exp(-Math.pow(Math.abs(x) / C.paraW, C.paraP)));
         const R = 1.0 + C.lidT * (1 - smoothS(0.35, 1.0, Math.abs(x))), rr = x * x + y * y;   // век не уходит внутрь яблока
         return rr < R * R ? smax(z, -0.76 + Math.sqrt(R * R - rr), 0.03) : z;
     };
@@ -213,6 +214,7 @@
         // Разрез — «лимончик»: верхняя и нижняя кромки (полувысота у центра E_HH / E_HL, показатели E_PU / E_PL) сходятся в острые уголки.
         float eHU(float x) { return E_HH * pow(max(0.0, 1.0 - x * x), E_PU); }
         float eHL(float x) { return E_HL * pow(max(0.0, 1.0 - x * x), E_PL); }
+        uniform vec4 uGroove;
         uniform vec4 uCrease, uCrease2, uCrease3;   // (profDepth, lidT, paraA, paraW); (creaseFlat, creaseHalf, -, тень верхнего века); (lowerSq, archDrop, -, -)
         uniform vec3 uVC[${profC.length}], uVS[${profS.length}];   // вертикальные профили: (y, z, наклон)
         ${profGlsl('eVC', 'uVC', profC.length)}
@@ -231,7 +233,8 @@
             float ye = r.y + du * smoothstep(0.0, 0.12 + du * 0.8, r.y) - dl * smoothstep(0.0, 0.12 + dl * 0.8, -r.y);   // все складки сдвигаются ровно на смещение кромки — идут параллельно разрезу; у уголков профиль и так гладкий (w→0)
             ye *= 1.0 + (uCrease3.x - 1.0) * (1.0 - smoothstep(-0.6, 0.0, r.y));
             float w = 1.0 - smoothstep(uCrease2.x, 1.0, u), zS = eVS(ye);
-            float z = zS + uCrease.x * (eVC(ye) - zS) * w;
+            float gg = (ye - uGroove.x) / uGroove.y;
+            float z = zS + uCrease.x * (eVC(ye) - zS) * w - uCrease3.w * w * exp(-gg * gg);
             z -= uCrease.z * (1.0 - exp(-pow(abs(r.x) / uCrease.w, uCrease3.z)));   // вид сверху: супер-гауссиана (плоская вершина, круче к краям) ≈ дуга шара
             float R = E_RB + uCrease.y * (1.0 - smoothstep(0.35, 1.0, abs(q.x))), rr = q.x * q.x + q.y * q.y;
             if (rr < R * R) z = eSMax(z, E_ZB + sqrt(R * R - rr), 0.03);
@@ -747,7 +750,8 @@
             const mEye = mat(eyeVertex, eyeFragment, { uSize: { value: 1.9 },
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
                 uCrease: { get value() { return eyeCr.set(EL.profDepth, EL.lidT, EL.paraA, EL.paraW); } },
-                uCrease3: { get value() { return eyeCr3.set(EL.lowerSq, EL.archDrop, EL.paraP, 0); } },
+                uCrease3: { get value() { return eyeCr3.set(EL.lowerSq, EL.archDrop, EL.paraP, EL.grooveDepth); } },
+                uGroove: { get value() { return eyeGr.set(EL.grooveY, EL.grooveW, 0, 0); } },
                 uCrease2: { get value() { return eyeCr2.set(EL.creaseFlat, EL.creaseHalf, 0, EL.lidShadowTop); } },
                 uVC: { value: profC }, uVS: { value: profS },
                 uEyeFade: { get value() { return eyeFade.set(EL.fadeWave, EL.fadeSpeed, EL.fadeStart, 0); } },
