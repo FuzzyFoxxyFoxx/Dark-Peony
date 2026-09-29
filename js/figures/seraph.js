@@ -148,14 +148,25 @@
                     [0.026, 0.27], [0.12, 0.27], [0.227, 0.252], [0.321, 0.215], [0.38, 0.175], [0.416, 0.191], [0.439, 0.203], [0.51, 0.164],
                     [0.605, 0.108], [0.676, 0.071], [0.735, 0.05], [0.778, 0.077], [0.822, 0.104], [0.887, 0.123], [0.952, 0.126], [0.996, 0.099], [1.039, 0.05], [1.083, -0.004], [1.126, -0.042], [1.17, -0.061], [1.213, -0.064], [1.278, -0.061], [1.409, -0.037], [1.539, -0.002], [1.67, 0.042], [1.8, 0.091], [2.1, 0.205], [2.4, 0.319]];   // выше конца контура автора (y 1.8) — прямое продолжение его наклона, без собственных изгибов   // выше борозды — контур автора (лоб: выступ надбровья → впадина → лоб вперёд), снят с рисунка на 90°
     const PROF_S = [[-2.4, 0.16], [-1.6, 0.14], [-1.0, 0.12], [-0.5, 0.15], [0, 0.17], [0.5, 0.16], [1.0, 0.10], [1.5, 0.03], [2.4, -0.10]];
-    const profTangents = (P) => P.map((p, i) => {                       // монотонные касательные; на дальнем конце наклон 0 (выход на плоскость)
-        const d = (k) => (P[k + 1][1] - P[k][1]) / (P[k + 1][0] - P[k][0]);
-        if (i === 0) return new THREE.Vector3(p[0], p[1], 0);
-        if (i === P.length - 1) return new THREE.Vector3(p[0], p[1], 0);
-        const a = d(i - 1), b = d(i);
-        return new THREE.Vector3(p[0], p[1], a * b <= 0 ? 0 : 2 * a * b / (a + b));
+    // Оцифрованный контур автора «шумный» (точки через 0.02–0.05, гармонические касательные → скачки наклона и кривизны), а френель
+    // и свет реагируют на любой излом — отсюда лишние полоски. Поэтому профиль пересобирается: линейная интерполяция точек →
+    // гауссово сглаживание (sigma) → узлы через 0.1 → касательные центральными разностями (кривая Катмулла — Рома, гладкая).
+    const smoothProfile = (P, sigma, step) => {
+        const lin = (y) => { if (y <= P[0][0]) return P[0][1]; for (let i = 0; i < P.length - 1; i++) if (y <= P[i + 1][0]) { const t = (y - P[i][0]) / (P[i + 1][0] - P[i][0]); return P[i][1] + t * (P[i + 1][1] - P[i][1]); } return P[P.length - 1][1]; };
+        const y0 = P[0][0], y1 = P[P.length - 1][0], out = [];
+        for (let y = y0; y <= y1 + 1e-6; y += step) {
+            let sw = 0, sz = 0;
+            for (let k = -3; k <= 3; k += 0.25) { const w = Math.exp(-0.5 * k * k), yy = Math.min(y1, Math.max(y0, y + k * sigma)); sw += w; sz += w * lin(yy); }
+            out.push([y, sz / sw]);
+        }
+        return out;
+    };
+    const profTangents = (P) => P.map((p, i) => {
+        const a = P[Math.max(0, i - 1)], b = P[Math.min(P.length - 1, i + 1)];
+        return new THREE.Vector3(p[0], p[1], (b[1] - a[1]) / (b[0] - a[0]));
     });
-    const profC = profTangents(PROF_C), profS = profTangents(PROF_S);
+    const SMOOTH = 0.13;
+    const profC = profTangents(smoothProfile(PROF_C, SMOOTH, 0.1)), profS = profTangents(smoothProfile(PROF_S, 0.2, 0.1));
     const profEval = (T, s) => {                                        // кубика Эрмита по узлам (s, z, наклон)
         s = Math.min(T[T.length - 1].x, Math.max(T[0].x, s));
         for (let i = 0; i < T.length - 1; i++) if (s <= T[i + 1].x) {
@@ -179,7 +190,8 @@
     const eyeSurfZ = (x, y) => {                                        // = eSurf(...).z (GLSL), для положений точек в покое
         const C = DP.config.seraphEye, u = Math.min(1, Math.abs(x) / (C.creaseHalf * (0.95 + 0.05 * smoothS(-0.25, 0.25, y)))), arch = 0.5 * (1 - Math.cos(Math.PI * u));
         const hu = eyeHU(x), hl = eyeHL(x);
-        let ye = y + (EYE.hh - hu) * C.archDrop * smoothS(0.0, 0.12, y) - (EYE.hl - hl) * C.archDrop * smoothS(0.0, 0.12, -y);
+        const du = (EYE.hh - hu) * C.archDrop, dl = (EYE.hl - hl) * C.archDrop;
+        let ye = y + du * smoothS(0.0, 0.12 + du * 0.8, y) - dl * smoothS(0.0, 0.12 + dl * 0.8, -y);
         ye *= 1 + (C.lowerSq - 1) * (1 - smoothS(-0.6, 0.0, y));
         const w = 1 - smoothS(C.creaseFlat, 1, u), zS = profEval(profS, ye), zC = profEval(profC, ye);
         const z = zS + C.profDepth * (zC - zS) * w - C.paraA * (1 - Math.exp(-Math.pow(Math.abs(x) / C.paraW, C.paraP)));
@@ -216,7 +228,7 @@
             // складки повторяют форму разреза: вертикальная координата профиля сдвигается на разницу между краем разреза в центре и
             // на данном x (веса плавно набираются от y = 0 до края разреза), так что линии складок идут параллельно кромке
             float hu = eHU(r.x), hl = eHL(r.x), du = (E_HH - hu) * uCrease3.y, dl = (E_HL - hl) * uCrease3.y;
-            float ye = r.y + du * smoothstep(0.0, 0.12, r.y) - dl * smoothstep(0.0, 0.12, -r.y);   // все складки сдвигаются ровно на смещение кромки — идут параллельно разрезу; у уголков профиль и так гладкий (w→0)
+            float ye = r.y + du * smoothstep(0.0, 0.12 + du * 0.8, r.y) - dl * smoothstep(0.0, 0.12 + dl * 0.8, -r.y);   // все складки сдвигаются ровно на смещение кромки — идут параллельно разрезу; у уголков профиль и так гладкий (w→0)
             ye *= 1.0 + (uCrease3.x - 1.0) * (1.0 - smoothstep(-0.6, 0.0, r.y));
             float w = 1.0 - smoothstep(uCrease2.x, 1.0, u), zS = eVS(ye);
             float z = zS + uCrease.x * (eVC(ye) - zS) * w;
