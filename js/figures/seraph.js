@@ -42,24 +42,25 @@
     DP.config.seraphEye = Object.assign({
         rim: 2.2, rimWidth: 0.06,      // кант по краю разреза: яркость, ширина (доли полуширины глаза)
         ball: 4.8,                   // яркость глазного яблока (в середине; к краям — в тень)
-        skinBase: 0.12, skinCurve: 0.8,  // кожа: базовая видимость, свечение изгибов (френель купола)
-        light: 0.8,                   // источник света (сверху-слева-спереди): сила светотени на коже и яблоке
-        fadeWave: 0.25, fadeSpeed: 0.0, fadeStart: 0.05,   // переход в прозрачность: неровность контура, скорость «гуляния», где начинается спад (доля радиуса)
+        skinBase: 0.09, skinCurve: 0.88,  // кожа: базовая видимость, свечение изгибов (френель купола)
+        light: 1.08,                   // источник света (сверху-слева-спереди): сила светотени на коже и яблоке
+        fadeWave: 0.25, fadeSpeed: 0.0, fadeStart: 0.09,   // переход в прозрачность: неровность контура, скорость «гуляния», где начинается спад (доля радиуса)
         // Профиль кожи по референсу автора («Simple beginner version», вид сбоку): центральный профиль (PROF_UP/PROF_LO) +
         // почти плоский краевой профиль, между ними плавный переход по x; сверху парабола (выгиб по горизонтали).
-        profDepth: 1.0,               // контрастность центрального профиля относительно краевого (1 — как на референсе, 0 — без борозды)
-        lidT: 0.005,                   // толщина века у разреза (зазор до яблока); к уголкам сходит на нет
+        profDepth: 0.5,               // контрастность центрального профиля относительно краевого (1 — как на референсе, 0 — без борозды)
+        lidT: 0.01,                   // толщина века у разреза (зазор до яблока); к уголкам сходит на нет
         lowerSq: 1.0,                // сжатие нижнего профиля по y (S-переход в скулу ближе)
-        grooveDepth: 0.13, grooveW: 0.075, grooveY: 0.72,   // борозда (орбитопальпебральная): глубина, ширина, высота — гауссов провал поверх гладкого профиля, идёт вместе со складками, к уголкам гаснет
-        edgeFade: 0.035,              // ширина перехода в ноль у края разреза (локальные единицы; ≈ 3 частицы)
+        grooveDepth: 0.095, grooveW: 0.09, grooveY: 0.67,   // борозда (орбитопальпебральная): глубина, ширина, высота — гауссов провал поверх гладкого профиля, идёт вместе со складками, к уголкам гаснет
+        edgeFade: 0.044,              // ширина перехода в ноль у края разреза (локальные единицы; ≈ 3 частицы)
         lidLocal: 0.75, lidW: 0.55,   // доля движения века, локальная над роговицей (остальное — целиком), ширина изгиба по x
-        lidFollow: 0.35,              // веки следят за взглядом (0 — не двигаются)
-        cornea: 0.16,                 // роговица: насколько купол выступает над сферой яблока (доля радиуса)
-        archDrop: 1.0,                // насколько складки повторяют форму разреза (0 — параллельны оси x)
-        paraA: 1.35, paraW: 1.55, paraP: 2.6,     // парабола вид сверху: насколько кожа уходит назад к носу/уху и с какой ширины
-        creaseHalf: 1.2, creaseFlat: 0.6,   // полудлина центрального профиля по x; где начинает переходить в краевой (доля)
+        downK: 0.26,                  // на сколько глаз поворачивается вниз (0.42 — как вверх): зрачок не прячется за нижнее веко больше чем на ≈30%
+        lidFollow: 0.4,              // веки следят за взглядом (0 — не двигаются)
+        cornea: 0.15,                 // роговица: насколько купол выступает над сферой яблока (доля радиуса)
+        archDrop: 1.06,                // насколько складки повторяют форму разреза (0 — параллельны оси x)
+        paraA: 1.7, paraW: 1.55, paraP: 2.6,     // парабола вид сверху: насколько кожа уходит назад к носу/уху и с какой ширины
+        creaseHalf: 1.06, creaseFlat: 0.53,   // полудлина центрального профиля по x; где начинает переходить в краевой (доля)
         lidShadowTop: 0.55,           // тень верхнего века на яблоке шире, чем нижнего (меньше — шире)
-        halo: 2.2,                   // ореол складки над глазом (спереди)
+        halo: 0.7,                   // ореол складки над глазом (спереди)
         lidShadow: 0.5                // тень век на яблоке: у краёв разреза яблоко темнее
     }, DP.config.seraphEye || {});
     const eyeLook = new THREE.Vector4(), eyeLook2 = new THREE.Vector4(), eyeFade = new THREE.Vector4(), eyeCr = new THREE.Vector4(), eyeCr2 = new THREE.Vector4(), eyeCr3 = new THREE.Vector4(), eyeGr = new THREE.Vector4();
@@ -273,8 +274,9 @@
             float yU = mix(-ll * 0.96, lu, oU + gLid.y * lidBell(q.x)), yL = mix(-ll * 0.96, -ll, oL + gLid.z * lidBell(q.x));
             return step(abs(q.x), 0.99) * smoothstep(-0.015, 0.015, yU - q.y) * smoothstep(-0.015, 0.015, q.y - yL);
         }
+        uniform float uDownK;
         vec3 eRotGaze(vec3 p, vec2 g) {                                                  // поворот яблока взглядом
-            float yaw = g.x * 0.55, pitch = g.y * 0.42;
+            float yaw = g.x * 0.55, pitch = g.y * (g.y < 0.0 ? uDownK : 0.42);   // вниз глаз уходит меньше (зрачок максимум ≈30% за нижнее веко)
             float cy = cos(yaw), sy = sin(yaw), cp = cos(pitch), sp = sin(pitch);
             p = vec3(p.x, p.y * cp + p.z * sp, -p.y * sp + p.z * cp);
             return vec3(p.x * cy + p.z * sy, p.y, -p.x * sy + p.z * cy);
@@ -704,7 +706,7 @@
         let focused = false;
         const fixedGaze = DP.params.get('gaze') === 'fixed';               // ?gaze=fixed — взгляд прямо, без моргания (для сверки с референсом)
         function update(T, dt, root) {
-            if (fixedGaze) { const op = parseFloat(DP.params.get('open') || '1'), gx = parseFloat(DP.params.get('gx') || '0'), gy = parseFloat(DP.params.get('gy') || '0'); for (let i = 0; i < MAX_EYES; i++) gaze[i].set(gx, gy, 1, 0.03 + 0.97 * op); return; }
+            if (fixedGaze) { const op = DP.eyeOpen !== undefined ? DP.eyeOpen : parseFloat(DP.params.get('open') || '1'), gx = parseFloat(DP.params.get('gx') || '0'), gy = parseFloat(DP.params.get('gy') || '0'); for (let i = 0; i < MAX_EYES; i++) gaze[i].set(gx, gy, 1, 0.03 + 0.97 * op); return; }
             const now = performance.now() / 1000;
             const focus = now - pointer.t < 1.6;
             if (focus && !focused) st.forEach(s => { s.tp = 0.62; });            // навелись — зрачки сузились
@@ -773,6 +775,7 @@
                 uEdgeFade: { get value() { return EL.edgeFade; } },
                 uCornea: { get value() { return EL.cornea; } },
                 uLidFollow: { get value() { return EL.lidFollow; } },
+                uDownK: { get value() { return EL.downK; } },
                 uLidLocal: { get value() { return EL.lidLocal; } }, uLidW: { get value() { return EL.lidW; } },
                 uCrease: { get value() { return eyeCr.set(EL.profDepth, EL.lidT, EL.paraA, EL.paraW); } },
                 uCrease3: { get value() { return eyeCr3.set(EL.lowerSq, EL.archDrop, EL.paraP, EL.grooveDepth); } },
