@@ -177,15 +177,16 @@
     const eyeHU = (x) => EYE.hh * Math.pow(Math.max(0, 1 - x * x), EYE.pu), eyeHL = (x) => EYE.hl * Math.pow(Math.max(0, 1 - x * x), EYE.pl);   // = eHU/eHL (GLSL): «лимончик»
     const smax = (a, b, k) => 0.5 * (a + b + Math.sqrt((a - b) * (a - b) + k * k));
     const eyeSurfZ = (x, y) => {                                        // = eSurf(...).z (GLSL), для положений точек в покое
-        const C = DP.config.seraphEye, u = Math.min(1, Math.abs(x) / (C.creaseHalf * (y < 0 ? 0.62 : 1))), arch = 0.5 * (1 - Math.cos(Math.PI * u));
+        const C = DP.config.seraphEye, u = Math.min(1, Math.abs(x) / (C.creaseHalf * (0.62 + 0.38 * smoothS(-0.25, 0.25, y)))), arch = 0.5 * (1 - Math.cos(Math.PI * u));
         const hu = eyeHU(x), hl = eyeHL(x);
-        let ye = y + (EYE.hh - hu) * C.archDrop * smoothS(0.0, hu + 0.55, y) - (EYE.hl - hl) * C.archDrop * smoothS(0.0, hl + 0.55, -y);
+        let ye = y + (EYE.hh - hu) * C.archDrop * smoothS(0.0, 0.12, y) - (EYE.hl - hl) * C.archDrop * smoothS(0.0, 0.12, -y);
         ye *= 1 + (C.lowerSq - 1) * (1 - smoothS(-0.6, 0.0, y));
         const w = 1 - smoothS(C.creaseFlat, 1, u), zS = profEval(profS, ye), zC = profEval(profC, ye);
         const z = zS + C.profDepth * (zC - zS) * w - C.paraA * (1 - Math.exp(-Math.pow(Math.abs(x) / C.paraW, C.paraP)));
         const R = 1.0 + C.lidT * (1 - smoothS(0.35, 1.0, Math.abs(x))), rr = x * x + y * y;   // век не уходит внутрь яблока
         return rr < R * R ? smax(z, -0.76 + Math.sqrt(R * R - rr), 0.03) : z;
     };
+    DP.eyeSurfZ = (x, y) => eyeSurfZ(x, y);      // отладка: высота кожи глаза в покое (для срезов «как томограф»)
     const EYE = { ax: 2.9, ay: 2.2, hh: 0.38, hl: 0.34, pu: 0.85, pl: 1.35, rb: 1.0, zb: -0.76, iris: 0.38, pupil: 0.36,
                   lid: 0.05, flat: 0.0, hugIn: 0.85, hugOut: 1.5, fadeIn: 0.2 };   // hugIn/hugOut — доли радиуса яблока: где кожа сходит с него и где ложится на плоскость
     // Профиль кожи (набросок автора): у разреза кожа облегает яблоко с зазором lid (толщина века), дальше
@@ -211,11 +212,11 @@
         // Разрез (миндалина) вырезается отдельно. Век не уходит внутрь яблока: сглаженный максимум с поверхностью яблока + толщина
         // века (к уголкам → 0).
         vec3 eSurf2(vec2 r, vec2 q) {   // r — положение точки кожи в покое (профиль привязан к коже и едет с ней при моргании), q — текущее положение (яблоко, скругление)
-            float u = min(1.0, abs(r.x) / (uCrease2.y * (r.y < 0.0 ? 0.62 : 1.0)));   // низ: складка сходит в гладкий профиль раньше (у уголков нижнего века складок нет)
+            float u = min(1.0, abs(r.x) / (uCrease2.y * mix(0.62, 1.0, smoothstep(-0.25, 0.25, r.y))));   // низ: складка сходит в гладкий профиль раньше (у уголков нижнего века складок нет)
             // складки повторяют форму разреза: вертикальная координата профиля сдвигается на разницу между краем разреза в центре и
             // на данном x (веса плавно набираются от y = 0 до края разреза), так что линии складок идут параллельно кромке
             float hu = eHU(r.x), hl = eHL(r.x), du = (E_HH - hu) * uCrease3.y, dl = (E_HL - hl) * uCrease3.y;
-            float ye = r.y + du * smoothstep(0.0, hu + 0.55, r.y) - dl * smoothstep(0.0, hl + 0.55, -r.y);   // широкая рампа: у уголков (hu→0) сдвиг не превращается в ступеньку вдоль оси x
+            float ye = r.y + du * smoothstep(0.0, 0.12, r.y) - dl * smoothstep(0.0, 0.12, -r.y);   // все складки сдвигаются ровно на смещение кромки — идут параллельно разрезу; у уголков профиль и так гладкий (w→0)
             ye *= 1.0 + (uCrease3.x - 1.0) * (1.0 - smoothstep(-0.6, 0.0, r.y));
             float w = 1.0 - smoothstep(uCrease2.x, 1.0, u), zS = eVS(ye);
             float z = zS + uCrease.x * (eVC(ye) - zS) * w;
