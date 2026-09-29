@@ -52,6 +52,7 @@
         lowerSq: 1.0,                // сжатие нижнего профиля по y (S-переход в скулу ближе)
         grooveDepth: 0.095, grooveW: 0.09, grooveY: 0.67,   // борозда (орбитопальпебральная): глубина, ширина, высота — гауссов провал поверх гладкого профиля, идёт вместе со складками, к уголкам гаснет
         edgeFade: 0.044,              // ширина перехода в ноль у края разреза (локальные единицы; ≈ 3 частицы)
+        lidSide: 1.0,                 // 1 — изгиб века над зрачком; −1 — зеркально (изгиб на противоположной стороне)
         lidLocal: 0.75, lidW: 0.8,   // доля движения века, локальная над роговицей (остальное — целиком), ширина изгиба по x
         downK: 0.26,                  // на сколько глаз поворачивается вниз (0.42 — как вверх): зрачок не прячется за нижнее веко больше чем на ≈30%
         lidFollow: 0.4,              // веки следят за взглядом (0 — не двигаются)
@@ -309,7 +310,7 @@
         uniform vec4 uGaze[${MAX_EYES}];
         uniform vec4 uEyeC[${MAX_EYES}];     // центр (x, y, z) и полуширина
         uniform vec4 uEyeR[${MAX_EYES}];     // x — поворот в плоскости, y — глаз показан
-        uniform float uEdgeFade, uCornea, uLidFollow, uLidLocal, uLidW;
+        uniform float uEdgeFade, uCornea, uLidFollow, uLidLocal, uLidW, uLidSide;
         uniform vec4 uEyeFade;               // x — неровность контура прозрачности, y — скорость, z — где начинается спад
         attribute vec4 aE, aP;
         attribute vec2 aQ, aF;
@@ -327,7 +328,7 @@
             {   // веки следят за взглядом: вверх — верхнее поднимается, нижнее подтягивается; вниз — верхнее опускается. Сдвиг больше всего над роговицей (колокол по x с центром там, где зрачок), у уголков меньше: при взгляде вбок веко изгибается в ту сторону
                 float gu = uLidFollow * gz.y * gz.w, gl = -uLidFollow * 0.9 * max(0.0, gz.y) * gz.w + uLidFollow * 0.25 * max(0.0, -gz.y);
                 float lc = uLidLocal * min(1.0, abs(gz.x) * 1.4);   // локальный изгиб только пропорционально повороту вбок: при взгляде прямо вверх/вниз веко движется целиком (без «клювика» по центру)
-                gLid = vec4(sin(gz.x * 0.55) * E_RB, gu * lc, gl * lc, uLidW);
+                gLid = vec4(sin(gz.x * 0.55) * E_RB * uLidSide, gu * lc, gl * lc, uLidW);
                 oU += gu * (1.0 - lc); oL += gl * (1.0 - lc);
             }
             float stretch = 1.0;
@@ -794,7 +795,7 @@
                 uCornea: { get value() { return EL.cornea; } },
                 uLidFollow: { get value() { return EL.lidFollow; } },
                 uDownK: { get value() { return EL.downK; } },
-                uLidLocal: { get value() { return EL.lidLocal; } }, uLidW: { get value() { return EL.lidW; } },
+                uLidLocal: { get value() { return EL.lidLocal; } }, uLidW: { get value() { return EL.lidW; } }, uLidSide: { get value() { return EL.lidSide; } },
                 uCrease: { get value() { return eyeCr.set(EL.profDepth, EL.lidT, EL.paraA, EL.paraW); } },
                 uCrease3: { get value() { return eyeCr3.set(EL.lowerSq, EL.archDrop, EL.paraP, EL.grooveDepth); } },
                 uGroove: { get value() { return eyeGr.set(EL.grooveY, EL.grooveW, 0, 0); } },
