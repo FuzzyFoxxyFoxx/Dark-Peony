@@ -199,20 +199,21 @@
         // к уголкам (archDrop); парабола вида сверху уводит плоскость назад к носу/уху; снизу профиль сжат (lowerSq) — скула ближе.
         // Разрез (миндалина) вырезается отдельно. Век не уходит внутрь яблока: сглаженный максимум с поверхностью яблока + толщина
         // века (к уголкам → 0).
-        vec3 eSurf(vec2 q) {
-            float u = min(1.0, abs(q.x) / uCrease2.y);
+        vec3 eSurf2(vec2 r, vec2 q) {   // r — положение точки кожи в покое (профиль привязан к коже и едет с ней при моргании), q — текущее положение (яблоко, скругление)
+            float u = min(1.0, abs(r.x) / uCrease2.y);
             // складки повторяют форму разреза: вертикальная координата профиля сдвигается на разницу между краем разреза в центре и
             // на данном x (веса плавно набираются от y = 0 до края разреза), так что линии складок идут параллельно кромке
-            float hu = eHU(q.x), hl = eHL(q.x), du = (E_HH - hu) * uCrease3.y, dl = (E_HL - hl) * uCrease3.y;
-            float ye = q.y + du * smoothstep(0.0, hu + 0.08, q.y) - dl * smoothstep(0.0, hl + 0.08, -q.y);
-            ye *= 1.0 + (uCrease3.x - 1.0) * (1.0 - smoothstep(-0.6, 0.0, q.y));
+            float hu = eHU(r.x), hl = eHL(r.x), du = (E_HH - hu) * uCrease3.y, dl = (E_HL - hl) * uCrease3.y;
+            float ye = r.y + du * smoothstep(0.0, hu + 0.08, r.y) - dl * smoothstep(0.0, hl + 0.08, -r.y);
+            ye *= 1.0 + (uCrease3.x - 1.0) * (1.0 - smoothstep(-0.6, 0.0, r.y));
             float w = 1.0 - smoothstep(uCrease2.x, 1.0, u), zS = eVS(ye);
             float z = zS + uCrease.x * (eVC(ye) - zS) * w;
-            z -= uCrease.z * (1.0 - exp(-pow(abs(q.x) / uCrease.w, uCrease3.z)));   // вид сверху: супер-гауссиана (плоская вершина, круче к краям) ≈ дуга шара
+            z -= uCrease.z * (1.0 - exp(-pow(abs(r.x) / uCrease.w, uCrease3.z)));   // вид сверху: супер-гауссиана (плоская вершина, круче к краям) ≈ дуга шара
             float R = E_RB + uCrease.y * (1.0 - smoothstep(0.35, 1.0, abs(q.x))), rr = q.x * q.x + q.y * q.y;
             if (rr < R * R) z = eSMax(z, E_ZB + sqrt(R * R - rr), 0.03);
             return vec3(q, z);
         }
+        vec3 eSurf(vec2 q) { return eSurf2(q, q); }
         float eDome(vec2 q) { return eSurf(q).z; }
         // Точка кожи из положения в покое (глаз открыт) в текущее: веко oU/oL (0 — закрыто, 1 — открыто).
         vec2 eSkin(vec2 q, float oU, float oL) {
@@ -270,7 +271,7 @@
             vec3 loc, nrmW = vec3(0.0, 0.0, 1.0); vA = 1.0; vFres = 0.0; vRim = 0.0; vLit = 0.0; vShade = 1.0; vHalo = 0.0;
             if (kind < 0.5) {                                  // кожа
                 vec2 q = eSkin(aQ, oU, oL);
-                loc = eSurf(q);
+                loc = eSurf2(aQ, q);
                 float e = (q.x / E_AX) * (q.x / E_AX) + (q.y / E_AY) * (q.y / E_AY);
                 // прозрачность к краю лоскута: широкий мягкий переход; контур неровный — сумма синусоид с разным шагом и размахом (uEyeFade.x — размах, .y — скорость «гуляния»)
                 float th = atan(q.y / E_AY, q.x / E_AX), tt = uTime * uEyeFade.y + float(ei) * 1.7;
@@ -278,12 +279,13 @@
                 float rr = sqrt(e) * (1.0 + uEyeFade.x * (0.5 + 0.5 * wob));   // контур уходит только внутрь
                 vA = 1.0 - smoothstep(uEyeFade.z, 1.0, rr);
                 vA *= vA;                                                   // хвост мягче
-                vec2 d = vec2(eSurf(q + vec2(0.08, 0.0)).z - eSurf(q - vec2(0.08, 0.0)).z, eSurf(q + vec2(0.0, 0.08)).z - eSurf(q - vec2(0.0, 0.08)).z) / 0.16;
+                vec2 d = vec2(eSurf2(aQ + vec2(0.08, 0.0), q + vec2(0.08, 0.0)).z - eSurf2(aQ - vec2(0.08, 0.0), q - vec2(0.08, 0.0)).z, eSurf2(aQ + vec2(0.0, 0.08), q + vec2(0.0, 0.08)).z - eSurf2(aQ - vec2(0.0, 0.08), q - vec2(0.0, 0.08)).z) / 0.16;
                 vFres = length(d);                             // крутизна поверхности (сглаженная по шагу 0.08, чтобы узкие детали не давали лишних слоёв) — «френель» кожи
                 vec3 nb = normalize(vec3(-d, 1.0));
                 vHalo = smoothstep(0.7, 1.5, vFres) * (0.2 + 0.8 * max(0.0, -nb.y));   // ореол складки (спереди): склон круче и смотрит вниз
                 // светотень — по настоящей нормали поверхности со складкой (с навесом)
-                vec3 sx = eSurf(q + vec2(0.015, 0.0)) - eSurf(q - vec2(0.015, 0.0)), sy = eSurf(q + vec2(0.0, 0.015)) - eSurf(q - vec2(0.0, 0.015));
+                vec2 ex = vec2(0.015, 0.0), ey = vec2(0.0, 0.015);
+                vec3 sx = eSurf2(aQ + ex, eSkin(aQ + ex, oU, oL)) - eSurf2(aQ - ex, eSkin(aQ - ex, oU, oL)), sy = eSurf2(aQ + ey, eSkin(aQ + ey, oU, oL)) - eSurf2(aQ - ey, eSkin(aQ - ey, oU, oL));
                 vec3 nrm = normalize(cross(sx, sy));
                 vLit = dot(nrm, E_LIGHT) - E_LIGHT.z;
                 float c0 = cos(er.x), s0 = sin(er.x);
@@ -654,7 +656,7 @@
         let focused = false;
         const fixedGaze = DP.params.get('gaze') === 'fixed';               // ?gaze=fixed — взгляд прямо, без моргания (для сверки с референсом)
         function update(T, dt, root) {
-            if (fixedGaze) { for (let i = 0; i < MAX_EYES; i++) gaze[i].set(0, 0, 1, 1); return; }
+            if (fixedGaze) { const op = parseFloat(DP.params.get('open') || '1'); for (let i = 0; i < MAX_EYES; i++) gaze[i].set(0, 0, 1, 0.03 + 0.97 * op); return; }
             const now = performance.now() / 1000;
             const focus = now - pointer.t < 1.6;
             if (focus && !focused) st.forEach(s => { s.tp = 0.62; });            // навелись — зрачки сузились
