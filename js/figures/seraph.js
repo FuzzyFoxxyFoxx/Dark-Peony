@@ -40,11 +40,12 @@
     // Глаза: центр (в плоскости фигуры) или на лепестке (индекс, доля длины), полуширина.
     const EYES = [
         { x: 0, y: 0, w: 0.46, main: true },
-        { petal: 0, u: 0.56, w: 0.17 }, { petal: 1, u: 0.56, w: 0.17 },
-        { petal: 2, u: 0.55, w: 0.16 }, { petal: 3, u: 0.55, w: 0.16 },
-        { petal: 4, u: 0.55, w: 0.14 }, { petal: 5, u: 0.55, w: 0.14 },
-        { x: 0, y: -0.62, w: 0.22 }
+        // по референсу с циферблатом: на малых верхних (11 и 1 ч) и на верхних крыльях креста (10 и 2 ч), ≈ на середине длины; плюс малый глаз под центральным
+        { petal: 0, u: 0.5, w: 0.29 }, { petal: 1, u: 0.5, w: 0.29 },
+        { petal: 2, u: 0.46, w: 0.34 }, { petal: 3, u: 0.46, w: 0.34 },
+        { x: 0, y: -1.05, w: 0.3 }
     ];
+
     const ORDER_NOISE = 0.25;
     // Вид глаза (ползунки ?tune — «Серафим: глаз»).
     DP.config.seraphEye = Object.assign({
@@ -105,7 +106,7 @@
     // Доводим по частям, как медузу и светило ('' — все). ?parts= в адресе важнее.
     // petals — лепестки, eye — центральный глаз, eyes — малые глаза, tendrils — усики, rings — кольца.
     // petalN (petal1 — верхний правый) — только один лепесток (доводка по одному, как глаз; потом — по его образцу все остальные).
-    const DEFAULT_PARTS = 'petals,eye';
+    const DEFAULT_PARTS = 'petals,eye,eyes';
     const onlyPetalOf = (parts) => { const m = /petal(\d+)/.exec(parts || ''); return m ? +m[1] : (/cross/.test(parts || '') ? -2 : -1); };
     // cross — «андреевский крест»: четыре самых крупных лепестка (диагональные верхние 2, 3 и нижние крылья 8, 9); остальные добавим между ними позже.
     const CROSS = [2, 3, 8, 9];
@@ -132,14 +133,8 @@
     `;
     const depthVert = 'vDepthK = 1.0 - uDepth.y * smoothstep(-1.2, 1.6, dist - uDepth.x);';
 
-    // Лепесток: aP — (u, v, фаза, seed), aL — длина.
-    const petalVertex = (G) => `
-        ${flapGlsl}
-        ${depthGlsl}
-        ${G.pointsVertex}
-        uniform float uViewportScale, uSize;
-        attribute vec4 aP;
-        attribute float aL, aSizeScale, aVein;
+    // Общая деформация лепестка (колыхание, рюши, вращение, крен, раскрытие, живая дуга): одна и та же для точек лепестка и для кожи глаза, вросшего в лепесток.
+    const petalDeformGlsl = `
         uniform float uPetalFlap, uFlapAmp, uSpread, uFlapWave, uFlapVar, uFlapSpeed, uFlapFresnel, uPetTwist, uPetTwistSpeed, uRufAmp, uRufK, uRufSpeed, uOpenK, uCalm, uTwShape, uRoll, uSideRoll, uLatAmp, uTwLim, uSweepK, uSweepSpeed;
         // Колыхание с переменной длиной и высотой волны: фаза искажена медленными синусами (местная длина волны гуляет вдоль лепестка и во времени),
         // высота — огибающая из бегущих «пакетов»; вторая, короткая волна добавляет рябь к кончику.
@@ -196,6 +191,83 @@
             float env2 = 1.0 + uFlapVar * 0.7 * sin(t * 0.63 + sd + u * 4.2);
             return (0.21 * w1 * env1 + 0.085 * w2 * env2) * pow(u, 1.4) * L;
         }
+        // pos — точка в покое (система фигуры), nrm — нормаль покоя; u, v — положение на лепестке (вдоль 0..1, поперёк −1..1), ph/sd — фаза и seed лепестка, L — длина,
+        // B — основание (x, y) и угол оси, K — aK, R — aR, W — aW; wlIn — полуширина лепестка в этой точке (<0 — оценить по положению).
+        void dpPetalDeform(inout vec3 pos, inout vec3 nrm, float u, float v, float ph, float sd, float L, vec3 B, vec4 K, vec2 R, float W, float wlIn) {
+            // живая дуга оси (динамическая часть изгиба кончика): поворот вокруг основания на θ(u) = −W·сигнал·u², знак как у статичного изгиба (положительный — кончик вверх)
+            if (W > 0.0) {
+                float sg = 0.6 * sin(uTime * 0.21 * uSweepSpeed + ph * 1.7 - u * 0.9) + 0.4 * sin(uTime * 0.13 * uSweepSpeed + sd * 2.1 + u * 0.6);
+                float th = -sign(B.z) * W * uSweepK * sg * u * u, sc = cos(th), ss = sin(th);
+                vec2 dd = pos.xy - B.xy;
+                pos.xy = B.xy + vec2(dd.x * sc + dd.y * ss, -dd.x * ss + dd.y * sc);
+            }
+            // рюши кромки: сдвиг поперёк в плоскости лепестка и из плоскости (до вращения и колыхания, в системе лепестка)
+            vec2 axT0 = vec2(sin(B.z), cos(B.z)), axP0 = vec2(cos(B.z), -sin(B.z));
+            float ac = dot(pos.xy - B.xy, axP0), wl = wlIn > 0.0 ? wlIn : min(abs(ac) / max(abs(v), 0.05), 0.8);   // полуширина (с потолком: у изогнутой оси расстояние до оси растёт и ломало бы рюши)
+            vec2 ruf = dpPetRuf(u, v, wl, sd, L);
+            float eu = 0.01, ev = 0.03, uq = clamp(u, eu, 1.0 - eu), vq = clamp(v, -1.0 + ev, 1.0 - ev);
+            float rzl = uFlapFresnel * (dpPetRuf(uq + eu, v, wl, sd, L).y - dpPetRuf(uq - eu, v, wl, sd, L).y) / (2.0 * eu * L);
+            float rzc = uFlapFresnel * (dpPetRuf(u, vq + ev, wl, sd, L).y - dpPetRuf(u, vq - ev, wl, sd, L).y) / (2.0 * ev * max(wl, 0.05));
+            pos.xy += axP0 * ruf.x;
+            pos.z += ruf.y;
+            vec3 nB = normalize(nrm - vec3(axT0 * rzl + axP0 * rzc, 0.0));
+            // вращение вокруг центральной оси (wiggle): у основания нет, со средины нарастает к кончику (кончики заворачиваются); случайное, медленное, ±uPetTwist
+            float act = dpAct(ph, sd);
+            float tw = uPetTwist * K.y * act * uPetalFlap * dpTwist(u, ph, sd);
+            // крен: верхняя (по экрану) кромка лепестка ближе к камере; у основания нет, плавно нарастает с ≈15–40% длины
+            tw += uRoll * K.w * smoothstep(0.15, 0.40, u) * (axP0.y < 0.0 ? -1.0 : 1.0);
+            tw = tw * inversesqrt(1.0 + tw * tw / (uTwLim * uTwLim));                        // мягкий предел вращения: кончик не доходит до «ребра» (90°) и не схлопывается в линию, «обрезанный» вид
+            tw += uSideRoll * R.x * smoothstep(0.08, 0.45, u);
+            float tc = cos(tw), ts = sin(tw);
+            vec2 axT = vec2(sin(B.z), cos(B.z)), axP = vec2(cos(B.z), -sin(B.z));
+            vec2 d0 = pos.xy - B.xy;
+            float al0 = dot(d0, axT), ac0 = dot(d0, axP), z0 = pos.z;
+            pos.xy = B.xy + axT * al0 + axP * (ac0 * tc - z0 * ts);
+            pos.z = ac0 * ts + z0 * tc;
+            vec3 nR = vec3(axT * dot(nB.xy, axT) + axP * (dot(nB.xy, axP) * tc - nB.z * ts), dot(nB.xy, axP) * ts + nB.z * tc);
+            // раскрытие/сбор у основания: поворот всего лепестка вокруг основания в плоскости + наклон вперёд-назад вдоль оси
+            float sp = (R.y > 0.0 ? 0.25 : 1.0) * uSpread * act * uPetalFlap * (0.75 * sin(uTime * 0.45 + ph) + 0.45 * sin(uTime * 0.83 + sd));
+            float cs = cos(sp), sn = sin(sp);
+            vec2 d = pos.xy - B.xy;
+            pos.xy = B.xy + vec2(cs * d.x - sn * d.y, sn * d.x + cs * d.y);
+            float along = dot(d, vec2(sin(B.z), cos(B.z)));
+            pos.z += along * uSpread * uPetalFlap * 0.8 * sin(uTime * 0.38 + ph * 1.3 + 1.0);
+            pos.z += uPetalFlap * uFlapAmp * K.z * act * dpFlapV(u, ph, sd, L);
+            // повёрнутые боком узкие лепестки (экватор, 6 ч): изгиб из плоскости с фронта не виден — добавлен такой же изгиб В плоскости экрана (поперёк оси), со сдвигом фазы
+            float latv = uPetalFlap * uFlapAmp * uLatAmp * abs(R.x) * act * dpFlapV(u, ph + 1.7, sd * 1.3 + 0.7, L);
+            if (R.y > 0.0) { float Lm = max(R.y * L * u, 1e-3); latv = latv / (1.0 + abs(latv) / Lm); }   // экваториальные: отклонение от горизонтали не больше ≈7.5° (15 минут по циферблату)
+            pos.xy += axP0 * latv;
+            // раскрытие: всё (после всех деформаций) поворачивается вокруг основания поперёк оси, концы — к зрителю
+            float op = K.x * uOpenK, oc = cos(op), os = sin(op);
+            {
+                vec2 dd = pos.xy - B.xy;
+                float ol = dot(dd, vec2(sin(B.z), cos(B.z))), ocr = dot(dd, vec2(cos(B.z), -sin(B.z)));
+                float nl = ol * oc - pos.z * os;
+                pos.z = ol * os + pos.z * oc;
+                pos.xy = B.xy + vec2(sin(B.z), cos(B.z)) * nl + vec2(cos(B.z), -sin(B.z)) * ocr;
+            }
+            pos.y += uPetalFlap * dpBob();
+            // нормаль следует за изгибом (иначе френель считался бы по нормали покоя и волны не подсвечивались):
+            // наклон поверхности вдоль оси = производная смещения z по длине (конечная разность) + наклон от «распускания»
+            float e = 0.01, uu = clamp(u, e, 1.0 - e);
+            float dzdl = uFlapFresnel * uPetalFlap * uFlapAmp * K.z * act * (dpFlapV(uu + e, ph, sd, L) - dpFlapV(uu - e, ph, sd, L)) / (2.0 * e * L)
+                       + uSpread * uPetalFlap * 0.8 * sin(uTime * 0.38 + ph * 1.3 + 1.0);
+            vec3 tAx = vec3(cs * sin(B.z) - sn * cos(B.z), sn * sin(B.z) + cs * cos(B.z), 0.0);
+            vec3 nDef = normalize(vec3(cs * nR.x - sn * nR.y, sn * nR.x + cs * nR.y, nR.z) - dzdl * tAx);
+            { float nl = dot(nDef.xy, vec2(sin(B.z), cos(B.z))); float nl2 = nl * oc - nDef.z * os; nDef = vec3(nDef.xy + vec2(sin(B.z), cos(B.z)) * (nl2 - nl), nl * os + nDef.z * oc); }
+            nrm = nDef;
+        }
+    `;
+
+    // Лепесток: aP — (u, v, фаза, seed), aL — длина.
+    const petalVertex = (G) => `
+        ${flapGlsl}
+        ${depthGlsl}
+        ${G.pointsVertex}
+        ${petalDeformGlsl}
+        uniform float uViewportScale, uSize;
+        attribute vec4 aP;
+        attribute float aL, aSizeScale, aVein;
         attribute vec4 aK;                                   // x — раскрытие (наклон к зрителю, рад), y — множитель вращения вокруг оси, z — множитель колыхания, w — крен верхней кромки к камере (1 — у креста)
         attribute float aW;                                  // динамический «размах дуги» оси лепестка (рад): ось то загибается вниз, то выпрямляется/вверх (живость и пластика)
         attribute vec2 aR;                                    // боковой крен тентаклей на 6 ч: +1/−1 — левой/правой кромкой к камере (знак по стороне), 0 — нет
@@ -204,67 +276,9 @@
         void main() {
             vec3 dpRest = position;
             vec3 pos = position;
-            // живая дуга оси (динамическая часть изгиба кончика): поворот вокруг основания на θ(u) = −aW·сигнал·u², знак как у статичного изгиба (положительный — кончик вверх)
-            if (aW > 0.0) {
-                float sg = 0.6 * sin(uTime * 0.21 * uSweepSpeed + aP.z * 1.7 - aP.x * 0.9) + 0.4 * sin(uTime * 0.13 * uSweepSpeed + aP.w * 2.1 + aP.x * 0.6);
-                float th = -sign(aB.z) * aW * uSweepK * sg * aP.x * aP.x, sc = cos(th), ss = sin(th);
-                vec2 dd = pos.xy - aB.xy;
-                pos.xy = aB.xy + vec2(dd.x * sc + dd.y * ss, -dd.x * ss + dd.y * sc);
-            }
-            // рюши кромки: сдвиг поперёк в плоскости лепестка и из плоскости (до вращения и колыхания, в системе лепестка)
-            vec2 axT0 = vec2(sin(aB.z), cos(aB.z)), axP0 = vec2(cos(aB.z), -sin(aB.z));
-            float ac = dot(pos.xy - aB.xy, axP0), wl = min(abs(ac) / max(abs(aP.y), 0.05), 0.8);   // полуширина (с потолком: у изогнутой оси расстояние до оси растёт и ломало бы рюши)
-            vec2 ruf = dpPetRuf(aP.x, aP.y, wl, aP.w, aL);
-            float eu = 0.01, ev = 0.03, uq = clamp(aP.x, eu, 1.0 - eu), vq = clamp(aP.y, -1.0 + ev, 1.0 - ev);
-            float rzl = uFlapFresnel * (dpPetRuf(uq + eu, aP.y, wl, aP.w, aL).y - dpPetRuf(uq - eu, aP.y, wl, aP.w, aL).y) / (2.0 * eu * aL);
-            float rzc = uFlapFresnel * (dpPetRuf(aP.x, vq + ev, wl, aP.w, aL).y - dpPetRuf(aP.x, vq - ev, wl, aP.w, aL).y) / (2.0 * ev * max(wl, 0.05));
-            pos.xy += axP0 * ruf.x;
-            pos.z += ruf.y;
-            vec3 nB = normalize(normal - vec3(axT0 * rzl + axP0 * rzc, 0.0));
-            // вращение вокруг центральной оси (wiggle): у основания нет, со средины нарастает к кончику (кончики заворачиваются); случайное, медленное, ±uPetTwist
-            float act = dpAct(aP.z, aP.w);
-            float tw = uPetTwist * aK.y * act * uPetalFlap * dpTwist(aP.x, aP.z, aP.w);
-            // крен: верхняя (по экрану) кромка лепестка ближе к камере; у основания нет, плавно нарастает с ≈15–40% длины
-            tw += uRoll * aK.w * smoothstep(0.15, 0.40, aP.x) * (axP0.y < 0.0 ? -1.0 : 1.0);
-            tw = tw * inversesqrt(1.0 + tw * tw / (uTwLim * uTwLim));                        // мягкий предел вращения: кончик не доходит до «ребра» (90°) и не схлопывается в линию, «обрезанный» вид
-            tw += uSideRoll * aR.x * smoothstep(0.08, 0.45, aP.x);
-            float tc = cos(tw), ts = sin(tw);
-            vec2 axT = vec2(sin(aB.z), cos(aB.z)), axP = vec2(cos(aB.z), -sin(aB.z));
-            vec2 d0 = pos.xy - aB.xy;
-            float al0 = dot(d0, axT), ac0 = dot(d0, axP), z0 = pos.z;
-            pos.xy = aB.xy + axT * al0 + axP * (ac0 * tc - z0 * ts);
-            pos.z = ac0 * ts + z0 * tc;
-            vec3 nR = vec3(axT * dot(nB.xy, axT) + axP * (dot(nB.xy, axP) * tc - nB.z * ts), dot(nB.xy, axP) * ts + nB.z * tc);
-            // раскрытие/сбор у основания: поворот всего лепестка вокруг основания в плоскости + наклон вперёд-назад вдоль оси
-            float sp = (aR.y > 0.0 ? 0.25 : 1.0) * uSpread * act * uPetalFlap * (0.75 * sin(uTime * 0.45 + aP.z) + 0.45 * sin(uTime * 0.83 + aP.w));
-            float cs = cos(sp), sn = sin(sp);
-            vec2 d = pos.xy - aB.xy;
-            pos.xy = aB.xy + vec2(cs * d.x - sn * d.y, sn * d.x + cs * d.y);
-            float along = dot(d, vec2(sin(aB.z), cos(aB.z)));
-            pos.z += along * uSpread * uPetalFlap * 0.8 * sin(uTime * 0.38 + aP.z * 1.3 + 1.0);
-            pos.z += uPetalFlap * uFlapAmp * aK.z * act * dpFlapV(aP.x, aP.z, aP.w, aL);
-            // повёрнутые боком узкие лепестки (экватор, 6 ч): изгиб из плоскости с фронта не виден — добавлен такой же изгиб В плоскости экрана (поперёк оси), со сдвигом фазы
-            float latv = uPetalFlap * uFlapAmp * uLatAmp * abs(aR.x) * act * dpFlapV(aP.x, aP.z + 1.7, aP.w * 1.3 + 0.7, aL);
-            if (aR.y > 0.0) { float Lm = max(aR.y * aL * aP.x, 1e-3); latv = latv / (1.0 + abs(latv) / Lm); }   // экваториальные: отклонение от горизонтали не больше ≈7.5° (15 минут по циферблату)
-            pos.xy += axP0 * latv;
-            // раскрытие: всё (после всех деформаций) поворачивается вокруг основания поперёк оси, концы — к зрителю
-            float op = aK.x * uOpenK, oc = cos(op), os = sin(op);
-            {
-                vec2 dd = pos.xy - aB.xy;
-                float ol = dot(dd, vec2(sin(aB.z), cos(aB.z))), ocr = dot(dd, vec2(cos(aB.z), -sin(aB.z)));
-                float nl = ol * oc - pos.z * os;
-                pos.z = ol * os + pos.z * oc;
-                pos.xy = aB.xy + vec2(sin(aB.z), cos(aB.z)) * nl + vec2(cos(aB.z), -sin(aB.z)) * ocr;
-            }
-            pos.y += uPetalFlap * dpBob();
-            // нормаль следует за изгибом (иначе френель считался бы по нормали покоя и волны не подсвечивались):
-            // наклон поверхности вдоль оси = производная смещения z по длине (конечная разность) + наклон от «распускания»
-            float e = 0.01, uu = clamp(aP.x, e, 1.0 - e);
-            float dzdl = uFlapFresnel * uPetalFlap * uFlapAmp * aK.z * act * (dpFlapV(uu + e, aP.z, aP.w, aL) - dpFlapV(uu - e, aP.z, aP.w, aL)) / (2.0 * e * aL)
-                       + uSpread * uPetalFlap * 0.8 * sin(uTime * 0.38 + aP.z * 1.3 + 1.0);
-            vec3 tAx = vec3(cs * sin(aB.z) - sn * cos(aB.z), sn * sin(aB.z) + cs * cos(aB.z), 0.0);
-            vec3 nDef = normalize(vec3(cs * nR.x - sn * nR.y, sn * nR.x + cs * nR.y, nR.z) - dzdl * tAx);
-            { float nl = dot(nDef.xy, vec2(sin(aB.z), cos(aB.z))); float nl2 = nl * oc - nDef.z * os; nDef = vec3(nDef.xy + vec2(sin(aB.z), cos(aB.z)) * (nl2 - nl), nl * os + nDef.z * oc); }
+            vec3 nDef = normal;
+            dpPetalDeform(pos, nDef, aP.x, aP.y, aP.z, aP.w, aL, aB, aK, aR, aW, -1.0);
+            vec2 axP0 = vec2(cos(aB.z), -sin(aB.z));
             vec4 mv = viewMatrix * dpMorph(dpRest, pos);
             gl_Position = projectionMatrix * mv;
             float dist = max(-mv.z, 0.1);
@@ -471,6 +485,7 @@
         ${depthGlsl}
         ${eyeGlsl}
         ${G.pointsVertex}
+        ${petalDeformGlsl}
         uniform float uViewportScale, uSize;
         uniform vec4 uGaze[${MAX_EYES}];
         uniform vec4 uEyeC[${MAX_EYES}];     // центр (x, y, z) и полуширина
@@ -478,6 +493,8 @@
         uniform float uEdgeFade, uCornea, uLidFollow, uLidLocal, uLidW, uLidSide;
         uniform vec4 uEyeFade;               // x — неровность контура прозрачности, y — скорость, z — где начинается спад
         attribute vec4 aE, aP;
+        attribute vec4 aEB, aEK;             // глаз на лепестке: основание лепестка (x, y, угол оси, полуширина лепестка) и aK лепестка
+        attribute vec3 aEQ;                  // aR (боковой крен, предел изгиба) и aW лепестка
         attribute vec2 aQ, aF;
         attribute vec3 aS;
         attribute float aSizeScale;
@@ -551,8 +568,11 @@
             }
             float c = cos(er.x), s = sin(er.x);
             vec3 pos = ec.xyz + vec3(loc.x * c - loc.y * s, loc.x * s + loc.y * c, loc.z) * ec.w;
-            if (aP.x >= 0.0) pos.z += dpFlap(aP.x, aP.y, aP.z, aP.w);
-            pos.y += dpBob();
+            if (aP.x >= 0.0) {                                 // глаз вращён вместе с лепестком: кожа проходит через ту же деформацию, что и точки лепестка (колыхание, рюши, вращение, крен, раскрытие)
+                vec2 dd = pos.xy - aEB.xy;
+                float uE = clamp(dot(dd, vec2(sin(aEB.z), cos(aEB.z))) / aP.w, 0.02, 0.98), vE = clamp(dot(dd, vec2(cos(aEB.z), -sin(aEB.z))) / max(aEB.w, 0.1), -1.0, 1.0);
+                dpPetalDeform(pos, nrmW, uE, vE, aP.y, aP.z, aP.w, aEB.xyz, aEK, aEQ.xy, aEQ.z, aEB.w);
+            } else pos.y += dpBob();
             vec3 dpRest = position;
             vec4 mv = viewMatrix * dpMorph(dpRest, pos);
             if (kind < 0.5) { float fc = dot(mat3(viewMatrix) * nrmW, normalize(-mv.xyz)); vA *= smoothstep(0.02, 0.4, fc); }   // кожа непрозрачна; на скользящем угле (ребром) точки слипаются в яркую полосу — гасим   // кожа непрозрачна: стороны, повёрнутые от камеры, скрыты
@@ -839,17 +859,19 @@
         // ---------- ГЛАЗА ----------
         const eyes = EYES.map((E, i) => {
             if (E.petal == null) return { c: [E.x, FIG_Y + E.y, 0.06], w: E.w * (E.main ? EYE_SCALE : 1), roll: 0, att: [-1, 0, 0, 0], main: !!E.main };
-            const P = PETALS[E.petal], c = petalPoint(P, E.u, 0);
-            return { c: [c[0], c[1], c[2] + 0.02], w: E.w, roll: 0, att: [E.u, P.ph, P.seed, P.L] };
+            const P = PETALS[E.petal], c = petalPoint(P, E.u, 0), b0 = petalPoint(P, 0, 0), hw = P.W * 0.5 * (shapeWidth(P.shape, E.u, 1) + shapeWidth(P.shape, E.u, 2));
+            // глаз вписан в плоскость лепестка: разрез — вдоль оси лепестка, верх глаза — «вверх» по экрану
+            const roll = P.a > 0 ? Math.PI / 2 - P.a : -Math.PI / 2 - P.a;
+            return { c: [c[0], c[1], c[2] + 0.02], w: E.w, roll, att: [E.u, P.ph, P.seed, P.L], pet: { B: [b0[0], b0[1], P.a, hw], K: [P.open || 0, P.twK === undefined ? 1 : P.twK, P.flK === undefined ? 1 : P.flK, P.roll || 0], Q: [P.sideRoll || 0, P.latLim || 0, P.swp || 0] } };
         });
         const partsNow = DP.params.get('parts') || DEFAULT_PARTS;
-        const ep = [], ee = [], eq = [], ef = [], eatt = [], es = [], eS = [];
+        const ep = [], ee = [], eq = [], ef = [], eatt = [], es = [], eS = [], eEB = [], eEK = [], eEQ = [];
         eyes.forEach((E, i) => {
             const wShow = E.w * (E.main && partsNow === 'eye' ? EYE_STUDY : 1);     // размер на экране — для плотности точек
             const push = (kind, qx, qy, lx, ly, lz, sd, sx = 0, sy = 0, sz = 0) => {
                 ep.push(E.c[0] + lx * E.w, E.c[1] + ly * E.w, E.c[2] + lz * E.w);
                 ee.push(i, kind, 0, 0); eq.push(qx, qy); eS.push(sx, sy, sz);
-                ef.push(seededRandom(sd), seededRandom(sd * 1.7)); eatt.push(...E.att); es.push(seededRandom(sd * 2.3));
+                ef.push(seededRandom(sd), seededRandom(sd * 1.7)); eatt.push(...E.att); es.push(seededRandom(sd * 2.3)); { const pt = E.pet || { B: [0, 0, 0, 0.5], K: [0, 1, 1, 0], Q: [0, 0, 0] }; eEB.push(...pt.B); eEK.push(...pt.K); eEQ.push(...pt.Q); }
             };
             const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
             const domeC = (x, y) => eyeSurfZ(x, y);                                // = eSurf(...).z (GLSL)
@@ -910,6 +932,9 @@
         eyeGeo.setAttribute('aS', new THREE.Float32BufferAttribute(eS, 3));
         eyeGeo.setAttribute('aF', new THREE.Float32BufferAttribute(ef, 2));
         eyeGeo.setAttribute('aP', new THREE.Float32BufferAttribute(eatt, 4));
+        eyeGeo.setAttribute('aEB', new THREE.Float32BufferAttribute(eEB, 4));
+        eyeGeo.setAttribute('aEK', new THREE.Float32BufferAttribute(eEK, 4));
+        eyeGeo.setAttribute('aEQ', new THREE.Float32BufferAttribute(eEQ, 3));
         eyeGeo.setAttribute('aSizeScale', new THREE.Float32BufferAttribute(es, 1));
 
         // ---------- УСИКИ ----------
@@ -1056,9 +1081,10 @@
                 eyeR.push(new THREE.Vector4(E.roll, (main ? show('eye') : show('eyes')) && i < data.eyes.length ? 1 : 0, 0, 0));
             }
             const uT0 = { value: 0 };
-            const mPetal = mat(petalVertex, petalFragment, { uSize: { value: 2.0 }, uPetalFlap: { get value() { return DP.config.seraphPetal.flap; } }, uFlapAmp: { get value() { return DP.config.seraphPetal.flapAmp; } }, uSpread: { get value() { return DP.config.seraphPetal.spread; } }, uFlapWave: { get value() { return DP.config.seraphPetal.flapWave; } }, uFlapVar: { get value() { return DP.config.seraphPetal.flapVar; } }, uPetTwist: { get value() { return DP.config.seraphPetal.twist; } }, uPetTwistSpeed: { get value() { return DP.config.seraphPetal.twistSpeed; } }, uRufAmp: { get value() { return DP.config.seraphPetal.ruffleAmp; } }, uRufK: { get value() { return DP.config.seraphPetal.ruffleK; } }, uRufSpeed: { get value() { return DP.config.seraphPetal.ruffleSpeed; } }, uHoleIn: { get value() { return DP.config.seraphPetal.holeIn; } }, uHoleOut: { get value() { return DP.config.seraphPetal.holeOut; } }, uRollGlow: { get value() { return DP.config.seraphPetal.rollGlow; } }, uSweepK: { get value() { return DP.config.seraphPetal.sweepK; } }, uSweepSpeed: { get value() { return DP.config.seraphPetal.sweepSpeed; } }, uTwLim: { get value() { return DP.config.seraphPetal.twistLimit; } }, uLatAmp: { get value() { return DP.config.seraphPetal.latAmp; } }, uSideRoll: { get value() { return DP.config.seraphPetal.sideRoll; } }, uRoll: { get value() { return DP.config.seraphPetal.roll; } }, uCalm: { get value() { return DP.config.seraphPetal.calm; } }, uTwShape: { get value() { return DP.config.seraphPetal.twistShape; } }, uOpenK: { get value() { return DP.config.seraphPetal.openK; } }, uFlapFresnel: { get value() { return DP.config.seraphPetal.flapFresnel; } }, uFlapSpeed: { get value() { return DP.config.seraphPetal.flapSpeed; } } });
+            const petalU = { uPetalFlap: { get value() { return DP.config.seraphPetal.flap; } }, uFlapAmp: { get value() { return DP.config.seraphPetal.flapAmp; } }, uSpread: { get value() { return DP.config.seraphPetal.spread; } }, uFlapWave: { get value() { return DP.config.seraphPetal.flapWave; } }, uFlapVar: { get value() { return DP.config.seraphPetal.flapVar; } }, uPetTwist: { get value() { return DP.config.seraphPetal.twist; } }, uPetTwistSpeed: { get value() { return DP.config.seraphPetal.twistSpeed; } }, uRufAmp: { get value() { return DP.config.seraphPetal.ruffleAmp; } }, uRufK: { get value() { return DP.config.seraphPetal.ruffleK; } }, uRufSpeed: { get value() { return DP.config.seraphPetal.ruffleSpeed; } }, uHoleIn: { get value() { return DP.config.seraphPetal.holeIn; } }, uHoleOut: { get value() { return DP.config.seraphPetal.holeOut; } }, uRollGlow: { get value() { return DP.config.seraphPetal.rollGlow; } }, uSweepK: { get value() { return DP.config.seraphPetal.sweepK; } }, uSweepSpeed: { get value() { return DP.config.seraphPetal.sweepSpeed; } }, uTwLim: { get value() { return DP.config.seraphPetal.twistLimit; } }, uLatAmp: { get value() { return DP.config.seraphPetal.latAmp; } }, uSideRoll: { get value() { return DP.config.seraphPetal.sideRoll; } }, uRoll: { get value() { return DP.config.seraphPetal.roll; } }, uCalm: { get value() { return DP.config.seraphPetal.calm; } }, uTwShape: { get value() { return DP.config.seraphPetal.twistShape; } }, uOpenK: { get value() { return DP.config.seraphPetal.openK; } }, uFlapFresnel: { get value() { return DP.config.seraphPetal.flapFresnel; } }, uFlapSpeed: { get value() { return DP.config.seraphPetal.flapSpeed; } } };
+            const mPetal = mat(petalVertex, petalFragment, Object.assign({ uSize: { value: 2.0 } }, petalU));;
             const EL = DP.config.seraphEye;
-            const mEye = mat(eyeVertex, eyeFragment, { uSize: { value: 1.9 },
+            const mEye = mat(eyeVertex, eyeFragment, Object.assign({ uSize: { value: 1.9 },
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
                 uEdgeFade: { get value() { return EL.edgeFade; } },
                 uCornea: { get value() { return EL.cornea; } },
@@ -1072,7 +1098,7 @@
                 uVC: { value: profC }, uVS: { value: profS },
                 uEyeFade: { get value() { return eyeFade.set(EL.fadeWave, EL.fadeSpeed, EL.fadeStart, 0); } },
                 uEyeLook2: { get value() { return eyeLook2.set(EL.light, EL.lidShadow, EL.halo, 0); } },
-                uRimW: { get value() { return EL.rimWidth; } }, uGaze: { value: gz.gaze }, uEyeC: { value: eyeC }, uEyeR: { value: eyeR } });
+                uRimW: { get value() { return EL.rimWidth; } }, uGaze: { value: gz.gaze }, uEyeC: { value: eyeC }, uEyeR: { value: eyeR } }, petalU));
             const mTend = mat(tendrilVertex, tendrilFragment, { uSize: { value: 2.0 } });
             const ringU = data.RINGS.map(R => new THREE.Vector4(R.axis[0], R.axis[1], R.axis[2], R.speed));
             const mRing = mat(ringVertex, ringFragment, { uSize: { value: 2.0 }, uRing: { value: ringU }, uT0 });
