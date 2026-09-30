@@ -70,8 +70,11 @@
         flapWave: 1.0,               // длина волны (меньше — длиннее волны, больше — чаще)
         flapVar: 1.0,                // разнобой: насколько гуляют длина и высота волны (0 — ровная синусоида)
         flapSpeed: 1.0,              // темп колыхания
-        twist: 0.52,                 // вращение вокруг оси лепестка (рад; 0.52 = ±30°): с середины к кончику, случайное медленное
+        twist: 1.6,                  // вращение вокруг оси лепестка (рад; значение автора, макс. ползунка; 0.52 = ±30°): с середины к кончику, случайное медленное
         twistSpeed: 1.0,
+        ruffleAmp: 0.22,             // рюши кромки (по принципу лент медузы): размах (доля местной ширины); 0 — гладкая кромка
+        ruffleK: 7.0,                // рюши: сколько волн по длине (× длина, вершин ≈ K·L/π)
+        ruffleSpeed: 1.0,            // рюши: темп бега волны от основания к кончику
         flapFresnel: 1.0,            // насколько изгиб волны подсвечивает френель (0 — нормаль покоя, как раньше; больше — сильнее)
         spread: 0.08,                // «распускание»: у основания угол лепестка чуть меняется (рад, в плоскости и вперёд-назад); 0 — нет
         cup: 1.3,                    // «ложечка»: кривизна параболы поперёк лепестка в середине (z = κ·поперёк²; центр ниже, края к зрителю); 0 — плоский
@@ -116,9 +119,39 @@
         uniform float uViewportScale, uSize;
         attribute vec4 aP;
         attribute float aL, aSizeScale, aVein;
-        uniform float uPetalFlap, uFlapAmp, uSpread, uFlapWave, uFlapVar, uFlapSpeed, uFlapFresnel, uPetTwist, uPetTwistSpeed;
+        uniform float uPetalFlap, uFlapAmp, uSpread, uFlapWave, uFlapVar, uFlapSpeed, uFlapFresnel, uPetTwist, uPetTwistSpeed, uRufAmp, uRufK, uRufSpeed;
         // Колыхание с переменной длиной и высотой волны: фаза искажена медленными синусами (местная длина волны гуляет вдоль лепестка и во времени),
         // высота — огибающая из бегущих «пакетов»; вторая, короткая волна добавляет рябь к кончику.
+        // Рюши кромки — по принципу лент медузы (кривая Безье по вершинам, dpBezWave в jellyfish.js): вершины чередуются влево-вправо, высота своя у каждой,
+        // расстояние между ними гуляет (фаза искажена медленными синусами), размах на коротких участках меньше; волна бежит от основания к кончику,
+        // высоту меняют бегущие «пакеты». Вес растёт к кромке (|v|^1.8), размах ∝ местной ширине лепестка; у основания рюши слабые. У каждой кромки свой seed.
+        float dpPetBez(float s, float sd) {
+            float a1 = 0.45 * s + 1.3 * sd, a2 = 0.21 * s + 2.9 * sd;
+            float P = s + 1.0 * sin(a1) + 1.4 * sin(a2);
+            float k = 1.0 + 0.45 * cos(a1) + 0.294 * cos(a2);
+            float f = clamp(pow(k, -1.3), 0.4, 1.6);
+            float q = P / 3.14159265 + 0.5;
+            float n = floor(q), t = q - n;
+            float n0 = mod(n, 64.0), n1 = mod(n + 1.0, 64.0);
+            float A0 = (mod(n0, 2.0) < 0.5 ? 1.0 : -1.0) * (0.45 + 0.75 * fract(sin((n0 + sd) * 12.9898) * 43758.5453));
+            float A1 = (mod(n1, 2.0) < 0.5 ? 1.0 : -1.0) * (0.45 + 0.75 * fract(sin((n1 + sd) * 12.9898) * 43758.5453));
+            return f * mix(A0, A1, t * t * (3.0 - 2.0 * t));
+        }
+        // возвращает (сдвиг поперёк в плоскости, смещение из плоскости); u — вдоль, v — поперёк (−1..1), w — полуширина в этой точке, sd — seed лепестка
+        vec2 dpPetRuf(float u, float v, float w, float sd, float L) {
+            float av = abs(v);
+            float side = v < 0.0 ? 1.0 : 0.0;
+            float sdd = mod(sd, 7.0) + side * 3.3;
+            float rB = fract(sin(sdd * 78.233) * 12345.678), rC = fract(sin(sdd * 39.425) * 24634.634), rA = fract(sin(sdd * 12.9898) * 43758.5453);
+            float t = uTime * uRufSpeed;
+            float K = uRufK * (0.85 + 0.3 * rA);
+            float uw = u - 0.5 * u * (1.0 - u) * (1.0 - u);                   // у основания волна длиннее
+            float ph = uw * L * K + sdd - t * (2.2 + 1.2 * rB);
+            float env = 0.45 + 0.55 * (0.6 * sin(u * (5.0 + 3.0 * rC) - t * (1.1 + 0.6 * rA) + sdd * 3.0) + 0.4 * sin(u * (9.0 + 4.0 * rA) - t * (1.7 + 0.5 * rC) + sdd * 1.3));
+            env *= 0.8 + 0.5 * rC;
+            float amp = uRufAmp * env * (0.15 + 0.85 * smoothstep(0.03, 0.45, u));
+            return vec2(pow(av, 2.0) * amp * w * 0.3 * dpPetBez(ph, sdd), pow(av, 1.8) * amp * w * dpPetBez(ph + 0.5, sdd));
+        }
         float dpTwist(float u, float ph, float sd) {
             float t = uTime * uPetTwistSpeed;
             float env = pow(clamp((u - 0.2) / 0.8, 0.0, 1.0), 1.5);                          // средина — слабо, к кончику сильнее
@@ -140,6 +173,16 @@
         void main() {
             vec3 dpRest = position;
             vec3 pos = position;
+            // рюши кромки: сдвиг поперёк в плоскости лепестка и из плоскости (до вращения и колыхания, в системе лепестка)
+            vec2 axT0 = vec2(sin(aB.z), cos(aB.z)), axP0 = vec2(cos(aB.z), -sin(aB.z));
+            float ac = dot(pos.xy - aB.xy, axP0), wl = abs(ac) / max(abs(aP.y), 0.05);
+            vec2 ruf = dpPetRuf(aP.x, aP.y, wl, aP.w, aL);
+            float eu = 0.01, ev = 0.03, uq = clamp(aP.x, eu, 1.0 - eu), vq = clamp(aP.y, -1.0 + ev, 1.0 - ev);
+            float rzl = uFlapFresnel * (dpPetRuf(uq + eu, aP.y, wl, aP.w, aL).y - dpPetRuf(uq - eu, aP.y, wl, aP.w, aL).y) / (2.0 * eu * aL);
+            float rzc = uFlapFresnel * (dpPetRuf(aP.x, vq + ev, wl, aP.w, aL).y - dpPetRuf(aP.x, vq - ev, wl, aP.w, aL).y) / (2.0 * ev * max(wl, 0.05));
+            pos.xy += axP0 * ruf.x;
+            pos.z += ruf.y;
+            vec3 nB = normalize(normal - vec3(axT0 * rzl + axP0 * rzc, 0.0));
             // вращение вокруг центральной оси (wiggle): у основания нет, со средины нарастает к кончику (кончики заворачиваются); случайное, медленное, ±uPetTwist
             float tw = uPetTwist * uPetalFlap * dpTwist(aP.x, aP.z, aP.w);
             float tc = cos(tw), ts = sin(tw);
@@ -148,7 +191,7 @@
             float al0 = dot(d0, axT), ac0 = dot(d0, axP), z0 = pos.z;
             pos.xy = aB.xy + axT * al0 + axP * (ac0 * tc - z0 * ts);
             pos.z = ac0 * ts + z0 * tc;
-            vec3 nR = vec3(axT * dot(normal.xy, axT) + axP * (dot(normal.xy, axP) * tc - normal.z * ts), dot(normal.xy, axP) * ts + normal.z * tc);
+            vec3 nR = vec3(axT * dot(nB.xy, axT) + axP * (dot(nB.xy, axP) * tc - nB.z * ts), dot(nB.xy, axP) * ts + nB.z * tc);
             // раскрытие/сбор у основания: поворот всего лепестка вокруг основания в плоскости + наклон вперёд-назад вдоль оси
             float sp = uSpread * uPetalFlap * (0.75 * sin(uTime * 0.45 + aP.z) + 0.45 * sin(uTime * 0.83 + aP.w));
             float cs = cos(sp), sn = sin(sp);
@@ -938,7 +981,7 @@
                 eyeR.push(new THREE.Vector4(E.roll, (main ? show('eye') : show('eyes')) && i < data.eyes.length ? 1 : 0, 0, 0));
             }
             const uT0 = { value: 0 };
-            const mPetal = mat(petalVertex, petalFragment, { uSize: { value: 2.0 }, uPetalFlap: { get value() { return DP.config.seraphPetal.flap; } }, uFlapAmp: { get value() { return DP.config.seraphPetal.flapAmp; } }, uSpread: { get value() { return DP.config.seraphPetal.spread; } }, uFlapWave: { get value() { return DP.config.seraphPetal.flapWave; } }, uFlapVar: { get value() { return DP.config.seraphPetal.flapVar; } }, uPetTwist: { get value() { return DP.config.seraphPetal.twist; } }, uPetTwistSpeed: { get value() { return DP.config.seraphPetal.twistSpeed; } }, uFlapFresnel: { get value() { return DP.config.seraphPetal.flapFresnel; } }, uFlapSpeed: { get value() { return DP.config.seraphPetal.flapSpeed; } } });
+            const mPetal = mat(petalVertex, petalFragment, { uSize: { value: 2.0 }, uPetalFlap: { get value() { return DP.config.seraphPetal.flap; } }, uFlapAmp: { get value() { return DP.config.seraphPetal.flapAmp; } }, uSpread: { get value() { return DP.config.seraphPetal.spread; } }, uFlapWave: { get value() { return DP.config.seraphPetal.flapWave; } }, uFlapVar: { get value() { return DP.config.seraphPetal.flapVar; } }, uPetTwist: { get value() { return DP.config.seraphPetal.twist; } }, uPetTwistSpeed: { get value() { return DP.config.seraphPetal.twistSpeed; } }, uRufAmp: { get value() { return DP.config.seraphPetal.ruffleAmp; } }, uRufK: { get value() { return DP.config.seraphPetal.ruffleK; } }, uRufSpeed: { get value() { return DP.config.seraphPetal.ruffleSpeed; } }, uFlapFresnel: { get value() { return DP.config.seraphPetal.flapFresnel; } }, uFlapSpeed: { get value() { return DP.config.seraphPetal.flapSpeed; } } });
             const EL = DP.config.seraphEye;
             const mEye = mat(eyeVertex, eyeFragment, { uSize: { value: 1.9 },
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
