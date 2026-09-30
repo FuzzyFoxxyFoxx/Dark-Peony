@@ -591,7 +591,8 @@
     PETALS.forEach((P, i) => { const Sh = makePetalShape(Math.floor(i / 2), P.side, i); P.shape = Sh; P.L = Sh.L; P.W = Sh.W; });
     function petalPoint(P, u, v) {
         if (P.shape && P.ox === undefined) {                           // лепесток фигуры: плоская форма своего типа вдоль оси лепестка
-            const Sh = P.shape, [ax, ay, a] = petalAxis(P, u);
+            // ось лепестка — ПРЯМАЯ: основание и кончик на одной прямой (автор, 2026-09-30); изгиб даст только последующая деформация (волны, поля)
+            const Sh = P.shape, a = P.a, ax = Math.sin(a) * P.L * u, ay = 0.08 + Math.cos(a) * P.L * u;
             const w = shapeWidth(Sh, u, v < 0 ? 1 : 2) * Sh.W, px = Math.cos(a), py = -Math.sin(a);
             return [ax + px * v * w, FIG_Y + ay + py * v * w, 0];
         }
