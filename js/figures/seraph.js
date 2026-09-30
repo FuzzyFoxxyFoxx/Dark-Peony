@@ -35,7 +35,7 @@
     // Тентакли на 6 ч (ряды 6–9): колыхание слабее (÷2.25), вращение вокруг оси сильнее (×1.5), собраны ближе к 6 часам.
     [[0.524, 0, 0, 0, 0.0, 0, 20, 0.35, 0.4], [1.047, 0, 0, 0, 0.9, 0, 0, 1, 1, false, 1], [Math.PI / 2 - 0.044, 0, 0, 0, 1.8, 0, 30, 1.5, 1], [Math.PI / 2 + 0.044, 0, 0, 0, 2.6, 0, 15, 1.5, 1], [1.88, 0, 0, 0, 3.4, 0, 0, 1, 1, false, 1], [2.62, 0, 0, 0, 4.2, 0, 30, 1, 1, false, 1],
      [Math.PI - 0.05, 0, 0, 0, 5.0, 0, 10, 1.5, 0.45], [Math.PI - 0.20, 0, 0, 0, 5.8, 0, 25, 1.5, 0.45], [Math.PI - 0.11, 0, 0, 0, 6.6, 0, 20, 1.5, 0.45], [Math.PI, 0, 0, 0, 7.4, 0, 0, 1.5, 0.45, true]]
-        .forEach(([a, L, W, curl, ph, sw, open, twK, flK, single, roll], k) => (single ? [1] : [-1, 1]).forEach(side => PETALS.push({ a: a * side, L, W, curl, ph, sweep: sw * side, seed: k * 3.1 + (side > 0 ? 1.7 : 0), side, type: k, open: open * Math.PI / 180, twK, flK, roll: roll || 0 })));
+        .forEach(([a, L, W, curl, ph, sw, open, twK, flK, single, roll], k) => (single ? [1] : [-1, 1]).forEach(side => PETALS.push({ a: a * side, L, W, curl, ph, sweep: sw * side, seed: k * 3.1 + (side > 0 ? 1.7 : 0), side, type: k, open: open * Math.PI / 180, twK, flK, roll: roll || 0, sideRoll: (k >= 6 && !single) ? (a * side > 0 ? -1 : 1) : 0 })));
     // Глаза: центр (в плоскости фигуры) или на лепестке (индекс, доля длины), полуширина.
     const EYES = [
         { x: 0, y: 0, w: 0.46, main: true },
@@ -83,6 +83,7 @@
         ruffleK: 7.7,                // рюши: сколько волн по длине (× длина, вершин ≈ K·L/π)
         ruffleSpeed: 0.64,           // рюши: темп бега волны от основания к кончику
         roll: 0.3,                   // крен лепестков креста: верхней кромкой к камере (рад, 0.3 ≈ 17°; минус — от камеры), нарастает с 15–40% длины
+        sideRoll: 1.1,               // тентакли на 6 ч: поворот боком к камере вокруг оси (рад; левые — левой кромкой, правые — правой), нарастает с 8–45% длины
         rollGlow: 0.6,               // подсветка верхней кромки креста (добавка к яркости и белизне; 0 — только геометрия)
         calm: 0.7,                   // коридор активности: 0 — всегда полная амплитуда; 1 — в спокойные периоды 30% амплитуды (редкие «всплески» до полной)
         twistShape: 1.0,             // форма вращения: 0 — линейно, 1 — квадратично (угол в основном мал, редкие большие заходы), 2 — ещё острее
@@ -131,7 +132,7 @@
         uniform float uViewportScale, uSize;
         attribute vec4 aP;
         attribute float aL, aSizeScale, aVein;
-        uniform float uPetalFlap, uFlapAmp, uSpread, uFlapWave, uFlapVar, uFlapSpeed, uFlapFresnel, uPetTwist, uPetTwistSpeed, uRufAmp, uRufK, uRufSpeed, uOpenK, uCalm, uTwShape, uRoll;
+        uniform float uPetalFlap, uFlapAmp, uSpread, uFlapWave, uFlapVar, uFlapSpeed, uFlapFresnel, uPetTwist, uPetTwistSpeed, uRufAmp, uRufK, uRufSpeed, uOpenK, uCalm, uTwShape, uRoll, uSideRoll;
         // Колыхание с переменной длиной и высотой волны: фаза искажена медленными синусами (местная длина волны гуляет вдоль лепестка и во времени),
         // высота — огибающая из бегущих «пакетов»; вторая, короткая волна добавляет рябь к кончику.
         // Рюши кромки — по принципу лент медузы (кривая Безье по вершинам, dpBezWave в jellyfish.js): вершины чередуются влево-вправо, высота своя у каждой,
@@ -188,6 +189,7 @@
             return (0.21 * w1 * env1 + 0.085 * w2 * env2) * pow(u, 1.4) * L;
         }
         attribute vec4 aK;                                   // x — раскрытие (наклон к зрителю, рад), y — множитель вращения вокруг оси, z — множитель колыхания, w — крен верхней кромки к камере (1 — у креста)
+        attribute float aR;                                  // боковой крен тентаклей на 6 ч: +1/−1 — левой/правой кромкой к камере (знак по стороне), 0 — нет
         attribute vec3 aB;                                   // основание лепестка (x, y) и угол оси
         varying float vFresnel, vU, vV, vVein, vUpE;
         void main() {
@@ -208,6 +210,7 @@
             float tw = uPetTwist * aK.y * act * uPetalFlap * dpTwist(aP.x, aP.z, aP.w);
             // крен: верхняя (по экрану) кромка лепестка ближе к камере; у основания нет, плавно нарастает с ≈15–40% длины
             tw += uRoll * aK.w * smoothstep(0.15, 0.40, aP.x) * (axP0.y < 0.0 ? -1.0 : 1.0);
+            tw += uSideRoll * aR * smoothstep(0.08, 0.45, aP.x);
             float tc = cos(tw), ts = sin(tw);
             vec2 axT = vec2(sin(aB.z), cos(aB.z)), axP = vec2(cos(aB.z), -sin(aB.z));
             vec2 d0 = pos.xy - aB.xy;
@@ -755,7 +758,7 @@
         const h = STEP / Math.sqrt(q);
 
         // ---------- ЛЕПЕСТКИ ----------
-        const pp = [], pn = [], pa = [], pl = [], ps = [], pv = [], pb = [], po = [];
+        const pp = [], pn = [], pa = [], pl = [], ps = [], pv = [], pb = [], po = [], pr = [];
         const meshes = [];
         const partsG = DP.params.get('parts') || DEFAULT_PARTS;
         const onlyPetal = onlyPetalOf(partsG);
@@ -780,7 +783,7 @@
                 let vein = Math.exp(-v * v / 0.0025);
                 [0.28, 0.52, 0.76].forEach(vk => { const vv = Math.abs(v) - vk * (0.6 + 0.4 * u) - 0.02 * Math.sin(u * 9 + k); vein = Math.max(vein, 0.7 * Math.exp(-vv * vv / 0.0012)); });
                 pp.push(p[0], p[1], p[2]); pn.push(nx / nl, ny / nl, nz / nl);
-                pa.push(u, v, P.ph, P.seed); pb.push(base[0], base[1], P.a || 0); po.push(P.open || 0, P.twK === undefined ? 1 : P.twK, P.flK === undefined ? 1 : P.flK, P.roll || 0); pl.push(P.L); ps.push(seededRandom(sd += 0.9)); pv.push(vein * (0.5 + 0.5 * u));
+                pa.push(u, v, P.ph, P.seed); pb.push(base[0], base[1], P.a || 0); po.push(P.open || 0, P.twK === undefined ? 1 : P.twK, P.flK === undefined ? 1 : P.flK, P.roll || 0); pr.push(P.sideRoll || 0); pl.push(P.L); ps.push(seededRandom(sd += 0.9)); pv.push(vein * (0.5 + 0.5 * u));
             }
             // поверхность (MESH)
             const mg = new THREE.PlaneGeometry(1, 1, 24, 12), mp = mg.attributes.position;
@@ -797,6 +800,7 @@
         petalGeo.setAttribute('normal', new THREE.Float32BufferAttribute(pn, 3));
         petalGeo.setAttribute('aP', new THREE.Float32BufferAttribute(pa, 4));
         petalGeo.setAttribute('aK', new THREE.Float32BufferAttribute(po, 4));
+        petalGeo.setAttribute('aR', new THREE.Float32BufferAttribute(pr, 1));
         petalGeo.setAttribute('aB', new THREE.Float32BufferAttribute(pb, 3));
         petalGeo.setAttribute('aL', new THREE.Float32BufferAttribute(pl, 1));
         petalGeo.setAttribute('aSizeScale', new THREE.Float32BufferAttribute(ps, 1));
@@ -1022,7 +1026,7 @@
                 eyeR.push(new THREE.Vector4(E.roll, (main ? show('eye') : show('eyes')) && i < data.eyes.length ? 1 : 0, 0, 0));
             }
             const uT0 = { value: 0 };
-            const mPetal = mat(petalVertex, petalFragment, { uSize: { value: 2.0 }, uPetalFlap: { get value() { return DP.config.seraphPetal.flap; } }, uFlapAmp: { get value() { return DP.config.seraphPetal.flapAmp; } }, uSpread: { get value() { return DP.config.seraphPetal.spread; } }, uFlapWave: { get value() { return DP.config.seraphPetal.flapWave; } }, uFlapVar: { get value() { return DP.config.seraphPetal.flapVar; } }, uPetTwist: { get value() { return DP.config.seraphPetal.twist; } }, uPetTwistSpeed: { get value() { return DP.config.seraphPetal.twistSpeed; } }, uRufAmp: { get value() { return DP.config.seraphPetal.ruffleAmp; } }, uRufK: { get value() { return DP.config.seraphPetal.ruffleK; } }, uRufSpeed: { get value() { return DP.config.seraphPetal.ruffleSpeed; } }, uRollGlow: { get value() { return DP.config.seraphPetal.rollGlow; } }, uRoll: { get value() { return DP.config.seraphPetal.roll; } }, uCalm: { get value() { return DP.config.seraphPetal.calm; } }, uTwShape: { get value() { return DP.config.seraphPetal.twistShape; } }, uOpenK: { get value() { return DP.config.seraphPetal.openK; } }, uFlapFresnel: { get value() { return DP.config.seraphPetal.flapFresnel; } }, uFlapSpeed: { get value() { return DP.config.seraphPetal.flapSpeed; } } });
+            const mPetal = mat(petalVertex, petalFragment, { uSize: { value: 2.0 }, uPetalFlap: { get value() { return DP.config.seraphPetal.flap; } }, uFlapAmp: { get value() { return DP.config.seraphPetal.flapAmp; } }, uSpread: { get value() { return DP.config.seraphPetal.spread; } }, uFlapWave: { get value() { return DP.config.seraphPetal.flapWave; } }, uFlapVar: { get value() { return DP.config.seraphPetal.flapVar; } }, uPetTwist: { get value() { return DP.config.seraphPetal.twist; } }, uPetTwistSpeed: { get value() { return DP.config.seraphPetal.twistSpeed; } }, uRufAmp: { get value() { return DP.config.seraphPetal.ruffleAmp; } }, uRufK: { get value() { return DP.config.seraphPetal.ruffleK; } }, uRufSpeed: { get value() { return DP.config.seraphPetal.ruffleSpeed; } }, uRollGlow: { get value() { return DP.config.seraphPetal.rollGlow; } }, uSideRoll: { get value() { return DP.config.seraphPetal.sideRoll; } }, uRoll: { get value() { return DP.config.seraphPetal.roll; } }, uCalm: { get value() { return DP.config.seraphPetal.calm; } }, uTwShape: { get value() { return DP.config.seraphPetal.twistShape; } }, uOpenK: { get value() { return DP.config.seraphPetal.openK; } }, uFlapFresnel: { get value() { return DP.config.seraphPetal.flapFresnel; } }, uFlapSpeed: { get value() { return DP.config.seraphPetal.flapSpeed; } } });
             const EL = DP.config.seraphEye;
             const mEye = mat(eyeVertex, eyeFragment, { uSize: { value: 1.9 },
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
