@@ -553,7 +553,40 @@
         const a = t[Math.max(0, i - 1)][col], b = t[i][col], c = t[i + 1][col], d = t[Math.min(n - 1, i + 2)][col];
         return Math.max(0, catmull(a, b, c, d, x));
     }
+    // ---------- ТИПЫ ЛЕПЕСТКОВ (по эскизу автора: 4 пары) ----------
+    // Эскиз: 8 лепестков — верхняя пара (широкие, лопаткой), боковая пара (широкие), нижняя пара (широкие, концы вниз), две длинные узкие
+    // свисающие. Тип = семейство из двух базовых форм; каждый лепесток — свой случайный ПЛАВНЫЙ переход между ними (доля t) и свой
+    // постоянный рандомайз ширин, длины и изгиба, поэтому левый и правый (и два лепестка одного типа) никогда не зеркальны.
+    // Базовые формы, выбранные автором (2026-09-30): A2, A3 (лидер — на нём доводим принципы края), B, C, D, E, F.
+    const PETAL_TYPES = [
+        { name: 'верхний: лопатка / ромб', keys: ['A3', 'A2'], L: 2.25 },
+        { name: 'боковой: ложка с плечом / линза', keys: ['B', 'C'], L: 2.05 },
+        { name: 'нижний: асимметричная линза', keys: ['D', 'B'], L: 1.75 },
+        { name: 'длинный узкий: кукурузный лист / ланцет', keys: ['F', 'E'], L: 2.4 }
+    ];
+    const petalSeed = (idx) => idx * 37.7 + 5;
+    function makePetalShape(type, side, idx) {
+        const T = PETAL_TYPES[type], A = SHAPES[T.keys[0]], B = SHAPES[T.keys[1]], sd = petalSeed(idx);
+        const t = idx === 1 ? 0.04 : 0.1 + 0.8 * seededRandom(sd);          // доля второй формы — у каждого лепестка своя; лепесток 1 (верхний правый, на нём доводим края) — почти чистая «лопатка» A3
+        const wa = (u, c) => shapeWidth({ t: A.t }, u, c), wb = (u, c) => shapeWidth({ t: B.t }, u, c);
+        const N = 12, knots = [];
+        for (let i = 0; i <= N; i++) {
+            const u = i / N, edge = i === 0 || i === N;
+            let l = wa(u, 1) * (1 - t) + wb(u, 1) * t, r = wa(u, 2) * (1 - t) + wb(u, 2) * t;
+            if (side < 0) { const k = l; l = r; r = k; }                       // левый лепесток — зеркально по заготовке, но рандомайз у каждого свой
+            knots.push([u, edge ? l : Math.max(0, l * (1 + 0.12 * gauss(sd + i * 1.3))), edge ? r : Math.max(0, r * (1 + 0.12 * gauss(sd + i * 2.1 + 7)))]);
+        }
+        const L = T.L * (1 + 0.06 * gauss(sd + 99)), ratio = (A.W / A.L) * (1 - t) + (B.W / B.L) * t;
+        return { key: T.keys[0] + '/' + T.keys[1], t: knots, L, W: ratio * T.L * parseFloat(DP.params.get('pwk') || '0.85'),   // полуширина: доля длины; pwk — общий множитель ширины лепестков (лепестки рядом не должны сильно перекрываться)
+         bend: (A.bend * (1 - t) + B.bend * t) * side + 0.12 * gauss(sd + 55), mix: t };
+    }
+    PETALS.forEach((P, i) => { const Sh = makePetalShape(Math.floor(i / 2), P.side, i); P.shape = Sh; P.L = Sh.L; P.W = Sh.W; });
     function petalPoint(P, u, v) {
+        if (P.shape && P.ox === undefined) {                           // лепесток фигуры: плоская форма своего типа вдоль оси лепестка
+            const Sh = P.shape, [ax, ay, a] = petalAxis(P, u);
+            const w = shapeWidth(Sh, u, v < 0 ? 1 : 2) * Sh.W, px = Math.cos(a), py = -Math.sin(a);
+            return [ax + px * v * w, FIG_Y + ay + py * v * w, 0];
+        }
         if (P.shape) {                                                  // плоская базовая форма: ось прямая с изгибом, z = 0
             const Sh = P.shape, L = Sh.L, bend = Sh.bend * 0.12 * L;
             const ax = P.ox + bend * Math.sin(Math.PI * u), dx = bend * Math.PI * Math.cos(Math.PI * u), a = Math.atan2(dx, L);
