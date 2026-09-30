@@ -64,7 +64,12 @@
         halo: 0.7,                   // ореол складки над глазом (спереди)
         lidShadow: 0.5                // тень век на яблоке: у краёв разреза яблоко темнее
     }, DP.config.seraphEye || {});
-    DP.config.seraphPetal = Object.assign({ flap: 0.0 }, DP.config.seraphPetal || {});   // взмах лепестков (0 — плоские, для доводки форм)
+    DP.config.seraphPetal = Object.assign({
+        flap: 0.0,                   // взмах лепестков (0 — плоские)
+        cup: 1.3,                    // «ложечка»: кривизна параболы поперёк лепестка в середине (z = κ·поперёк²; центр ниже, края к зрителю); 0 — плоский
+        cupBase: 1.8,                // у основания парабола уже (кривизна ×), к середине расходится
+        cupTipFrom: 0.62, cupTipTo: 0.97   // где парабола начинает выпрямляться к кончику и где уже прямая (доли длины)
+    }, DP.config.seraphPetal || {});   // взмах лепестков (0 — плоские, для доводки форм)
     const eyeLook = new THREE.Vector4(), eyeLook2 = new THREE.Vector4(), eyeFade = new THREE.Vector4(), eyeCr = new THREE.Vector4(), eyeCr2 = new THREE.Vector4(), eyeCr3 = new THREE.Vector4(), eyeGr = new THREE.Vector4();
     // Доводим по частям, как медузу и светило ('' — все). ?parts= в адресе важнее.
     // petals — лепестки, eye — центральный глаз, eyes — малые глаза, tendrils — усики, rings — кольца.
@@ -594,7 +599,10 @@
             // ось лепестка — ПРЯМАЯ: основание и кончик на одной прямой (автор, 2026-09-30); изгиб даст только последующая деформация (волны, поля)
             const Sh = P.shape, a = P.a, ax = Math.sin(a) * P.L * u, ay = 0.08 + Math.cos(a) * P.L * u;
             const w = shapeWidth(Sh, u, v < 0 ? 1 : 2) * Sh.W, px = Math.cos(a), py = -Math.sin(a);
-            return [ax + px * v * w, FIG_Y + ay + py * v * w, 0];
+            const C = DP.config.seraphPetal, sm = (a, b, x) => { x = Math.min(1, Math.max(0, (x - a) / (b - a))); return x * x * (3 - 2 * x); };
+            const kap = C.cup * (1 + (C.cupBase - 1) * (1 - sm(0, 0.5, u))) * (1 - sm(C.cupTipFrom, C.cupTipTo, u));   // кривизна: у основания узкая парабола, в середине шире, у кончика — прямая
+            const across = v * w;
+            return [ax + px * across, FIG_Y + ay + py * across, kap * across * across];
         }
         if (P.shape) {                                                  // плоская базовая форма: ось прямая с изгибом, z = 0
             const Sh = P.shape, L = Sh.L, bend = Sh.bend * 0.12 * L;
