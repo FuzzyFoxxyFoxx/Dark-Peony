@@ -70,6 +70,7 @@
         flapWave: 1.0,               // длина волны (меньше — длиннее волны, больше — чаще)
         flapVar: 1.0,                // разнобой: насколько гуляют длина и высота волны (0 — ровная синусоида)
         flapSpeed: 1.0,              // темп колыхания
+        flapFresnel: 1.0,            // насколько изгиб волны подсвечивает френель (0 — нормаль покоя, как раньше; больше — сильнее)
         spread: 0.08,                // «распускание»: у основания угол лепестка чуть меняется (рад, в плоскости и вперёд-назад); 0 — нет
         cup: 1.3,                    // «ложечка»: кривизна параболы поперёк лепестка в середине (z = κ·поперёк²; центр ниже, края к зрителю); 0 — плоский
         cupBase: 1.8,                // у основания парабола уже (кривизна ×), к середине расходится
@@ -113,7 +114,7 @@
         uniform float uViewportScale, uSize;
         attribute vec4 aP;
         attribute float aL, aSizeScale, aVein;
-        uniform float uPetalFlap, uFlapAmp, uSpread, uFlapWave, uFlapVar, uFlapSpeed;
+        uniform float uPetalFlap, uFlapAmp, uSpread, uFlapWave, uFlapVar, uFlapSpeed, uFlapFresnel;
         // Колыхание с переменной длиной и высотой волны: фаза искажена медленными синусами (местная длина волны гуляет вдоль лепестка и во времени),
         // высота — огибающая из бегущих «пакетов»; вторая, короткая волна добавляет рябь к кончику.
         float dpFlapV(float u, float ph, float sd, float L) {
@@ -140,11 +141,18 @@
             pos.z += along * uSpread * uPetalFlap * 0.8 * sin(uTime * 0.38 + aP.z * 1.3 + 1.0);
             pos.z += uPetalFlap * uFlapAmp * dpFlapV(aP.x, aP.z, aP.w, aL);
             pos.y += uPetalFlap * dpBob();
+            // нормаль следует за изгибом (иначе френель считался бы по нормали покоя и волны не подсвечивались):
+            // наклон поверхности вдоль оси = производная смещения z по длине (конечная разность) + наклон от «распускания»
+            float e = 0.01, uu = clamp(aP.x, e, 1.0 - e);
+            float dzdl = uFlapFresnel * uPetalFlap * uFlapAmp * (dpFlapV(uu + e, aP.z, aP.w, aL) - dpFlapV(uu - e, aP.z, aP.w, aL)) / (2.0 * e * aL)
+                       + uSpread * uPetalFlap * 0.8 * sin(uTime * 0.38 + aP.z * 1.3 + 1.0);
+            vec3 tAx = vec3(cs * sin(aB.z) - sn * cos(aB.z), sn * sin(aB.z) + cs * cos(aB.z), 0.0);
+            vec3 nDef = normalize(vec3(cs * normal.x - sn * normal.y, sn * normal.x + cs * normal.y, normal.z) - dzdl * tAx);
             vec4 mv = viewMatrix * dpMorph(dpRest, pos);
             gl_Position = projectionMatrix * mv;
             float dist = max(-mv.z, 0.1);
             ${depthVert}
-            vFresnel = pow(clamp(1.0 - abs(dot(normalize(normalMatrix * normal), normalize(-mv.xyz))), 0.0, 1.0), 1.3);
+            vFresnel = pow(clamp(1.0 - abs(dot(normalize(normalMatrix * nDef), normalize(-mv.xyz))), 0.0, 1.0), 1.3);
             vU = aP.x; vV = aP.y; vVein = aVein;
             gl_PointSize = uSize * uViewportScale * (0.7 + aSizeScale * 0.5) * (1.0 + 0.3 * aVein) / (0.35 + 0.06 * dist);
             dpMorphFinish();
@@ -913,7 +921,7 @@
                 eyeR.push(new THREE.Vector4(E.roll, (main ? show('eye') : show('eyes')) && i < data.eyes.length ? 1 : 0, 0, 0));
             }
             const uT0 = { value: 0 };
-            const mPetal = mat(petalVertex, petalFragment, { uSize: { value: 2.0 }, uPetalFlap: { get value() { return DP.config.seraphPetal.flap; } }, uFlapAmp: { get value() { return DP.config.seraphPetal.flapAmp; } }, uSpread: { get value() { return DP.config.seraphPetal.spread; } }, uFlapWave: { get value() { return DP.config.seraphPetal.flapWave; } }, uFlapVar: { get value() { return DP.config.seraphPetal.flapVar; } }, uFlapSpeed: { get value() { return DP.config.seraphPetal.flapSpeed; } } });
+            const mPetal = mat(petalVertex, petalFragment, { uSize: { value: 2.0 }, uPetalFlap: { get value() { return DP.config.seraphPetal.flap; } }, uFlapAmp: { get value() { return DP.config.seraphPetal.flapAmp; } }, uSpread: { get value() { return DP.config.seraphPetal.spread; } }, uFlapWave: { get value() { return DP.config.seraphPetal.flapWave; } }, uFlapVar: { get value() { return DP.config.seraphPetal.flapVar; } }, uFlapFresnel: { get value() { return DP.config.seraphPetal.flapFresnel; } }, uFlapSpeed: { get value() { return DP.config.seraphPetal.flapSpeed; } } });
             const EL = DP.config.seraphEye;
             const mEye = mat(eyeVertex, eyeFragment, { uSize: { value: 1.9 },
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
