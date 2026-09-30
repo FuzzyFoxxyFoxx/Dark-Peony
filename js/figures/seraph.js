@@ -69,8 +69,11 @@
     // Доводим по частям, как медузу и светило ('' — все). ?parts= в адресе важнее.
     // petals — лепестки, eye — центральный глаз, eyes — малые глаза, tendrils — усики, rings — кольца.
     // petalN (petal1 — верхний правый) — только один лепесток (доводка по одному, как глаз; потом — по его образцу все остальные).
-    const DEFAULT_PARTS = 'petal3';
-    const onlyPetalOf = (parts) => { const m = /petal(\d)/.exec(parts || ''); return m ? +m[1] : -1; };
+    const DEFAULT_PARTS = 'cross';
+    const onlyPetalOf = (parts) => { const m = /petal(\d+)/.exec(parts || ''); return m ? +m[1] : (/cross/.test(parts || '') ? -2 : -1); };
+    // cross — «андреевский крест»: четыре самых крупных лепестка (диагональные верхние 2, 3 и нижние крылья 8, 9); остальные добавим между ними позже.
+    const CROSS = [2, 3, 8, 9];
+    const keepPetal = (only, k) => only === -1 || (only === -2 ? CROSS.indexOf(k) >= 0 : k === only);
     const EYE_STUDY = 2.2;            // когда показан только центральный глаз — он крупнее, для разглядывания
 
     // ==========================================
@@ -566,7 +569,7 @@
         { name: 'диагональный широкий (второй по крупности): лопатка / ромб', keys: ['A3', 'A2'], L: 2.5, ex: 0.55 },
         { name: 'экваториальный 1, узкий длинный (чуть выше горизонтали): ланцет / линза', keys: ['E', 'C'], L: 2.6, ex: 0.8 },
         { name: 'экваториальный 2, узкий длинный (чуть ниже горизонтали): ланцет / асимметричная линза', keys: ['E', 'D'], L: 2.6, ex: 0.8 },
-        { name: 'вниз 1 — САМЫЙ БОЛЬШОЙ (нижнее крыло): кукурузный лист / асимметричная линза', keys: ['F', 'D'], L: 3.1, ex: 0.9 },
+        { name: 'вниз 1 — САМЫЙ БОЛЬШОЙ (нижнее крыло): кукурузный лист / асимметричная линза', keys: ['D', 'B'], L: 3.05, ex: 0.75, wm: 1.4 },
         { name: 'вниз 2 — лента: кукурузный лист / ланцет', keys: ['F', 'E'], L: 2.7, ex: 1.0 }
     ];
     const petalSeed = (idx) => idx * 37.7 + 5;
@@ -582,7 +585,7 @@
             knots.push([u, edge ? l : Math.max(0, l * (1 + 0.12 * gauss(sd + i * 1.3))), edge ? r : Math.max(0, r * (1 + 0.12 * gauss(sd + i * 2.1 + 7)))]);
         }
         const L = T.L * (1 + 0.06 * gauss(sd + 99)), ratio = (A.W / A.L) * (1 - t) + (B.W / B.L) * t;
-        return { key: T.keys[0] + '/' + T.keys[1], t: knots, L, W: ratio * T.L * parseFloat(DP.params.get('pwk') || '0.7'),   // полуширина: доля длины; pwk — общий множитель ширины лепестков (лепестки рядом не должны сильно перекрываться)
+        return { key: T.keys[0] + '/' + T.keys[1], t: knots, L, W: ratio * T.L * (T.wm || 1) * parseFloat(DP.params.get('pwk') || '0.7'),   // полуширина: доля длины; pwk — общий множитель ширины лепестков (лепестки рядом не должны сильно перекрываться)
          bend: (A.bend * (1 - t) + B.bend * t) * side + 0.12 * gauss(sd + 55), mix: t };
     }
     PETALS.forEach((P, i) => { const Sh = makePetalShape(Math.floor(i / 2), P.side, i); P.shape = Sh; P.L = Sh.L; P.W = Sh.W; });
@@ -617,7 +620,7 @@
         const petalList = /shapes/.test(partsG) ? SHAPE_KEYS.map((key, i) => { const Sh = makeShape(key, 10 + ({ A1: 0, B: 1, C: 2, D: 3, E: 4, F: 5, A2: 6, A3: 7, A4: 8 })[key] * 17.3); const k = 0.5, wk = parseFloat(DP.params.get('wk') || '1.25'); Sh.L *= k; Sh.W *= k * wk; return { shape: Sh, ox: -2.0 + (i % 3) * 2.0, oy: FIG_Y + 0.75 - Math.floor(i / 3) * 1.75, L: Sh.L, W: Sh.W, ph: i * 0.9, seed: i * 3.1 };
         }) : PETALS;
         petalList.forEach((P, k) => {
-            if (onlyPetal >= 0 && k !== onlyPetal) return;
+            if (!keepPetal(onlyPetal, k)) return;
             const nU = Math.ceil(P.L / h), nV = Math.ceil(2 * P.W / h);
             let sd = k * 101.7;
             for (let i = 0; i <= nU; i++) for (let j = 0; j <= nV; j++) for (let m = 0; m < MULT; m++) {
@@ -865,7 +868,7 @@
                 uniforms: Object.assign({}, common, extra, mu), vertexShader: vs(G), fragmentShader: fs(G) })); list.push(m); return m; };
             const gz = createGaze(data);
             const partsParam = DP.params.get('parts') || DEFAULT_PARTS;
-            const show = (k) => !partsParam || partsParam.split(',').indexOf(k) >= 0 || (k === 'petals' && (onlyPetalOf(partsParam) >= 0 || /shapes/.test(partsParam)));
+            const show = (k) => !partsParam || partsParam.split(',').indexOf(k) >= 0 || (k === 'petals' && (onlyPetalOf(partsParam) !== -1 || /shapes/.test(partsParam)));
             const study = partsParam === 'eye' ? EYE_STUDY : 1;
             const eyeC = [], eyeR = [];
             for (let i = 0; i < MAX_EYES; i++) {
