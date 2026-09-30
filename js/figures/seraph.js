@@ -33,9 +33,9 @@
     // по два узких длинных на 9 и 3 ч (75° и 93°, длиннее); 7 и 5 ч — нижние (150°); на 6 ч — четыре узких длинных «тентакли» (±7° и ±17° от вертикали вниз).
     // Строка: [угол оси от вертикали, -, -, -, фаза, -, раскрытие°, множитель вращения вокруг оси, множитель колыхания, один лепесток (на 6 ч по центру)]; индекс строки = тип в PETAL_TYPES.
     // Тентакли на 6 ч (ряды 6–9): колыхание слабее (÷2.25), вращение вокруг оси сильнее (×1.5), собраны ближе к 6 часам.
-    [[0.524, 0, 0, 0, 0.0, 0, 20, 0.35, 0.4], [1.047, 0, 0, 0, 0.9, 0, 0, 1, 1, false, 1], [Math.PI / 2 - 0.044, 0, 0, 0, 1.8, 0, 30, 1.5, 1], [Math.PI / 2 + 0.044, 0, 0, 0, 2.6, 0, 15, 1.5, 1], [1.88, 0, 0, 0, 3.4, 0, 0, 1, 1, false, 1], [2.62, 0, 0, 0, 4.2, 0, 30, 1, 1, false, 1],
-     [Math.PI - 0.05, 0, 0, 0, 5.0, 0, 10, 1.5, 0.45], [Math.PI - 0.20, 0, 0, 0, 5.8, 0, 25, 1.5, 0.45], [Math.PI - 0.11, 0, 0, 0, 6.6, 0, 20, 1.5, 0.45], [Math.PI, 0, 0, 0, 7.4, 0, 0, 1.5, 0.45, true]]
-        .forEach(([a, L, W, curl, ph, sw, open, twK, flK, single, roll], k) => (single ? [1] : [-1, 1]).forEach(side => PETALS.push({ a: a * side, L, W, curl, ph, sweep: sw * side, seed: k * 3.1 + (side > 0 ? 1.7 : 0), side, type: k, open: open * Math.PI / 180, twK, flK, roll: roll || 0, sideRoll: (k >= 6 && !single) ? (a * side > 0 ? -1 : 1) : 0 })));
+    [[0.524, 0, 0, 0, 0.0, 0, 20, 0.35, 0.4], [1.047, 0, 0, 0, 0.9, 0, 0, 1, 1, false, 1], [Math.PI / 2 - 0.044, 0, 0, 0, 1.8, 0, 30, 1.5, 1.5], [Math.PI / 2 + 0.044, 0, 0, 0, 2.6, 0, 15, 1.5, 1.5], [1.88, 0, 0, 0, 3.4, 0, 0, 1, 1, false, 1], [2.62, 0, 0, 0, 4.2, 0, 30, 1, 1, false, 1],
+     [Math.PI - 0.05, 0, 0, 0, 5.0, 0, 10, 1.5, 1.0], [Math.PI - 0.20, 0, 0, 0, 5.8, 0, 25, 1.5, 1.0], [Math.PI - 0.11, 0, 0, 0, 6.6, 0, 20, 1.5, 1.0], [Math.PI, 0, 0, 0, 7.4, 0, 0, 1.5, 1.0, true]]
+        .forEach(([a, L, W, curl, ph, sw, open, twK, flK, single, roll], k) => (single ? [1] : [-1, 1]).forEach(side => PETALS.push({ a: a * side, L, W, curl, ph, sweep: sw * side, seed: k * 3.1 + (side > 0 ? 1.7 : 0), side, type: k, open: open * Math.PI / 180, twK, flK, roll: roll || 0, sideRoll: ((k >= 6 && !single) || k === 2 || k === 3) ? (a * side > 0 ? -1 : 1) : 0 })));
     // Глаза: центр (в плоскости фигуры) или на лепестке (индекс, доля длины), полуширина.
     const EYES = [
         { x: 0, y: 0, w: 0.46, main: true },
@@ -83,6 +83,7 @@
         ruffleK: 7.7,                // рюши: сколько волн по длине (× длина, вершин ≈ K·L/π)
         ruffleSpeed: 0.64,           // рюши: темп бега волны от основания к кончику
         roll: 0.3,                   // крен лепестков креста: верхней кромкой к камере (рад, 0.3 ≈ 17°; минус — от камеры), нарастает с 15–40% длины
+        latAmp: 0.6,                 // изгиб В плоскости экрана у повёрнутых боком лепестков (× колыхание); 0 — нет
         sideRoll: 1.1,               // тентакли на 6 ч: поворот боком к камере вокруг оси (рад; левые — левой кромкой, правые — правой), нарастает с 8–45% длины
         rollGlow: 0.6,               // подсветка верхней кромки креста (добавка к яркости и белизне; 0 — только геометрия)
         calm: 0.7,                   // коридор активности: 0 — всегда полная амплитуда; 1 — в спокойные периоды 30% амплитуды (редкие «всплески» до полной)
@@ -132,7 +133,7 @@
         uniform float uViewportScale, uSize;
         attribute vec4 aP;
         attribute float aL, aSizeScale, aVein;
-        uniform float uPetalFlap, uFlapAmp, uSpread, uFlapWave, uFlapVar, uFlapSpeed, uFlapFresnel, uPetTwist, uPetTwistSpeed, uRufAmp, uRufK, uRufSpeed, uOpenK, uCalm, uTwShape, uRoll, uSideRoll;
+        uniform float uPetalFlap, uFlapAmp, uSpread, uFlapWave, uFlapVar, uFlapSpeed, uFlapFresnel, uPetTwist, uPetTwistSpeed, uRufAmp, uRufK, uRufSpeed, uOpenK, uCalm, uTwShape, uRoll, uSideRoll, uLatAmp;
         // Колыхание с переменной длиной и высотой волны: фаза искажена медленными синусами (местная длина волны гуляет вдоль лепестка и во времени),
         // высота — огибающая из бегущих «пакетов»; вторая, короткая волна добавляет рябь к кончику.
         // Рюши кромки — по принципу лент медузы (кривая Безье по вершинам, dpBezWave в jellyfish.js): вершины чередуются влево-вправо, высота своя у каждой,
@@ -226,6 +227,8 @@
             float along = dot(d, vec2(sin(aB.z), cos(aB.z)));
             pos.z += along * uSpread * uPetalFlap * 0.8 * sin(uTime * 0.38 + aP.z * 1.3 + 1.0);
             pos.z += uPetalFlap * uFlapAmp * aK.z * act * dpFlapV(aP.x, aP.z, aP.w, aL);
+            // повёрнутые боком узкие лепестки (экватор, 6 ч): изгиб из плоскости с фронта не виден — добавлен такой же изгиб В плоскости экрана (поперёк оси), со сдвигом фазы
+            pos.xy += axP0 * (uPetalFlap * uFlapAmp * uLatAmp * abs(aR) * act * dpFlapV(aP.x, aP.z + 1.7, aP.w * 1.3 + 0.7, aL));
             // раскрытие: всё (после всех деформаций) поворачивается вокруг основания поперёк оси, концы — к зрителю
             float op = aK.x * uOpenK, oc = cos(op), os = sin(op);
             {
@@ -1026,7 +1029,7 @@
                 eyeR.push(new THREE.Vector4(E.roll, (main ? show('eye') : show('eyes')) && i < data.eyes.length ? 1 : 0, 0, 0));
             }
             const uT0 = { value: 0 };
-            const mPetal = mat(petalVertex, petalFragment, { uSize: { value: 2.0 }, uPetalFlap: { get value() { return DP.config.seraphPetal.flap; } }, uFlapAmp: { get value() { return DP.config.seraphPetal.flapAmp; } }, uSpread: { get value() { return DP.config.seraphPetal.spread; } }, uFlapWave: { get value() { return DP.config.seraphPetal.flapWave; } }, uFlapVar: { get value() { return DP.config.seraphPetal.flapVar; } }, uPetTwist: { get value() { return DP.config.seraphPetal.twist; } }, uPetTwistSpeed: { get value() { return DP.config.seraphPetal.twistSpeed; } }, uRufAmp: { get value() { return DP.config.seraphPetal.ruffleAmp; } }, uRufK: { get value() { return DP.config.seraphPetal.ruffleK; } }, uRufSpeed: { get value() { return DP.config.seraphPetal.ruffleSpeed; } }, uRollGlow: { get value() { return DP.config.seraphPetal.rollGlow; } }, uSideRoll: { get value() { return DP.config.seraphPetal.sideRoll; } }, uRoll: { get value() { return DP.config.seraphPetal.roll; } }, uCalm: { get value() { return DP.config.seraphPetal.calm; } }, uTwShape: { get value() { return DP.config.seraphPetal.twistShape; } }, uOpenK: { get value() { return DP.config.seraphPetal.openK; } }, uFlapFresnel: { get value() { return DP.config.seraphPetal.flapFresnel; } }, uFlapSpeed: { get value() { return DP.config.seraphPetal.flapSpeed; } } });
+            const mPetal = mat(petalVertex, petalFragment, { uSize: { value: 2.0 }, uPetalFlap: { get value() { return DP.config.seraphPetal.flap; } }, uFlapAmp: { get value() { return DP.config.seraphPetal.flapAmp; } }, uSpread: { get value() { return DP.config.seraphPetal.spread; } }, uFlapWave: { get value() { return DP.config.seraphPetal.flapWave; } }, uFlapVar: { get value() { return DP.config.seraphPetal.flapVar; } }, uPetTwist: { get value() { return DP.config.seraphPetal.twist; } }, uPetTwistSpeed: { get value() { return DP.config.seraphPetal.twistSpeed; } }, uRufAmp: { get value() { return DP.config.seraphPetal.ruffleAmp; } }, uRufK: { get value() { return DP.config.seraphPetal.ruffleK; } }, uRufSpeed: { get value() { return DP.config.seraphPetal.ruffleSpeed; } }, uRollGlow: { get value() { return DP.config.seraphPetal.rollGlow; } }, uLatAmp: { get value() { return DP.config.seraphPetal.latAmp; } }, uSideRoll: { get value() { return DP.config.seraphPetal.sideRoll; } }, uRoll: { get value() { return DP.config.seraphPetal.roll; } }, uCalm: { get value() { return DP.config.seraphPetal.calm; } }, uTwShape: { get value() { return DP.config.seraphPetal.twistShape; } }, uOpenK: { get value() { return DP.config.seraphPetal.openK; } }, uFlapFresnel: { get value() { return DP.config.seraphPetal.flapFresnel; } }, uFlapSpeed: { get value() { return DP.config.seraphPetal.flapSpeed; } } });
             const EL = DP.config.seraphEye;
             const mEye = mat(eyeVertex, eyeFragment, { uSize: { value: 1.9 },
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
