@@ -65,7 +65,9 @@
         lidShadow: 0.5                // тень век на яблоке: у краёв разреза яблоко темнее
     }, DP.config.seraphEye || {});
     DP.config.seraphPetal = Object.assign({
-        flap: 0.0,                   // взмах лепестков (0 — плоские)
+        flap: 1.0,                   // колыхание: синусоида бежит по оси лепестка от основания к кончику, гнёт всё (0 — неподвижные)
+        flapAmp: 1.0,                // размах колыхания (× базовый)
+        spread: 0.08,                // «распускание»: у основания угол лепестка чуть меняется (рад, в плоскости и вперёд-назад); 0 — нет
         cup: 1.3,                    // «ложечка»: кривизна параболы поперёк лепестка в середине (z = κ·поперёк²; центр ниже, края к зрителю); 0 — плоский
         cupBase: 1.8,                // у основания парабола уже (кривизна ×), к середине расходится
         cupTipFrom: 0.62, cupTipTo: 0.97   // где парабола начинает выпрямляться к кончику и где уже прямая (доли длины)
@@ -108,12 +110,20 @@
         uniform float uViewportScale, uSize;
         attribute vec4 aP;
         attribute float aL, aSizeScale, aVein;
-        uniform float uPetalFlap;
+        uniform float uPetalFlap, uFlapAmp, uSpread;
+        attribute vec3 aB;                                   // основание лепестка (x, y) и угол оси
         varying float vFresnel, vU, vV, vVein;
         void main() {
             vec3 dpRest = position;
             vec3 pos = position;
-            pos.z += uPetalFlap * dpFlap(aP.x, aP.z, aP.w, aL);
+            // раскрытие/сбор у основания: поворот всего лепестка вокруг основания в плоскости + наклон вперёд-назад вдоль оси
+            float sp = uSpread * uPetalFlap * (0.75 * sin(uTime * 0.45 + aP.z) + 0.45 * sin(uTime * 0.83 + aP.w));
+            float cs = cos(sp), sn = sin(sp);
+            vec2 d = pos.xy - aB.xy;
+            pos.xy = aB.xy + vec2(cs * d.x - sn * d.y, sn * d.x + cs * d.y);
+            float along = dot(d, vec2(sin(aB.z), cos(aB.z)));
+            pos.z += along * uSpread * uPetalFlap * 0.8 * sin(uTime * 0.38 + aP.z * 1.3 + 1.0);
+            pos.z += uPetalFlap * uFlapAmp * dpFlap(aP.x, aP.z, aP.w, aL);
             pos.y += uPetalFlap * dpBob();
             vec4 mv = viewMatrix * dpMorph(dpRest, pos);
             gl_Position = projectionMatrix * mv;
@@ -622,7 +632,7 @@
         const h = STEP / Math.sqrt(q);
 
         // ---------- ЛЕПЕСТКИ ----------
-        const pp = [], pn = [], pa = [], pl = [], ps = [], pv = [];
+        const pp = [], pn = [], pa = [], pl = [], ps = [], pv = [], pb = [];
         const meshes = [];
         const partsG = DP.params.get('parts') || DEFAULT_PARTS;
         const onlyPetal = onlyPetalOf(partsG);
@@ -632,6 +642,7 @@
             if (!keepPetal(onlyPetal, k)) return;
             const nU = Math.ceil(P.L / h), nV = Math.ceil(2 * P.W / h);
             let sd = k * 101.7;
+            const base = petalPoint(P, 0, 0);
             for (let i = 0; i <= nU; i++) for (let j = 0; j <= nV; j++) for (let m = 0; m < MULT; m++) {
                 const u = Math.min(1, Math.max(0, (i + (seededRandom(sd += 1.1) - 0.5) * 0.8) / nU));
                 const v = Math.min(1, Math.max(-1, ((j + (seededRandom(sd += 1.3) - 0.5) * 0.8) / nV) * 2 - 1));
@@ -646,7 +657,7 @@
                 let vein = Math.exp(-v * v / 0.0025);
                 [0.28, 0.52, 0.76].forEach(vk => { const vv = Math.abs(v) - vk * (0.6 + 0.4 * u) - 0.02 * Math.sin(u * 9 + k); vein = Math.max(vein, 0.7 * Math.exp(-vv * vv / 0.0012)); });
                 pp.push(p[0], p[1], p[2]); pn.push(nx / nl, ny / nl, nz / nl);
-                pa.push(u, v, P.ph, P.seed); pl.push(P.L); ps.push(seededRandom(sd += 0.9)); pv.push(vein * (0.5 + 0.5 * u));
+                pa.push(u, v, P.ph, P.seed); pb.push(base[0], base[1], P.a || 0); pl.push(P.L); ps.push(seededRandom(sd += 0.9)); pv.push(vein * (0.5 + 0.5 * u));
             }
             // поверхность (MESH)
             const mg = new THREE.PlaneGeometry(1, 1, 24, 12), mp = mg.attributes.position;
@@ -662,6 +673,7 @@
         petalGeo.setAttribute('position', new THREE.Float32BufferAttribute(pp, 3));
         petalGeo.setAttribute('normal', new THREE.Float32BufferAttribute(pn, 3));
         petalGeo.setAttribute('aP', new THREE.Float32BufferAttribute(pa, 4));
+        petalGeo.setAttribute('aB', new THREE.Float32BufferAttribute(pb, 3));
         petalGeo.setAttribute('aL', new THREE.Float32BufferAttribute(pl, 1));
         petalGeo.setAttribute('aSizeScale', new THREE.Float32BufferAttribute(ps, 1));
         petalGeo.setAttribute('aVein', new THREE.Float32BufferAttribute(pv, 1));
@@ -886,7 +898,7 @@
                 eyeR.push(new THREE.Vector4(E.roll, (main ? show('eye') : show('eyes')) && i < data.eyes.length ? 1 : 0, 0, 0));
             }
             const uT0 = { value: 0 };
-            const mPetal = mat(petalVertex, petalFragment, { uSize: { value: 2.0 }, uPetalFlap: { get value() { return DP.config.seraphPetal.flap; } } });
+            const mPetal = mat(petalVertex, petalFragment, { uSize: { value: 2.0 }, uPetalFlap: { get value() { return DP.config.seraphPetal.flap; } }, uFlapAmp: { get value() { return DP.config.seraphPetal.flapAmp; } }, uSpread: { get value() { return DP.config.seraphPetal.spread; } } });
             const EL = DP.config.seraphEye;
             const mEye = mat(eyeVertex, eyeFragment, { uSize: { value: 1.9 },
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
