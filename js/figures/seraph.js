@@ -82,6 +82,8 @@
         ruffleAmp: 0.275,             // рюши кромки (по принципу лент медузы): размах (доля местной ширины); 0 — гладкая кромка
         ruffleK: 7.7,                // рюши: сколько волн по длине (× длина, вершин ≈ K·L/π)
         ruffleSpeed: 0.64,           // рюши: темп бега волны от основания к кончику
+        calm: 0.7,                   // коридор активности: 0 — всегда полная амплитуда; 1 — в спокойные периоды 30% амплитуды (редкие «всплески» до полной)
+        twistShape: 1.0,             // форма вращения: 0 — линейно, 1 — квадратично (угол в основном мал, редкие большие заходы), 2 — ещё острее
         openK: 1.0,                  // раскрытие лепестков: множитель углов (0 — все раскинуты плоско, 1 — как задано по парам, 2 — собраннее)
         flapFresnel: 1.0,            // насколько изгиб волны подсвечивает френель (0 — нормаль покоя, как раньше; больше — сильнее)
         spread: 0.08,                // «распускание»: у основания угол лепестка чуть меняется (рад, в плоскости и вперёд-назад); 0 — нет
@@ -127,7 +129,7 @@
         uniform float uViewportScale, uSize;
         attribute vec4 aP;
         attribute float aL, aSizeScale, aVein;
-        uniform float uPetalFlap, uFlapAmp, uSpread, uFlapWave, uFlapVar, uFlapSpeed, uFlapFresnel, uPetTwist, uPetTwistSpeed, uRufAmp, uRufK, uRufSpeed, uOpenK;
+        uniform float uPetalFlap, uFlapAmp, uSpread, uFlapWave, uFlapVar, uFlapSpeed, uFlapFresnel, uPetTwist, uPetTwistSpeed, uRufAmp, uRufK, uRufSpeed, uOpenK, uCalm, uTwShape;
         // Колыхание с переменной длиной и высотой волны: фаза искажена медленными синусами (местная длина волны гуляет вдоль лепестка и во времени),
         // высота — огибающая из бегущих «пакетов»; вторая, короткая волна добавляет рябь к кончику.
         // Рюши кромки — по принципу лент медузы (кривая Безье по вершинам, dpBezWave в jellyfish.js): вершины чередуются влево-вправо, высота своя у каждой,
@@ -160,10 +162,17 @@
             float amp = uRufAmp * env * (0.15 + 0.85 * smoothstep(0.03, 0.45, u));
             return vec2(pow(av, 2.0) * amp * w * 0.3 * dpPetBez(ph, sdd), pow(av, 1.8) * amp * w * dpPetBez(ph + 0.5, sdd));
         }
+        // «Коридор» активности: у каждого лепестка свои медленные «всплески» (≈20–25% времени на полную амплитуду), между ними — спокойная поза (как на референсе).
+        // uCalm 0 — всегда полная амплитуда, 1 — в покое 30% амплитуды. Пиковые амплитуды не урезаны.
+        float dpAct(float ph, float sd) {
+            float x = 0.5 + 0.5 * (0.6 * sin(uTime * 0.13 + ph * 2.3) + 0.4 * sin(uTime * 0.071 + sd * 1.7));
+            return mix(1.0 - 0.7 * uCalm, 1.0, smoothstep(0.5, 0.9, x));
+        }
         float dpTwist(float u, float ph, float sd) {
             float t = uTime * uPetTwistSpeed;
             float env = pow(clamp((u - 0.2) / 0.8, 0.0, 1.0), 1.5);                          // средина — слабо, к кончику сильнее
             float w = 0.6 * sin(t * 0.23 + ph * 1.9 + sd - u * 1.1) + 0.4 * sin(t * 0.37 + ph * 0.7 + sd * 2.3 - u * 1.9);   // случайное медленное, кончик запаздывает
+            w = sign(w) * pow(abs(w), 1.0 + uTwShape);                                      // большую часть времени угол мал, редкие большие заходы
             return env * w;
         }
         float dpFlapV(float u, float ph, float sd, float L) {
@@ -193,7 +202,8 @@
             pos.z += ruf.y;
             vec3 nB = normalize(normal - vec3(axT0 * rzl + axP0 * rzc, 0.0));
             // вращение вокруг центральной оси (wiggle): у основания нет, со средины нарастает к кончику (кончики заворачиваются); случайное, медленное, ±uPetTwist
-            float tw = uPetTwist * aK.y * uPetalFlap * dpTwist(aP.x, aP.z, aP.w);
+            float act = dpAct(aP.z, aP.w);
+            float tw = uPetTwist * aK.y * act * uPetalFlap * dpTwist(aP.x, aP.z, aP.w);
             float tc = cos(tw), ts = sin(tw);
             vec2 axT = vec2(sin(aB.z), cos(aB.z)), axP = vec2(cos(aB.z), -sin(aB.z));
             vec2 d0 = pos.xy - aB.xy;
@@ -202,13 +212,13 @@
             pos.z = ac0 * ts + z0 * tc;
             vec3 nR = vec3(axT * dot(nB.xy, axT) + axP * (dot(nB.xy, axP) * tc - nB.z * ts), dot(nB.xy, axP) * ts + nB.z * tc);
             // раскрытие/сбор у основания: поворот всего лепестка вокруг основания в плоскости + наклон вперёд-назад вдоль оси
-            float sp = uSpread * uPetalFlap * (0.75 * sin(uTime * 0.45 + aP.z) + 0.45 * sin(uTime * 0.83 + aP.w));
+            float sp = uSpread * act * uPetalFlap * (0.75 * sin(uTime * 0.45 + aP.z) + 0.45 * sin(uTime * 0.83 + aP.w));
             float cs = cos(sp), sn = sin(sp);
             vec2 d = pos.xy - aB.xy;
             pos.xy = aB.xy + vec2(cs * d.x - sn * d.y, sn * d.x + cs * d.y);
             float along = dot(d, vec2(sin(aB.z), cos(aB.z)));
             pos.z += along * uSpread * uPetalFlap * 0.8 * sin(uTime * 0.38 + aP.z * 1.3 + 1.0);
-            pos.z += uPetalFlap * uFlapAmp * aK.z * dpFlapV(aP.x, aP.z, aP.w, aL);
+            pos.z += uPetalFlap * uFlapAmp * aK.z * act * dpFlapV(aP.x, aP.z, aP.w, aL);
             // раскрытие: всё (после всех деформаций) поворачивается вокруг основания поперёк оси, концы — к зрителю
             float op = aK.x * uOpenK, oc = cos(op), os = sin(op);
             {
@@ -222,7 +232,7 @@
             // нормаль следует за изгибом (иначе френель считался бы по нормали покоя и волны не подсвечивались):
             // наклон поверхности вдоль оси = производная смещения z по длине (конечная разность) + наклон от «распускания»
             float e = 0.01, uu = clamp(aP.x, e, 1.0 - e);
-            float dzdl = uFlapFresnel * uPetalFlap * uFlapAmp * aK.z * (dpFlapV(uu + e, aP.z, aP.w, aL) - dpFlapV(uu - e, aP.z, aP.w, aL)) / (2.0 * e * aL)
+            float dzdl = uFlapFresnel * uPetalFlap * uFlapAmp * aK.z * act * (dpFlapV(uu + e, aP.z, aP.w, aL) - dpFlapV(uu - e, aP.z, aP.w, aL)) / (2.0 * e * aL)
                        + uSpread * uPetalFlap * 0.8 * sin(uTime * 0.38 + aP.z * 1.3 + 1.0);
             vec3 tAx = vec3(cs * sin(aB.z) - sn * cos(aB.z), sn * sin(aB.z) + cs * cos(aB.z), 0.0);
             vec3 nDef = normalize(vec3(cs * nR.x - sn * nR.y, sn * nR.x + cs * nR.y, nR.z) - dzdl * tAx);
@@ -1006,7 +1016,7 @@
                 eyeR.push(new THREE.Vector4(E.roll, (main ? show('eye') : show('eyes')) && i < data.eyes.length ? 1 : 0, 0, 0));
             }
             const uT0 = { value: 0 };
-            const mPetal = mat(petalVertex, petalFragment, { uSize: { value: 2.0 }, uPetalFlap: { get value() { return DP.config.seraphPetal.flap; } }, uFlapAmp: { get value() { return DP.config.seraphPetal.flapAmp; } }, uSpread: { get value() { return DP.config.seraphPetal.spread; } }, uFlapWave: { get value() { return DP.config.seraphPetal.flapWave; } }, uFlapVar: { get value() { return DP.config.seraphPetal.flapVar; } }, uPetTwist: { get value() { return DP.config.seraphPetal.twist; } }, uPetTwistSpeed: { get value() { return DP.config.seraphPetal.twistSpeed; } }, uRufAmp: { get value() { return DP.config.seraphPetal.ruffleAmp; } }, uRufK: { get value() { return DP.config.seraphPetal.ruffleK; } }, uRufSpeed: { get value() { return DP.config.seraphPetal.ruffleSpeed; } }, uOpenK: { get value() { return DP.config.seraphPetal.openK; } }, uFlapFresnel: { get value() { return DP.config.seraphPetal.flapFresnel; } }, uFlapSpeed: { get value() { return DP.config.seraphPetal.flapSpeed; } } });
+            const mPetal = mat(petalVertex, petalFragment, { uSize: { value: 2.0 }, uPetalFlap: { get value() { return DP.config.seraphPetal.flap; } }, uFlapAmp: { get value() { return DP.config.seraphPetal.flapAmp; } }, uSpread: { get value() { return DP.config.seraphPetal.spread; } }, uFlapWave: { get value() { return DP.config.seraphPetal.flapWave; } }, uFlapVar: { get value() { return DP.config.seraphPetal.flapVar; } }, uPetTwist: { get value() { return DP.config.seraphPetal.twist; } }, uPetTwistSpeed: { get value() { return DP.config.seraphPetal.twistSpeed; } }, uRufAmp: { get value() { return DP.config.seraphPetal.ruffleAmp; } }, uRufK: { get value() { return DP.config.seraphPetal.ruffleK; } }, uRufSpeed: { get value() { return DP.config.seraphPetal.ruffleSpeed; } }, uCalm: { get value() { return DP.config.seraphPetal.calm; } }, uTwShape: { get value() { return DP.config.seraphPetal.twistShape; } }, uOpenK: { get value() { return DP.config.seraphPetal.openK; } }, uFlapFresnel: { get value() { return DP.config.seraphPetal.flapFresnel; } }, uFlapSpeed: { get value() { return DP.config.seraphPetal.flapSpeed; } } });
             const EL = DP.config.seraphEye;
             const mEye = mat(eyeVertex, eyeFragment, { uSize: { value: 1.9 },
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
