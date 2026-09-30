@@ -64,6 +64,7 @@
         halo: 0.7,                   // ореол складки над глазом (спереди)
         lidShadow: 0.5                // тень век на яблоке: у краёв разреза яблоко темнее
     }, DP.config.seraphEye || {});
+    DP.config.seraphPetal = Object.assign({ flap: 0.0 }, DP.config.seraphPetal || {});   // взмах лепестков (0 — плоские, для доводки форм)
     const eyeLook = new THREE.Vector4(), eyeLook2 = new THREE.Vector4(), eyeFade = new THREE.Vector4(), eyeCr = new THREE.Vector4(), eyeCr2 = new THREE.Vector4(), eyeCr3 = new THREE.Vector4(), eyeGr = new THREE.Vector4();
     // Доводим по частям, как медузу и светило ('' — все). ?parts= в адресе важнее.
     // petals — лепестки, eye — центральный глаз, eyes — малые глаза, tendrils — усики, rings — кольца.
@@ -99,12 +100,13 @@
         uniform float uViewportScale, uSize;
         attribute vec4 aP;
         attribute float aL, aSizeScale, aVein;
+        uniform float uPetalFlap;
         varying float vFresnel, vU, vV, vVein;
         void main() {
             vec3 dpRest = position;
             vec3 pos = position;
-            pos.z += dpFlap(aP.x, aP.z, aP.w, aL);
-            pos.y += dpBob();
+            pos.z += uPetalFlap * dpFlap(aP.x, aP.z, aP.w, aL);
+            pos.y += uPetalFlap * dpBob();
             vec4 mv = viewMatrix * dpMorph(dpRest, pos);
             gl_Position = projectionMatrix * mv;
             float dist = max(-mv.z, 0.1);
@@ -518,7 +520,43 @@
         a = P.a + P.sweep * u * u;
         return [x, y, a];
     }
+    // ---------- БАЗОВЫЕ ФОРМЫ ЛИСТА (выкройка ириса автора) ----------
+    // Плоские, несимметричные; таблица: [u вдоль 0..1, полуширина слева, полуширина справа] в долях максимума. L — длина, W — макс.
+    // полуширина, bend — изгиб средней линии (S). Кромка постоянная (как вырезан лист); волнистость краёв в плоскости — следующий шаг.
+    const SHAPES = {
+        A: { name: 'ложка (выкройка 1)', L: 2.3, W: 0.85, bend: 0.0, t: [[0, .05, .05], [.12, .10, .11], [.25, .26, .30], [.4, .60, .66], [.55, .92, .98], [.68, 1.0, 1.0], [.8, .93, .88], [.9, .62, .55], [.97, .25, .20], [1, 0, 0]] },
+        B: { name: 'ложка с плечом (выкройка 2)', L: 2.3, W: 0.85, bend: 0.25, t: [[0, .04, .05], [.14, .10, .14], [.3, .30, .40], [.45, .66, .85], [.58, .95, 1.0], [.7, 1.0, .82], [.82, .78, .55], [.92, .45, .30], [.98, .15, .08], [1, 0, 0]] },
+        C: { name: 'лист-линза (выкройка 3)', L: 2.0, W: 0.65, bend: 0.0, t: [[0, 0, 0], [.12, .25, .25], [.3, .70, .72], [.5, 1.0, 1.0], [.7, .80, .78], [.88, .42, .40], [1, 0, 0]] },
+        D: { name: 'асимметричная линза (выкройка 4)', L: 2.1, W: 0.6, bend: -0.3, t: [[0, 0, 0], [.15, .30, .12], [.3, .85, .35], [.5, 1.0, .55], [.7, .75, .48], [.88, .35, .30], [1, 0, 0]] },
+        E: { name: 'узкий ланцет (выкройка 5)', L: 2.0, W: 0.3, bend: 0.15, t: [[0, 0, 0], [.15, .35, .30], [.35, .95, .90], [.55, 1.0, .98], [.78, .60, .55], [.92, .25, .22], [1, 0, 0]] },
+        F: { name: 'кукурузный лист (выкройка 6)', L: 3.2, W: 0.38, bend: 0.5, t: [[0, .12, .10], [.1, .30, .28], [.3, .75, .72], [.5, 1.0, 1.0], [.7, .85, .80], [.88, .48, .42], [1, 0, 0]] }
+    };
+    const SHAPE_KEYS = Object.keys(SHAPES);
+    // Экземпляр формы: к таблице добавляется постоянный рандомайз (ширины ±12% по каждой стороне отдельно, длина ±6%) — без симметрии.
+    function makeShape(key, seed) {
+        const S = SHAPES[key];
+        const t = S.t.map(([u, l, r], i) => {
+            const last = i === 0 || i === S.t.length - 1;
+            return [u, Math.max(0, l * (last ? 1 : 1 + 0.12 * gauss(seed + i * 1.3))), Math.max(0, r * (last ? 1 : 1 + 0.12 * gauss(seed + i * 2.1 + 7)))];
+        });
+        return { key, L: S.L * (1 + 0.06 * gauss(seed + 99)), W: S.W, bend: S.bend + 0.12 * gauss(seed + 55), t };
+    }
+    const catmull = (a, b, c, d, x) => b + 0.5 * x * (c - a + x * (2 * a - 5 * b + 4 * c - d + x * (3 * (b - c) + d - a)));
+    function shapeWidth(Sh, u, col) {                                   // col 1 — слева, 2 — справа; гладкая кривая (Катмулл — Ром) по таблице
+        const t = Sh.t, n = t.length;
+        u = Math.min(1, Math.max(0, u));
+        let i = 0; while (i < n - 2 && u > t[i + 1][0]) i++;
+        const x = (u - t[i][0]) / (t[i + 1][0] - t[i][0]);
+        const a = t[Math.max(0, i - 1)][col], b = t[i][col], c = t[i + 1][col], d = t[Math.min(n - 1, i + 2)][col];
+        return Math.max(0, catmull(a, b, c, d, x));
+    }
     function petalPoint(P, u, v) {
+        if (P.shape) {                                                  // плоская базовая форма: ось прямая с изгибом, z = 0
+            const Sh = P.shape, L = Sh.L, bend = Sh.bend * 0.12 * L;
+            const ax = P.ox + bend * Math.sin(Math.PI * u), dx = bend * Math.PI * Math.cos(Math.PI * u), a = Math.atan2(dx, L);
+            const w = shapeWidth(Sh, u, v < 0 ? 1 : 2) * Sh.W;
+            return [ax + Math.cos(a) * v * w, P.oy + u * L - Math.sin(a) * v * w, 0];
+        }
         const [ax, ay, a] = petalAxis(P, u);
         const px = Math.cos(a), py = -Math.sin(a);
         const w = petalWidth(u) * P.W, across = v * w;
@@ -533,8 +571,10 @@
         // ---------- ЛЕПЕСТКИ ----------
         const pp = [], pn = [], pa = [], pl = [], ps = [], pv = [];
         const meshes = [];
-        const onlyPetal = onlyPetalOf(DP.params.get('parts') || DEFAULT_PARTS);
-        PETALS.forEach((P, k) => {
+        const partsG = DP.params.get('parts') || DEFAULT_PARTS;
+        const onlyPetal = onlyPetalOf(partsG);
+        const petalList = /shapes/.test(partsG) ? SHAPE_KEYS.map((key, i) => { const Sh = makeShape(key, 10 + i * 17.3); Sh.L *= 0.62; Sh.W *= 0.62; return { shape: Sh, ox: -2.0 + (i % 3) * 2.0, oy: FIG_Y + (i < 3 ? 0.25 : -1.85), L: Sh.L, W: Sh.W, ph: i * 0.9, seed: i * 3.1 }; }) : PETALS;
+        petalList.forEach((P, k) => {
             if (onlyPetal >= 0 && k !== onlyPetal) return;
             const nU = Math.ceil(P.L / h), nV = Math.ceil(2 * P.W / h);
             let sd = k * 101.7;
@@ -783,7 +823,7 @@
                 uniforms: Object.assign({}, common, extra, mu), vertexShader: vs(G), fragmentShader: fs(G) })); list.push(m); return m; };
             const gz = createGaze(data);
             const partsParam = DP.params.get('parts') || DEFAULT_PARTS;
-            const show = (k) => !partsParam || partsParam.split(',').indexOf(k) >= 0 || (k === 'petals' && onlyPetalOf(partsParam) >= 0);
+            const show = (k) => !partsParam || partsParam.split(',').indexOf(k) >= 0 || (k === 'petals' && (onlyPetalOf(partsParam) >= 0 || /shapes/.test(partsParam)));
             const study = partsParam === 'eye' ? EYE_STUDY : 1;
             const eyeC = [], eyeR = [];
             for (let i = 0; i < MAX_EYES; i++) {
@@ -792,7 +832,7 @@
                 eyeR.push(new THREE.Vector4(E.roll, (main ? show('eye') : show('eyes')) && i < data.eyes.length ? 1 : 0, 0, 0));
             }
             const uT0 = { value: 0 };
-            const mPetal = mat(petalVertex, petalFragment, { uSize: { value: 2.0 } });
+            const mPetal = mat(petalVertex, petalFragment, { uSize: { value: 2.0 }, uPetalFlap: { get value() { return DP.config.seraphPetal.flap; } } });
             const EL = DP.config.seraphEye;
             const mEye = mat(eyeVertex, eyeFragment, { uSize: { value: 1.9 },
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
