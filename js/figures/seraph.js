@@ -67,7 +67,9 @@
     const eyeLook = new THREE.Vector4(), eyeLook2 = new THREE.Vector4(), eyeFade = new THREE.Vector4(), eyeCr = new THREE.Vector4(), eyeCr2 = new THREE.Vector4(), eyeCr3 = new THREE.Vector4(), eyeGr = new THREE.Vector4();
     // Доводим по частям, как медузу и светило ('' — все). ?parts= в адресе важнее.
     // petals — лепестки, eye — центральный глаз, eyes — малые глаза, tendrils — усики, rings — кольца.
-    const DEFAULT_PARTS = 'eye';
+    // petalN (petal1 — верхний правый) — только один лепесток (доводка по одному, как глаз; потом — по его образцу все остальные).
+    const DEFAULT_PARTS = 'petal1';
+    const onlyPetalOf = (parts) => { const m = /petal(\d)/.exec(parts || ''); return m ? +m[1] : -1; };
     const EYE_STUDY = 2.2;            // когда показан только центральный глаз — он крупнее, для разглядывания
 
     // ==========================================
@@ -531,7 +533,9 @@
         // ---------- ЛЕПЕСТКИ ----------
         const pp = [], pn = [], pa = [], pl = [], ps = [], pv = [];
         const meshes = [];
+        const onlyPetal = onlyPetalOf(DP.params.get('parts') || DEFAULT_PARTS);
         PETALS.forEach((P, k) => {
+            if (onlyPetal >= 0 && k !== onlyPetal) return;
             const nU = Math.ceil(P.L / h), nV = Math.ceil(2 * P.W / h);
             let sd = k * 101.7;
             for (let i = 0; i <= nU; i++) for (let j = 0; j <= nV; j++) for (let m = 0; m < MULT; m++) {
@@ -779,7 +783,7 @@
                 uniforms: Object.assign({}, common, extra, mu), vertexShader: vs(G), fragmentShader: fs(G) })); list.push(m); return m; };
             const gz = createGaze(data);
             const partsParam = DP.params.get('parts') || DEFAULT_PARTS;
-            const show = (k) => !partsParam || partsParam.split(',').indexOf(k) >= 0;
+            const show = (k) => !partsParam || partsParam.split(',').indexOf(k) >= 0 || (k === 'petals' && onlyPetalOf(partsParam) >= 0);
             const study = partsParam === 'eye' ? EYE_STUDY : 1;
             const eyeC = [], eyeR = [];
             for (let i = 0; i < MAX_EYES; i++) {
