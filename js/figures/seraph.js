@@ -31,8 +31,11 @@
     // Внешние (крест: пары 1 и 4) — 0°, дальше внутрь шагами по 15°: нижняя горизонтальная 15°, верхняя горизонтальная и ленты 30°, верхние маленькие 45°.
     // Углы — по циферблату эскиза (автор, 2026-09-30): 12 ч — пусто; 11 и 1 ч — малые верхние (30°); 10 и 2 ч — верх креста (60°); низ креста ≈3.5 и 8.5 ч (108°);
     // по два узких длинных на 9 и 3 ч (75° и 93°, длиннее); 7 и 5 ч — нижние (150°); на 6 ч — четыре узких длинных «тентакли» (±7° и ±17° от вертикали вниз).
-    [[0.524, 2.3, 0.5, 0.35, 0.0, 0.3, 45], [1.047, 2.2, 0.6, 0.3, 0.9, 0.5, 0], [1.30, 2.6, 0.4, 0.3, 1.8, 0.2, 30], [1.65, 2.6, 0.4, 0.25, 2.6, -0.2, 15], [1.88, 3.1, 0.5, 0.2, 3.4, -0.5, 0], [2.62, 2.7, 0.26, 0.15, 4.2, -0.2, 30], [3.02, 3.3, 0.2, 0.1, 5.0, -0.1, 15], [2.84, 3.0, 0.2, 0.1, 5.8, 0.1, 45]]
-        .forEach(([a, L, W, curl, ph, sw, open], k) => [-1, 1].forEach(side => PETALS.push({ a: a * side, L, W, curl, ph, sweep: sw * side, seed: k * 3.1 + (side > 0 ? 1.7 : 0), side, open: open * Math.PI / 180 })));
+    // Строка: [угол оси от вертикали, -, -, -, фаза, -, раскрытие°, множитель вращения вокруг оси, множитель колыхания, один лепесток (на 6 ч по центру)]; индекс строки = тип в PETAL_TYPES.
+    // Тентакли на 6 ч (ряды 6–9): колыхание слабее (÷2.25), вращение вокруг оси сильнее (×1.5), собраны ближе к 6 часам.
+    [[0.524, 0, 0, 0, 0.0, 0, 20, 0.35, 0.4], [1.047, 0, 0, 0, 0.9, 0, 0, 1, 1], [1.30, 0, 0, 0, 1.8, 0, 30, 1, 1], [1.65, 0, 0, 0, 2.6, 0, 15, 1, 1], [1.88, 0, 0, 0, 3.4, 0, 0, 1, 1], [2.62, 0, 0, 0, 4.2, 0, 30, 1, 1],
+     [Math.PI - 0.07, 0, 0, 0, 5.0, 0, 10, 1.5, 0.45], [Math.PI - 0.20, 0, 0, 0, 5.8, 0, 25, 1.5, 0.45], [Math.PI - 0.14, 0, 0, 0, 6.6, 0, 20, 1.5, 0.45], [Math.PI, 0, 0, 0, 7.4, 0, 0, 1.5, 0.45, true]]
+        .forEach(([a, L, W, curl, ph, sw, open, twK, flK, single], k) => (single ? [1] : [-1, 1]).forEach(side => PETALS.push({ a: a * side, L, W, curl, ph, sweep: sw * side, seed: k * 3.1 + (side > 0 ? 1.7 : 0), side, type: k, open: open * Math.PI / 180, twK, flK })));
     // Глаза: центр (в плоскости фигуры) или на лепестке (индекс, доля длины), полуширина.
     const EYES = [
         { x: 0, y: 0, w: 0.46, main: true },
@@ -173,7 +176,7 @@
             float env2 = 1.0 + uFlapVar * 0.7 * sin(t * 0.63 + sd + u * 4.2);
             return (0.21 * w1 * env1 + 0.085 * w2 * env2) * pow(u, 1.4) * L;
         }
-        attribute float aOpen;                               // раскрытие: наклон лепестка к зрителю от плоскости цветоложа (рад)
+        attribute vec3 aK;                                   // x — раскрытие (наклон к зрителю, рад), y — множитель вращения вокруг оси, z — множитель колыхания
         attribute vec3 aB;                                   // основание лепестка (x, y) и угол оси
         varying float vFresnel, vU, vV, vVein;
         void main() {
@@ -190,7 +193,7 @@
             pos.z += ruf.y;
             vec3 nB = normalize(normal - vec3(axT0 * rzl + axP0 * rzc, 0.0));
             // вращение вокруг центральной оси (wiggle): у основания нет, со средины нарастает к кончику (кончики заворачиваются); случайное, медленное, ±uPetTwist
-            float tw = uPetTwist * uPetalFlap * dpTwist(aP.x, aP.z, aP.w);
+            float tw = uPetTwist * aK.y * uPetalFlap * dpTwist(aP.x, aP.z, aP.w);
             float tc = cos(tw), ts = sin(tw);
             vec2 axT = vec2(sin(aB.z), cos(aB.z)), axP = vec2(cos(aB.z), -sin(aB.z));
             vec2 d0 = pos.xy - aB.xy;
@@ -205,9 +208,9 @@
             pos.xy = aB.xy + vec2(cs * d.x - sn * d.y, sn * d.x + cs * d.y);
             float along = dot(d, vec2(sin(aB.z), cos(aB.z)));
             pos.z += along * uSpread * uPetalFlap * 0.8 * sin(uTime * 0.38 + aP.z * 1.3 + 1.0);
-            pos.z += uPetalFlap * uFlapAmp * dpFlapV(aP.x, aP.z, aP.w, aL);
+            pos.z += uPetalFlap * uFlapAmp * aK.z * dpFlapV(aP.x, aP.z, aP.w, aL);
             // раскрытие: всё (после всех деформаций) поворачивается вокруг основания поперёк оси, концы — к зрителю
-            float op = aOpen * uOpenK, oc = cos(op), os = sin(op);
+            float op = aK.x * uOpenK, oc = cos(op), os = sin(op);
             {
                 vec2 dd = pos.xy - aB.xy;
                 float ol = dot(dd, vec2(sin(aB.z), cos(aB.z))), ocr = dot(dd, vec2(cos(aB.z), -sin(aB.z)));
@@ -219,7 +222,7 @@
             // нормаль следует за изгибом (иначе френель считался бы по нормали покоя и волны не подсвечивались):
             // наклон поверхности вдоль оси = производная смещения z по длине (конечная разность) + наклон от «распускания»
             float e = 0.01, uu = clamp(aP.x, e, 1.0 - e);
-            float dzdl = uFlapFresnel * uPetalFlap * uFlapAmp * (dpFlapV(uu + e, aP.z, aP.w, aL) - dpFlapV(uu - e, aP.z, aP.w, aL)) / (2.0 * e * aL)
+            float dzdl = uFlapFresnel * uPetalFlap * uFlapAmp * aK.z * (dpFlapV(uu + e, aP.z, aP.w, aL) - dpFlapV(uu - e, aP.z, aP.w, aL)) / (2.0 * e * aL)
                        + uSpread * uPetalFlap * 0.8 * sin(uTime * 0.38 + aP.z * 1.3 + 1.0);
             vec3 tAx = vec3(cs * sin(aB.z) - sn * cos(aB.z), sn * sin(aB.z) + cs * cos(aB.z), 0.0);
             vec3 nDef = normalize(vec3(cs * nR.x - sn * nR.y, sn * nR.x + cs * nR.y, nR.z) - dzdl * tAx);
@@ -679,15 +682,18 @@
     // горизонтальные по 2 с каждой стороны (вверх и вниз, нижние длиннее, с хвостом вниз) — и 3–4 длинных узких вниз (ленты).
     // ex < 1 — ножка короче: ширина берётся из таблицы в точке u^ex, расширение начинается раньше (автор: ножки короче, утолщение раньше).
     const PETAL_TYPES = [
-        { name: 'верхний малый, округлый (10 и 2 часа): линза / ромб', keys: ['C', 'A2'], L: 1.7, ex: 0.8, wm: 1.1 },
-        { name: 'диагональный широкий (второй по крупности): лопатка / ромб', keys: ['A3', 'A2'], L: 2.75, ex: 0.5, wm: 0.88 },
-        { name: 'экваториальный 1, узкий длинный (чуть выше горизонтали): ланцет / линза', keys: ['E', 'C'], L: 3.0, ex: 0.8 },
-        { name: 'экваториальный 2, узкий длинный (чуть ниже горизонтали): ланцет / асимметричная линза', keys: ['E', 'D'], L: 3.0, ex: 0.8 },
-        { name: 'вниз 1 — САМЫЙ БОЛЬШОЙ (нижнее крыло): кукурузный лист / асимметричная линза', keys: ['D', 'B'], L: 3.05, ex: 0.75, wm: 1.0 },
+        { name: 'верхний малый на 11 и 1 ч (как на референсе: листовидный, ≈0.8 длины диагонального): линза / ромб', keys: ['C', 'A2'], L: 2.25, ex: 0.8, wm: 1.15 },
+        { name: 'диагональный широкий (верх креста, 10 и 2 ч): лопатка / ромб', keys: ['A3', 'A2'], L: 2.75, ex: 0.5, wm: 0.88 },
+        { name: 'экваториальный 1, УЗКИЙ длинный (9 и 3 ч): ланцет / кукурузный лист', keys: ['E', 'F'], L: 3.0, ex: 0.8, wm: 0.55 },
+        { name: 'экваториальный 2, УЗКИЙ длинный (9 и 3 ч): ланцет / кукурузный лист', keys: ['F', 'E'], L: 3.0, ex: 0.8, wm: 0.55 },
+        { name: 'нижнее крыло креста (≈3.5 и 8.5 ч) — САМЫЙ БОЛЬШОЙ: асимметричная линза / ложка', keys: ['D', 'B'], L: 3.05, ex: 0.75, wm: 1.0 },
         { name: 'нижние на 5 и 7 часов: ланцет / асимметричная линза', keys: ['E', 'D'], L: 2.9, ex: 0.9, wm: 1.0 },
-        { name: 'тентакли на 6 часов (внутренняя пара): кукурузный лист / ланцет', keys: ['F', 'E'], L: 3.3, ex: 1.0, wm: 0.6 },
-        { name: 'тентакли на 6 часов (внешняя пара): кукурузный лист / асимметричная линза', keys: ['F', 'D'], L: 3.0, ex: 1.0, wm: 0.6 }
+        { name: 'тентакли на 6 ч, узкие внутренние: кукурузный лист / ланцет', keys: ['F', 'E'], L: 3.3, ex: 1.0, wm: 0.6 },
+        { name: 'тентакли на 6 ч, узкие внешние: кукурузный лист / асимметричная линза', keys: ['F', 'D'], L: 3.0, ex: 1.0, wm: 0.6 },
+        { name: 'тентакли на 6 ч, толстая пара: кукурузный лист / асимметричная линза', keys: ['F', 'D'], L: 3.2, ex: 1.0, wm: 1.3 },
+        { name: 'тентакль на 6 ч, толстый по центру: кукурузный лист / ланцет', keys: ['F', 'E'], L: 3.4, ex: 1.0, wm: 1.4 }
     ];
+
     const petalSeed = (idx) => idx * 37.7 + 5;
     function makePetalShape(type, side, idx) {
         const T = PETAL_TYPES[type], A = SHAPES[T.keys[0]], B = SHAPES[T.keys[1]], sd = petalSeed(idx);
@@ -704,7 +710,7 @@
         return { key: T.keys[0] + '/' + T.keys[1], t: knots, L, W: ratio * T.L * (T.wm || 1) * parseFloat(DP.params.get('pwk') || '0.7'),   // полуширина: доля длины; pwk — общий множитель ширины лепестков (лепестки рядом не должны сильно перекрываться)
          bend: (A.bend * (1 - t) + B.bend * t) * side + 0.12 * gauss(sd + 55), mix: t };
     }
-    PETALS.forEach((P, i) => { const Sh = makePetalShape(Math.floor(i / 2), P.side, i); P.shape = Sh; P.L = Sh.L; P.W = Sh.W; });
+    PETALS.forEach((P, i) => { const Sh = makePetalShape(P.type, P.side, i); P.shape = Sh; P.L = Sh.L; P.W = Sh.W; });
     function petalPoint(P, u, v) {
         if (P.shape && P.ox === undefined) {                           // лепесток фигуры: плоская форма своего типа вдоль оси лепестка
             // ось лепестка — ПРЯМАЯ: основание и кончик на одной прямой (автор, 2026-09-30); изгиб даст только последующая деформация (волны, поля)
@@ -758,7 +764,7 @@
                 let vein = Math.exp(-v * v / 0.0025);
                 [0.28, 0.52, 0.76].forEach(vk => { const vv = Math.abs(v) - vk * (0.6 + 0.4 * u) - 0.02 * Math.sin(u * 9 + k); vein = Math.max(vein, 0.7 * Math.exp(-vv * vv / 0.0012)); });
                 pp.push(p[0], p[1], p[2]); pn.push(nx / nl, ny / nl, nz / nl);
-                pa.push(u, v, P.ph, P.seed); pb.push(base[0], base[1], P.a || 0); po.push(P.open || 0); pl.push(P.L); ps.push(seededRandom(sd += 0.9)); pv.push(vein * (0.5 + 0.5 * u));
+                pa.push(u, v, P.ph, P.seed); pb.push(base[0], base[1], P.a || 0); po.push(P.open || 0, P.twK === undefined ? 1 : P.twK, P.flK === undefined ? 1 : P.flK); pl.push(P.L); ps.push(seededRandom(sd += 0.9)); pv.push(vein * (0.5 + 0.5 * u));
             }
             // поверхность (MESH)
             const mg = new THREE.PlaneGeometry(1, 1, 24, 12), mp = mg.attributes.position;
@@ -774,7 +780,7 @@
         petalGeo.setAttribute('position', new THREE.Float32BufferAttribute(pp, 3));
         petalGeo.setAttribute('normal', new THREE.Float32BufferAttribute(pn, 3));
         petalGeo.setAttribute('aP', new THREE.Float32BufferAttribute(pa, 4));
-        petalGeo.setAttribute('aOpen', new THREE.Float32BufferAttribute(po, 1));
+        petalGeo.setAttribute('aK', new THREE.Float32BufferAttribute(po, 3));
         petalGeo.setAttribute('aB', new THREE.Float32BufferAttribute(pb, 3));
         petalGeo.setAttribute('aL', new THREE.Float32BufferAttribute(pl, 1));
         petalGeo.setAttribute('aSizeScale', new THREE.Float32BufferAttribute(ps, 1));
