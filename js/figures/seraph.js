@@ -550,8 +550,9 @@
                 float dE = abs(q.x) < 1.0 ? (q.y >= 0.0 ? q.y - yU : yL - q.y) : length(vec2(abs(q.x) - 1.0, q.y));
                 vRim = exp(-dE * dE / (uRimW * uRimW));
                 vA *= smoothstep(0.0, uEdgeFade, dE);          // последние 2–3 частицы у края разреза уходят в ноль (≈ 5% → 30% → 70%): без «пикселя» на кромке
-            } else if (kind < 3.5 && kind > 2.5) {             // лучи
-                loc = vec3(aQ, 0.0);
+            } else if ((kind < 3.5 && kind > 2.5) || kind > 4.5) {   // лучи; kind 5 — тёмная подложка под глазом
+                loc = vec3(aQ, kind > 4.5 ? -0.05 : 0.0);
+                if (kind > 4.5) { vA = (1.0 - smoothstep(0.45, 1.0, length(aQ / vec2(1.45, 0.95)))) * (uMorphActive > 0.5 ? 0.0 : 1.0); }
             } else {                                           // яблоко: радужка / белок
                 vec3 sp;
                 if (kind < 2.5) {
@@ -584,7 +585,7 @@
             float dist = max(-mv.z, 0.1);
             ${depthVert}
             vKind = kind;
-            gl_PointSize = uSize * uViewportScale * (0.7 + aSizeScale * 0.5) * (kind > 3.5 ? 0.7 : 1.0) * min(2.2, sqrt(stretch)) / (0.35 + 0.06 * dist);
+            gl_PointSize = uSize * uViewportScale * (0.7 + aSizeScale * 0.5) * (kind > 4.5 ? 3.2 : (kind > 3.5 ? 0.7 : 1.0)) * min(2.2, sqrt(stretch)) / (0.35 + 0.06 * dist);
             dpMorphFinish();
             // спрятать: глаз не показан или точка закрыта (размер 0 на Metal не прячет — выносим за экран)
             if (er.y < 0.5 || vA < 0.01) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; }
@@ -598,6 +599,7 @@
         void main() {
             vec4 tex = texture2D(uTexture, gl_PointCoord);
             if (tex.a < 0.01) discard;
+            if (vKind > 4.5) { gl_FragColor = vec4(0.0, 0.0, 0.0, min(1.0, tex.a * 3.5) * vA * 0.94); return; }   // подложка: чёрное, обычное смешивание
             float k;
             if (vKind < 0.5) k = max(0.0, (uEyeLook.z + uEyeLook.w * min(1.0, vFres * 1.4)) * (1.0 + uEyeLook2.x * vLit * 2.2)) + uEyeLook.x * vRim + uEyeLook2.z * vHalo;   // кожа (со светотенью) + кант + ореол складки
             else if (vKind < 2.5) k = 0.5 * (0.35 + 0.65 * vFres);          // радужка: тоже темнеет к краю яблока
@@ -881,7 +883,8 @@
             const domeC = (x, y) => eyeSurfZ(x, y);                                // = eSurf(...).z (GLSL)
             let sd = i * 977.1;
             // кожа: сетка рядками (как у лепестков), без точек в разрезе (глаз открыт)
-            const hStep = 0.0105 / wShow * Math.sqrt(1 / Math.max(0.3, q));
+            const dens = E.main ? 1 : 0.55;                                   // малые глаза — втрое-вдвое реже (вес; на таком размере деталей всё равно не видно)
+            const hStep = 0.0105 / wShow * Math.sqrt(1 / Math.max(0.3, q)) / Math.sqrt(dens);
             const nX = Math.ceil(2 * EYE.ax / hStep), nY = Math.ceil(2 * EYE.ay / (hStep * 1.25));
             for (let a = 0; a <= nX; a++) for (let b = 0; b <= nY; b++) for (let m = 0; m < 2; m++) {
                 const x = -EYE.ax + (a + (seededRandom(sd += 1.1) - 0.5) * 0.8) * hStep;
@@ -893,7 +896,7 @@
                 push(0, x, y, x, y, domeC(x, y), sd += 0.3);
             }
             // радужка: волокна от зрачка к краю, на сфере яблока
-            const nF = Math.round(260 * wShow / 0.46 * Math.sqrt(q)), nP = Math.round(24 * wShow / 0.46 * Math.sqrt(q) + 6);
+            const nF = Math.round(260 * wShow / 0.46 * Math.sqrt(q * dens)), nP = Math.round(24 * wShow / 0.46 * Math.sqrt(q * dens) + 6);
             for (let f = 0; f < nF; f++) {
                 const a0 = f / nF * Math.PI * 2 + (seededRandom(sd += 1.3) - 0.5) * 0.03, wav = seededRandom(sd += 1.7) * 6.28;
                 for (let k = 0; k < nP; k++) {
@@ -929,6 +932,19 @@
                 }
             }
         });
+        // «подложка» под малыми глазами: тёмное пятно (обычное смешивание, рисуется после лепестков и до глаз) — прожилки лепестков не просвечивают сквозь глаз. Точки подложки (kind 5) — в конце массивов.
+        const nMainEye = ep.length / 3;
+        eyes.forEach((E, i) => {
+            if (E.main) return;
+            const step = 0.02 / E.w;
+            for (let y = -0.95; y <= 0.95; y += step * 0.9) for (let x = -1.45; x <= 1.45; x += step) {
+                if ((x / 1.45) ** 2 + (y / 0.95) ** 2 > 1) continue;
+                ep.push(E.c[0] + x * E.w, E.c[1] + y * E.w, E.c[2] - 0.05 * E.w);
+                ee.push(i, 5, 0, 0); eq.push(x, y); eS.push(0, 0, 0); ef.push(0.5, 0.5); eatt.push(...E.att); es.push(0.5);
+                const pt = E.pet || { B: [0, 0, 0, 0.5], K: [0, 1, 1, 0], Q: [0, 0, 0] }; eEB.push(...pt.B); eEK.push(...pt.K); eEQ.push(...pt.Q);
+            }
+        });
+        const nBackEye = ep.length / 3 - nMainEye;
         const eyeGeo = new THREE.BufferGeometry();
         eyeGeo.setAttribute('position', new THREE.Float32BufferAttribute(ep, 3));
         eyeGeo.setAttribute('aE', new THREE.Float32BufferAttribute(ee, 4));
@@ -940,6 +956,9 @@
         eyeGeo.setAttribute('aEK', new THREE.Float32BufferAttribute(eEK, 4));
         eyeGeo.setAttribute('aEQ', new THREE.Float32BufferAttribute(eEQ, 3));
         eyeGeo.setAttribute('aSizeScale', new THREE.Float32BufferAttribute(es, 1));
+        const backGeo = new THREE.BufferGeometry();                        // те же атрибуты, другой диапазон отрисовки
+        Object.keys(eyeGeo.attributes).forEach(k => backGeo.setAttribute(k, eyeGeo.attributes[k]));
+        eyeGeo.setDrawRange(0, nMainEye); backGeo.setDrawRange(nMainEye, nBackEye);
 
         // ---------- УСИКИ ----------
         const tp = [], tn = [], tt = [];
@@ -990,7 +1009,7 @@
         ringGeo.setAttribute('aR', new THREE.Float32BufferAttribute(ra, 2));
 
         const rootMatrix = new THREE.Matrix4();
-        const data = { petalGeo, eyeGeo, tendGeo, ringGeo, meshes, eyes, RINGS, rootMatrix };
+        const data = { petalGeo, eyeGeo, backGeo, tendGeo, ringGeo, meshes, eyes, RINGS, rootMatrix };
         assignOrderAndLayout(data);
         return data;
     }
@@ -998,7 +1017,7 @@
     // Порядок распада: от периферии (кольца, кончики, усики) к центральному глазу.
     function assignOrderAndLayout(data) {
         const dist = (x, y, z) => Math.hypot(x, y - FIG_Y, z) + ORDER_NOISE * (Math.sin(x * 1.7 + y * 0.9) * Math.sin(z * 1.9 - y * 1.3) + 0.5 * Math.sin(x * 3.1 - z * 2.7 + y * 2.3));
-        const geos = [data.petalGeo, data.eyeGeo, data.tendGeo, data.ringGeo];
+        const geos = [data.petalGeo, data.eyeGeo, data.backGeo, data.tendGeo, data.ringGeo];
         let dMin = Infinity, dMax = -Infinity;
         geos.concat(data.meshes).forEach(g => { const p = g.attributes.position; for (let i = 0; i < p.count; i++) { const d = dist(p.getX(i), p.getY(i), p.getZ(i)); if (d < dMin) dMin = d; if (d > dMax) dMax = d; } });
         const toOrder = (d) => 1 - Math.pow(Math.min(1, Math.max(0, (d - dMin) / (dMax - dMin))), 0.6);
@@ -1072,7 +1091,7 @@
             const G = DP.morph.glsl, S = DP.shared, mu = DP.morph.uniformsFor(ctx.uniforms);
             const list = [];
             const common = { uTime: S.uTime, uTexture: S.uTexture, uViewportScale: S.uViewportScale, uDepth: { value: new THREE.Vector2(8.1, 0.35) } };
-            const mat = (vs, fs, extra) => { const m = new THREE.ShaderMaterial(Object.assign({}, DP.pointsMaterialConfig, {
+            const mat = (vs, fs, extra, cfg) => { const m = new THREE.ShaderMaterial(Object.assign({}, DP.pointsMaterialConfig, cfg || {}, {
                 uniforms: Object.assign({}, common, extra, mu), vertexShader: vs(G), fragmentShader: fs(G) })); list.push(m); return m; };
             const gz = createGaze(data);
             const partsParam = DP.params.get('parts') || DEFAULT_PARTS;
@@ -1088,7 +1107,7 @@
             const petalU = { uPetalFlap: { get value() { return DP.config.seraphPetal.flap; } }, uFlapAmp: { get value() { return DP.config.seraphPetal.flapAmp; } }, uSpread: { get value() { return DP.config.seraphPetal.spread; } }, uFlapWave: { get value() { return DP.config.seraphPetal.flapWave; } }, uFlapVar: { get value() { return DP.config.seraphPetal.flapVar; } }, uPetTwist: { get value() { return DP.config.seraphPetal.twist; } }, uPetTwistSpeed: { get value() { return DP.config.seraphPetal.twistSpeed; } }, uRufAmp: { get value() { return DP.config.seraphPetal.ruffleAmp; } }, uRufK: { get value() { return DP.config.seraphPetal.ruffleK; } }, uRufSpeed: { get value() { return DP.config.seraphPetal.ruffleSpeed; } }, uHoleIn: { get value() { return DP.config.seraphPetal.holeIn; } }, uHoleOut: { get value() { return DP.config.seraphPetal.holeOut; } }, uRollGlow: { get value() { return DP.config.seraphPetal.rollGlow; } }, uSweepK: { get value() { return DP.config.seraphPetal.sweepK; } }, uSweepSpeed: { get value() { return DP.config.seraphPetal.sweepSpeed; } }, uTwLim: { get value() { return DP.config.seraphPetal.twistLimit; } }, uLatAmp: { get value() { return DP.config.seraphPetal.latAmp; } }, uSideRoll: { get value() { return DP.config.seraphPetal.sideRoll; } }, uRoll: { get value() { return DP.config.seraphPetal.roll; } }, uCalm: { get value() { return DP.config.seraphPetal.calm; } }, uTwShape: { get value() { return DP.config.seraphPetal.twistShape; } }, uOpenK: { get value() { return DP.config.seraphPetal.openK; } }, uFlapFresnel: { get value() { return DP.config.seraphPetal.flapFresnel; } }, uFlapSpeed: { get value() { return DP.config.seraphPetal.flapSpeed; } } };
             const mPetal = mat(petalVertex, petalFragment, Object.assign({ uSize: { value: 2.0 } }, petalU));;
             const EL = DP.config.seraphEye;
-            const mEye = mat(eyeVertex, eyeFragment, Object.assign({ uSize: { value: 1.9 },
+            const eyeU = Object.assign({ uSize: { value: 1.9 },
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
                 uEdgeFade: { get value() { return EL.edgeFade; } },
                 uCornea: { get value() { return EL.cornea; } },
@@ -1102,7 +1121,9 @@
                 uVC: { value: profC }, uVS: { value: profS },
                 uEyeFade: { get value() { return eyeFade.set(EL.fadeWave, EL.fadeSpeed, EL.fadeStart, 0); } },
                 uEyeLook2: { get value() { return eyeLook2.set(EL.light, EL.lidShadow, EL.halo, 0); } },
-                uRimW: { get value() { return EL.rimWidth; } }, uGaze: { value: gz.gaze }, uEyeC: { value: eyeC }, uEyeR: { value: eyeR } }, petalU));
+                uRimW: { get value() { return EL.rimWidth; } }, uGaze: { value: gz.gaze }, uEyeC: { value: eyeC }, uEyeR: { value: eyeR } }, petalU);
+            const mEye = mat(eyeVertex, eyeFragment, eyeU);
+            const mBack = mat(eyeVertex, eyeFragment, eyeU, { blending: THREE.NormalBlending });
             const mTend = mat(tendrilVertex, tendrilFragment, { uSize: { value: 2.0 } });
             const ringU = data.RINGS.map(R => new THREE.Vector4(R.axis[0], R.axis[1], R.axis[2], R.speed));
             const mRing = mat(ringVertex, ringFragment, { uSize: { value: 2.0 }, uRing: { value: ringU }, uT0 });
@@ -1111,7 +1132,10 @@
             const meshRoot = new THREE.Group(), pointsRoot = new THREE.Group();
             root.add(meshRoot, pointsRoot);
             if (show('petals')) pointsRoot.add(new THREE.Points(data.petalGeo, mPetal));
-            if (show('eye') || show('eyes')) pointsRoot.add(new THREE.Points(data.eyeGeo, mEye));
+            if (show('eye') || show('eyes')) {
+                const back = new THREE.Points(data.backGeo, mBack); back.renderOrder = 1; pointsRoot.add(back);   // подложка — после лепестков, до глаз
+                const eyeP = new THREE.Points(data.eyeGeo, mEye); eyeP.renderOrder = 2; pointsRoot.add(eyeP);
+            }
             if (show('tendrils')) pointsRoot.add(new THREE.Points(data.tendGeo, mTend));
             if (show('rings')) pointsRoot.add(new THREE.Points(data.ringGeo, mRing));
             const meshMat = new THREE.ShaderMaterial({
