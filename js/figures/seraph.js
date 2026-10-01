@@ -132,6 +132,8 @@
     const CROSS = [2, 3, 8, 9];
     const keepPetal = (only, k) => only === -1 || (only === -2 ? CROSS.indexOf(k) >= 0 : k === only);
     const EYE_SCALE = 1.36;           // центральный глаз в сборке крупнее (на эскизе — размером с основания лепестков)
+    const IRIS_ONLY = (DP.params.get('parts') || '') === 'iris';   // режим доводки радужки (автор, 2026-10-01): только радужка центрального глаза, крупно, без век/кожи/белка
+    const IRIS_STUDY = 4.5;
     const EYE_STUDY = 2.2;            // когда показан только центральный глаз — он крупнее, для разглядывания
 
     // ==========================================
@@ -570,6 +572,7 @@
         ${petalDeformGlsl}
         uniform float uViewportScale, uSize;
         uniform vec4 uGaze[${MAX_EYES}];
+        uniform float uIrisOnly;
         uniform vec4 uEyeC[${MAX_EYES}];     // центр (x, y, z) и полуширина
         uniform vec4 uEyeR[${MAX_EYES}];     // x — поворот в плоскости, y — глаз показан
         uniform float uEdgeFade, uCornea, uLidFollow, uLidLocal, uLidW, uLidSide;
@@ -642,7 +645,7 @@
                 float cornea = 1.0 - smoothstep(0.0, E_IRIS * 1.7, th0);              // купол роговицы: гладкая «нашлёпка» на сфере (линза), плавно сходит на нет
                 sp = eRotGaze(sp, gz.xy);
                 loc = sp * E_RB * (1.0 + uCornea * cornea * cornea * (3.0 - 2.0 * cornea)) + vec3(0.0, 0.0, E_ZB);
-                vA = smoothstep(0.2, 0.3, sp.z) * eInSlit(loc.xy, oU, oL);    // только передняя часть яблока — та, что видна в разрезе
+                vA = smoothstep(0.2, 0.3, sp.z) * (uIrisOnly > 0.5 && kind < 2.5 ? 1.0 : eInSlit(loc.xy, oU, oL));    // только передняя часть яблока — та, что видна в разрезе
                 vFres = sp.z;                                  // яблоко: к краям уходит в тень
                 vLit = dot(sp, E_LIGHT);
                 float lu2 = eHU(loc.x), ll2 = eHL(loc.x), yU2 = mix(-ll2 * 0.96, lu2, oU + gLid.y * lidBell(loc.x)), yL2 = mix(-ll2 * 0.96, -ll2, oL + gLid.z * lidBell(loc.x));
@@ -1039,10 +1042,12 @@
         const partsNow = DP.params.get('parts') || DEFAULT_PARTS;
         const ep = [], ee = [], eq = [], ef = [], eatt = [], es = [], eS = [], eEB = [], eEK = [], eEQ = [];
         eyes.forEach((E, i) => {
-            const wShow = E.w * (E.main && partsNow === 'eye' ? EYE_STUDY : 1);     // размер на экране — для плотности точек
+            const wShow = E.w * (E.main && partsNow === 'eye' ? EYE_STUDY : (E.main && IRIS_ONLY ? IRIS_STUDY : 1));     // размер на экране — для плотности точек
             const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
             const rc = Math.cos(E.roll || 0), rs = Math.sin(E.roll || 0);
+            if (IRIS_ONLY && !E.main) return;
             const push = (kind, qx, qy, lx, ly, lz, sd, sx = 0, sy = 0, sz = 0) => {
+                if (IRIS_ONLY && kind !== 2) return;
                 // кожа глаза не выходит за контур лепестка (автор): положение точки в покое → (u, поперёк) лепестка → мягкое затухание у кромки и кончика
                 let fadeP = 1;
                 if (E.P) {
@@ -1336,8 +1341,8 @@
             const gz = createGaze(data);
             DP.seraphGaze = { gaze: gz.gaze, eyes: data.eyes };   // отладка
             const partsParam = DP.params.get('parts') || DEFAULT_PARTS;
-            const show = (k) => !partsParam || partsParam.split(',').indexOf(k) >= 0 || (k === 'petals' && (onlyPetalOf(partsParam) !== -1 || /shapes/.test(partsParam)));
-            const study = partsParam === 'eye' ? EYE_STUDY : 1;
+            const show = (k) => !partsParam || partsParam.split(',').indexOf(k) >= 0 || (k === 'eye' && partsParam === 'iris') || (k === 'petals' && (onlyPetalOf(partsParam) !== -1 || /shapes/.test(partsParam)));
+            const study = partsParam === 'eye' ? EYE_STUDY : (partsParam === 'iris' ? IRIS_STUDY : 1);
             const eyeC = [], eyeR = [];
             for (let i = 0; i < MAX_EYES; i++) {
                 const E = data.eyes[i] || data.eyes[0], main = i === 0;
@@ -1348,7 +1353,7 @@
             const petalU = { uBlueLift: { get value() { return DP.config.seraphPetal.blueLift; } }, uRedK: { get value() { return DP.config.seraphPetal.redK; } }, uSatK: { get value() { return DP.config.seraphPetal.satK; } }, uCenterY: { value: FIG_Y }, uPetalFlap: { get value() { return DP.config.seraphPetal.flap; } }, uFlapAmp: { get value() { return DP.config.seraphPetal.flapAmp; } }, uSpread: { get value() { return DP.config.seraphPetal.spread; } }, uFlapWave: { get value() { return DP.config.seraphPetal.flapWave; } }, uFlapVar: { get value() { return DP.config.seraphPetal.flapVar; } }, uPetTwist: { get value() { return DP.config.seraphPetal.twist; } }, uPetTwistSpeed: { get value() { return DP.config.seraphPetal.twistSpeed; } }, uRufAmp: { get value() { return DP.config.seraphPetal.ruffleAmp; } }, uRufK: { get value() { return DP.config.seraphPetal.ruffleK; } }, uRufSpeed: { get value() { return DP.config.seraphPetal.ruffleSpeed; } }, uLookA: { get value() { const L = DP.config.seraphPetal.look; return lookA.set(L.body, L.fres, L.vein, L.edge); } }, uLookS: { get value() { const L = DP.config.seraphPetal.look; return lookS.set(L.veinSize, L.edgeSize); } }, uTipGlow: { get value() { return DP.config.seraphPetal.look.tip; } }, uFeather: { get value() { const L = DP.config.seraphPetal.look; return lookF.set(L.feather, L.featherMin); } }, uHoleIn: { get value() { return DP.config.seraphPetal.holeIn; } }, uHoleOut: { get value() { return DP.config.seraphPetal.holeOut; } }, uRollGlow: { get value() { return DP.config.seraphPetal.rollGlow; } }, uFold: { get value() { return DP.config.seraphPetal.fold; } }, uLatCross: { get value() { return DP.config.seraphPetal.latCross; } }, uPersp: { get value() { return DP.config.seraphPetal.persp; } }, uSweepK: { get value() { return DP.config.seraphPetal.sweepK; } }, uSweepSpeed: { get value() { return DP.config.seraphPetal.sweepSpeed; } }, uTwLim: { get value() { return DP.config.seraphPetal.twistLimit; } }, uLatAmp: { get value() { return DP.config.seraphPetal.latAmp; } }, uSideRoll: { get value() { return DP.config.seraphPetal.sideRoll; } }, uRoll: { get value() { return DP.config.seraphPetal.roll; } }, uCalm: { get value() { return DP.config.seraphPetal.calm; } }, uTwShape: { get value() { return DP.config.seraphPetal.twistShape; } }, uOpenK: { get value() { return DP.config.seraphPetal.openK; } }, uFlapFresnel: { get value() { return DP.config.seraphPetal.flapFresnel; } }, uFlapSpeed: { get value() { return DP.config.seraphPetal.flapSpeed; } } };
             const mPetal = mat(petalVertex, petalFragment, Object.assign({ uSize: { value: 2.0 } }, petalU));;
             const EL = DP.config.seraphEye;
-            const eyeU = Object.assign({ uSize: { value: 1.9 },
+            const eyeU = Object.assign({ uIrisOnly: { value: IRIS_ONLY ? 1 : 0 }, uSize: { value: IRIS_ONLY ? 3.0 : 1.9 },
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
                 uEdgeFade: { get value() { return EL.edgeFade; } },
                 uCornea: { get value() { return EL.cornea; } },
