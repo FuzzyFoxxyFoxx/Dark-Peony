@@ -54,6 +54,8 @@
         ['@seraphPetal.look.vein', 'жилки: яркость', 0, 2, 0.01],
         ['@seraphPetal.look.edge', 'кромка: яркость', 0, 4, 0.01],
         ['@seraphPetal.look.tip', 'свечение к кончику (как у пиона)', 0, 2, 0.01],
+        ['@seraphPetal.look.feather', 'мягкий край: ширина (ед. сцены)', 0, 0.15, 0.002],
+        ['@seraphPetal.look.featherMin', 'мягкий край: прозрачность крайней нити', 0, 1, 0.01],
         ['@seraphPetal.look.veinSize', 'жилки: крупнее точка', 0, 1.5, 0.01],
         ['@seraphPetal.look.edgeSize', 'кромка: крупнее точка', 0, 1.5, 0.01],
         ['@seraphPetal.fold', 'складки вдоль лепестка (плиссе)', 0, 0.4, 0.005],
