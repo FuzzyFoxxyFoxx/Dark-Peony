@@ -132,7 +132,7 @@
     const CROSS = [2, 3, 8, 9];
     const keepPetal = (only, k) => only === -1 || (only === -2 ? CROSS.indexOf(k) >= 0 : k === only);
     const EYE_SCALE = 1.36;           // центральный глаз в сборке крупнее (на эскизе — размером с основания лепестков)
-    DP.config.seraphIris = Object.assign({ flow: true, fibers: 240, per: 2, tail: 14, life: 4.0, speed: 1.0, freq: 2.0, clump: 0.15, wave: 0.75, gain: 3.5, drift: 0.18, flare: 1.0, flareSpeed: 1.0, rings: 16, ringGain: 1.5, ringStep: 0.3 }, DP.config.seraphIris || {});   // радужка-поток: волокон на 0.46 ширины глаза, частиц на волокно, хвост, секунд на пробег, темп, число «вен», стягивание, волнистость, яркость
+    DP.config.seraphIris = Object.assign({ flow: true, fibers: 240, per: 2, tail: 14, life: 4.0, speed: 1.0, freq: 1.5, clump: 0.5, wave: 0.9, gain: 4.5, drift: 0.18, flare: 0.5, flareSpeed: 1.0, rings: 16, ringGain: 1.3, ringStep: 0.3 }, DP.config.seraphIris || {});   // радужка-поток: волокон на 0.46 ширины глаза, частиц на волокно, хвост, секунд на пробег, темп, число «вен», стягивание, волнистость, яркость
     const IRIS_ONLY = (DP.params.get('parts') || '') === 'iris';   // режим доводки радужки (автор, 2026-10-01): только радужка центрального глаза, крупно, без век/кожи/белка
     const IRIS_STUDY = 4.5;
     const EYE_STUDY = 2.2;            // когда показан только центральный глаз — он крупнее, для разглядывания
@@ -673,8 +673,8 @@
                         float fa = atan(pp.y, pp.x);
                         float fl = dpSnoise(vec3(cos(fa) * 1.6, sin(fa) * 1.6, tt * 2.6 - uTime * 0.9 * uIrisFlareSpeed));
                         float flare = smoothstep(0.15, 0.75, fl) * uIrisFlare;
-                        irisSz *= 1.0 + 0.6 * flare;
-                        cl = cl + 1.1 * flare;
+                        irisSz *= 1.0 + 0.15 * flare;
+                        cl = cl + 0.35 * flare;
                         irisB = 0.55 + 0.95 * cl;
                     }
                     else if (aS.z < 0.0) {
@@ -683,8 +683,8 @@
                         ph = aQ.y + 0.015 * sin(uTime * 0.4 + tt * 9.0 + aS.x);
                         irisSz = smoothstep(0.0, 0.2, tt) * (1.0 - 0.85 * smoothstep(0.65, 1.0, tt));
                         float flr = smoothstep(0.15, 0.75, dpSnoise(vec3(cos(ph) * 1.6, sin(ph) * 1.6, tt * 2.6 - uTime * 0.9 * uIrisFlareSpeed))) * uIrisFlare;
-                        irisB = uRingGain * (0.55 + 1.0 * flr);
-                        irisSz *= 1.0 + 0.3 * flr;
+                        irisB = uRingGain * (0.7 + 0.5 * flr);
+                        irisSz *= 1.0 + 0.1 * flr;
                     }
                     float th = mix(E_IRIS * E_PUP * gz.z, E_IRIS, tt);
                     sp = vec3(sin(th) * cos(ph), sin(th) * sin(ph), cos(th));
