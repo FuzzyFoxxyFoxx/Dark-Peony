@@ -687,13 +687,15 @@
         vec3 dpTubeSway(float v, float sd) {
             float whip = pow(v, 1.3);
             float t1 = uTime * 1.2 - v * 7.0 + sd * 9.1, t2 = uTime * 0.9 - v * 9.5 + sd * 4.3;
-            return vec3(sin(t1) * 0.22 + cos(t2) * 0.10, 0.0, cos(t1 * 0.85) * 0.22 + sin(t2 * 1.1) * 0.10) * whip * uTubeSway;
+            vec3 r = vec3(sin(t1) * 0.22 + cos(t2) * 0.10, 0.0, cos(t1 * 0.85) * 0.22 + sin(t2 * 1.1) * 0.10) * whip * uTubeSway;
+            if (sd > 19.0) r = vec3(0.0, r.x * 1.15, r.z * 0.25) * (0.6 + 0.4 * sin(sd * 3.0));   // горизонтальные тентакли: изгиб В плоскости экрана (вверх-вниз), из плоскости — слабо (автор: важнее XY, чем ZX)
+            return r;
         }
         void main() {
             vec3 dpRest = position;
             float v = aT.x, sd = aT.y;
             vec3 sw = dpTubeSway(v, sd);
-            sw.x += aC.x * 0.22 * sin(uTime * 0.55 + sd * 3.1) * smoothstep(0.03, 0.45, v);   // «дыхание» разбега у основания: угол между тентаклями меняется
+            sw.x += step(sd, 19.0) * aC.x * 0.22 * sin(uTime * 0.55 + sd * 3.1) * smoothstep(0.03, 0.45, v);   // «дыхание» разбега у основания: угол между тентаклями меняется
             vec3 swD = (dpTubeSway(min(v + 0.01, 1.0), sd) - dpTubeSway(max(v - 0.01, 0.0), sd)) / 0.02;
             vec3 ta = normalize(aTn), tb = normalize(aTn + swD), ax = cross(ta, tb);
             float cs = dot(ta, tb);
@@ -1150,10 +1152,10 @@
             [-0.62, 2.3, 11.1, 0.075, 0.05], [-0.31, 2.0, 12.3, 0.07, 0.05], [0.0, 2.6, 13.5, 0.075, 0.05], [0.31, 2.1, 14.7, 0.07, 0.05], [0.62, 2.4, 15.9, 0.075, 0.05]];   // последние пять — мелкие, как у медузы
         // горизонтальные малые тентакли вместо узких лепестков на 9 и 3 ч (автор): с каждой стороны 3 — верхний подлиннее, средний самый длинный, нижний покороче; зеркально
         const SIDE = [[8, 2.4, 0.13], [0, 2.9, 0.15], [-9, 1.7, 0.12]];   // [угол над горизонталью°, длина, радиус]
-        if (TUBES_ON) [-1, 1].forEach(sg => SIDE.forEach(([ang, ln, rr], k) => TUBES.push([sg * 0.001, ln, 20 + k * 3.7 + (sg > 0 ? 1.3 : 0), rr, 0.05, (sd, len, kz) => { const a = ang * Math.PI / 180, e = Math.min(1, sd / 1.4), ease = 1 - Math.pow(1 - e, 2.0); return new THREE.Vector3(sg * Math.cos(a) * sd / kz * (0.6 + 0.4 * ease), FIG_Y + Math.sin(a) * sd / kz - 0.04 * sd * sd / Math.max(1, len), -SLOPE * sd / kz); }])));
+        if (TUBES_ON) [-1, 1].forEach(sg => SIDE.forEach(([ang, ln, rr], k) => TUBES.push([sg * 0.001, ln, 20 + k * 3.7 + (sg > 0 ? 1.3 : 0), rr, 0.05, (sd, len, kz) => { const a = ang * Math.PI / 180, e = Math.min(1, sd / 1.4), ease = 1 - Math.pow(1 - e, 2.0); return new THREE.Vector3(sg * Math.cos(a) * sd / kz * (0.6 + 0.4 * ease), FIG_Y + Math.sin(a) * sd / kz - 0.04 * sd * sd / Math.max(1, len), -SLOPE * sd / kz); }, 0.2])));   // шаг колец 0.2·r: горизонтальная трубка видна вдоль — овалы узкие, чтобы читались пружиной, а не отдельными кольцами
         const NRAD = 16, TUBE_K = 1.1, SLOPE = 0.45;   // как у медузы: 16 точек в кольце, шаг колец ≈ 0.47 радиуса; кольца СТРОГО перпендикулярны нити (автор) — овалами их делает наклон самих тентаклей от камеры (z = −SLOPE·длина), как наклон сцены у медузы   // TUBE_K — крупнее кольца: у медузы тентакли заметнее (автор)   // как у медузы: отдельные кольца, шаг ≈ радиус, кольцо наклонено к зрителю (плоскость серафима лицом к камере — иначе чёрточки)
-        TUBES.forEach(([x0, len0, sdT, rad, RSTEP0, customPath]) => {
-            const kz = Math.sqrt(1 + SLOPE * SLOPE), len = len0 * kz * 0.97, RSTEP = 0.47 * TUBE_K * rad, pts = [];   // длина по нити с запасом на наклон от камеры (проекция ≈ len0); шаг колец — как у медузы
+        TUBES.forEach(([x0, len0, sdT, rad, RSTEP0, customPath, stepK]) => {
+            const kz = Math.sqrt(1 + SLOPE * SLOPE), len = len0 * kz * 0.97, RSTEP = (stepK || 0.47) * TUBE_K * rad, pts = [];   // длина по нити с запасом на наклон от камеры (проекция ≈ len0); шаг колец — как у медузы
             for (let q = 0; q <= 56; q++) {
                 const sd = q / 56 * len, t = sd / len, e = Math.min(1, sd / 2.4), ease = 1 - Math.pow(1 - e, 2.2);   // плавная кривая Безье: выходят из одной точки без угла, выпуклый разбег
                 const sp = (0.15 + 0.85 * ease) * (1 - 0.22 * Math.max(0, Math.min(1, (sd - 2.4) / Math.max(1, len - 2.4))));   // и снова плавно сужаются к низу (набросок автора: воздушный шар)
