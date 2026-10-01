@@ -685,9 +685,10 @@
                         // ОСНОВА РАДУЖКИ — концентрические кольца-«полосочки» от зрачка к краю (как ядро светила): размер 0 у кромки зрачка → 100% через 2–3 ряда → 15% у внешнего края; по ним бегут всполохи
                         tt = aQ.x;
                         ph = aQ.y + 0.015 * sin(uTime * 0.4 + tt * 9.0 + aS.x);
-                        irisSz = smoothstep(0.0, 0.2, tt) * (1.0 - 0.7 * smoothstep(0.65, 1.0, tt));
+                        irisSz = smoothstep(0.0, 0.12, tt) * (1.0 - 0.55 * smoothstep(0.85, 1.0, tt)) * (0.75 + 0.25 * max(1.0 - smoothstep(0.0, 0.3, tt), smoothstep(0.68, 0.95, tt)));
                         float flr = smoothstep(0.15, 0.75, dpSnoise(vec3(cos(ph) * 1.6, sin(ph) * 1.6, tt * 2.6 - uTime * 0.9 * uIrisFlareSpeed))) * uIrisFlare * (ei == 0 ? 1.0 : 0.0);
-                        irisB = uRingGain * (0.7 + 0.5 * flr);
+                        float edgeK = max(1.0 - smoothstep(0.0, 0.3, tt), smoothstep(0.68, 0.95, tt));   // перевёрнутая логика (автор): кольца ярче у зрачка и у внешнего края, в середине «проседают» — там царствуют всполохи и русла
+                        irisB = uRingGain * (0.22 + 1.1 * edgeK + 0.15 * flr);
                         irisSz *= 1.0 + 0.1 * flr;
                     }
                     float th = mix(E_IRIS * E_PUP * gz.z, E_IRIS, tt);
