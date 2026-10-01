@@ -951,15 +951,35 @@
             // кожа: сетка рядками (как у лепестков), без точек в разрезе (глаз открыт)
             const dens = E.main ? 1 : 0.55;                                   // малые глаза — втрое-вдвое реже (вес; на таком размере деталей всё равно не видно)
             const hStep = 0.0105 / wShow * Math.sqrt(1 / Math.max(0.3, q)) / Math.sqrt(dens);
-            const nX = Math.ceil(2 * EYE.ax / hStep), nY = Math.ceil(2 * EYE.ay / (hStep * 1.25));
-            for (let a = 0; a <= nX; a++) for (let b = 0; b <= nY; b++) for (let m = 0; m < 2; m++) {
-                const x = -EYE.ax + (a + (seededRandom(sd += 1.1) - 0.5) * 0.8) * hStep;
-                const y = -EYE.ay + (b + (seededRandom(sd += 1.3) - 0.5) * 0.3) * hStep * 1.25;
-                const ee = (x / EYE.ax) ** 2 + (y / EYE.ay) ** 2;
-                if (ee > 1) continue;
-                if (seededRandom(sd += 0.37) > 1 - 0.7 * Math.min(1, Math.max(0, (ee - 0.15) / 0.85))) continue;   // к краям реже
-                if (Math.abs(x) < 1 && y < eyeHU(x) && y > -eyeHL(x)) continue;
-                push(0, x, y, x, y, domeC(x, y), sd += 0.3);
+            if (DP.params.get('eyerows') === '0') {                          // прежняя декартова сетка (для сравнения): ступенчатый край разреза
+                const nX = Math.ceil(2 * EYE.ax / hStep), nY = Math.ceil(2 * EYE.ay / (hStep * 1.25));
+                for (let a = 0; a <= nX; a++) for (let b = 0; b <= nY; b++) for (let m = 0; m < 2; m++) {
+                    const x = -EYE.ax + (a + (seededRandom(sd += 1.1) - 0.5) * 0.8) * hStep;
+                    const y = -EYE.ay + (b + (seededRandom(sd += 1.3) - 0.5) * 0.3) * hStep * 1.25;
+                    const ee = (x / EYE.ax) ** 2 + (y / EYE.ay) ** 2;
+                    if (ee > 1) continue;
+                    if (seededRandom(sd += 0.37) > 1 - 0.7 * Math.min(1, Math.max(0, (ee - 0.15) / 0.85))) continue;   // к краям реже
+                    if (Math.abs(x) < 1 && y < eyeHU(x) && y > -eyeHL(x)) continue;
+                    push(0, x, y, x, y, domeC(x, y), sd += 0.3);
+                }
+            } else {
+                // кожа — нити, параллельные краю разреза (идея автора, как штриховка на гравюре и жилки пиона): линии — увеличенные копии контура разреза (k = 1.01 … до границы лоскута), сгущаются у века и редеют наружу;
+                // точки идут подряд вдоль нити — край разреза чистая линия, а не ступеньки декартовой сетки; нити сами показывают выпуклость
+                const slitR = (phi) => { const cx = Math.cos(phi), sy = Math.sin(phi); let lo = 0, hi = 1.6; for (let it = 0; it < 28; it++) { const mid = (lo + hi) / 2, x = mid * cx, y = mid * sy; if (Math.abs(x) < 1 && y < eyeHU(x) && y > -eyeHL(x)) lo = mid; else hi = mid; } return lo; };
+                const NT = 360, tbl = [0]; for (let t = 1; t <= NT; t++) { const a0 = (t - 1) / NT * Math.PI * 2, a1 = t / NT * Math.PI * 2, r0 = slitR(a0), r1 = slitR(a1); tbl.push(tbl[t - 1] + Math.hypot(r1 * Math.cos(a1) - r0 * Math.cos(a0), r1 * Math.sin(a1) - r0 * Math.sin(a0))); }
+                const P0 = tbl[NT], phiAt = (f) => { const target = f * P0; let lo = 0, hi = NT; while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (tbl[mid] <= target) lo = mid; else hi = mid; } const fr = (target - tbl[lo]) / Math.max(1e-6, tbl[lo + 1] - tbl[lo]); return (lo + fr) / NT * Math.PI * 2; };
+                const along = hStep * 0.85, radial = hStep * 1.9 / 0.55;           // шаг вдоль нити и (в долях контура) между нитями
+                for (let ci = 0, k = 1.012; k < 6; ci++) {
+                    const n = Math.max(24, Math.ceil(k * P0 / along)), ph0 = seededRandom(sd += 1.7);
+                    for (let j = 0; j < n; j++) {
+                        const phi = phiAt((j + ph0) / n % 1), R = slitR(phi) * k, x = R * Math.cos(phi), y = R * Math.sin(phi);
+                        const ee = (x / EYE.ax) ** 2 + (y / EYE.ay) ** 2;
+                        if (ee > 1) continue;
+                        if (seededRandom(sd += 0.37) > 1 - 0.55 * Math.min(1, Math.max(0, (ee - 0.35) / 0.65))) continue;   // к краю лоскута реже
+                        push(0, x, y, x, y, domeC(x, y), sd += 0.3);
+                    }
+                    k += radial / P0 * 0.55 * (1 + 0.12 * ci);
+                }
             }
             // радужка: волокна от зрачка к краю, на сфере яблока
             const nF = Math.round(260 * wShow / 0.46 * Math.sqrt(q * dens)), nP = Math.round(24 * wShow / 0.46 * Math.sqrt(q * dens) + 6);
