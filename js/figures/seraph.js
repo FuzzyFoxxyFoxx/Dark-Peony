@@ -1350,11 +1350,11 @@
             R.eyes.forEach((a0) => {
                 const pushL = (lx, ly, al) => { const cc = new THREE.Vector3(Math.cos(a0) * R.r, Math.sin(a0) * R.r, 0), tt = new THREE.Vector3(-Math.sin(a0), Math.cos(a0), 0), rr = new THREE.Vector3(Math.cos(a0), Math.sin(a0), 0); v.copy(cc).addScaledVector(tt, lx * R.w).addScaledVector(rr, ly * R.w).applyMatrix4(M); rp.push(v.x, v.y + FIG_Y, v.z); ra.push(ri, al); rl.push(a0, lx, ly); };
                 const upO = (x) => 0.55 * Math.pow(Math.max(0, 1 - x * x), 1.3), upI = (x) => 0.24 * Math.pow(Math.max(0, 1 - x * x), 1.0), loI = (x) => -0.41 * Math.pow(Math.max(0, 1 - x * x), 1.0), loO = (x) => -0.6 * Math.pow(Math.max(0, 1 - x * x), 1.3);
-                const stepX = 0.022 / R.w * 0.45 * 0.6;
-                [upO, upI, loI, loO].forEach((f) => { for (let x = -1; x <= 1.0001; x += Math.max(stepX, 0.012)) pushL(x, f(x), 1.9); });
-                const ir = 0.34, nI = Math.round(2 * Math.PI * ir / Math.max(stepX, 0.012));
+                const stepX = 0.022 / R.w * 0.45 * 0.6 / 0.7;   // глаза на орбитах на 30% реже (автор: орбита выглядит прерывистой рядом со слитно-плотным глазом)
+                [upO, upI, loI, loO].forEach((f) => { for (let x = -1; x <= 1.0001; x += stepX) pushL(x, f(x), 1.9); });
+                const ir = 0.34, nI = Math.round(2 * Math.PI * ir / stepX);
                 for (let k = 0; k < nI; k++) { const t = k / nI * Math.PI * 2, x = Math.cos(t) * ir, y = Math.sin(t) * ir; if (y <= upI(x) - 0.01) pushL(x, y, 1.9); }   // радужка — круг, обрезанный верхним веком
-                for (let rr2 = 0.035; rr2 <= 0.14; rr2 += 0.035) { const nP = Math.round(2 * Math.PI * rr2 / Math.max(stepX, 0.012)); for (let k = 0; k < nP; k++) { const t = k / nP * Math.PI * 2; pushL(Math.cos(t) * rr2, Math.sin(t) * rr2, 2.4); } }   // зрачок — диск
+                for (let rr2 = 0.035; rr2 <= 0.14; rr2 += 0.035) { const nP = Math.round(2 * Math.PI * rr2 / stepX); for (let k = 0; k < nP; k++) { const t = k / nP * Math.PI * 2; pushL(Math.cos(t) * rr2, Math.sin(t) * rr2, 2.4); } }   // зрачок — диск
             });
         });
         const ringGeo = new THREE.BufferGeometry();
