@@ -457,16 +457,16 @@
 
         const hGrad = hudCtx.createLinearGradient(0, cy, w, cy);
         hGrad.addColorStop(0.0, 'rgba(100, 170, 240, 0.0)');
-        hGrad.addColorStop(0.2, 'rgba(100, 170, 240, 0.15)');
-        hGrad.addColorStop(0.8, 'rgba(100, 170, 240, 0.15)');
+        hGrad.addColorStop(0.2, 'rgba(100, 170, 240, 0.075)');
+        hGrad.addColorStop(0.8, 'rgba(100, 170, 240, 0.075)');
         hGrad.addColorStop(1.0, 'rgba(100, 170, 240, 0.0)');
         hudCtx.strokeStyle = hGrad;
         hudCtx.beginPath(); hudCtx.moveTo(0, cy); hudCtx.lineTo(w, cy); hudCtx.stroke();
 
         const vGrad = hudCtx.createLinearGradient(cx, 0, cx, h);
         vGrad.addColorStop(0.0, 'rgba(100, 170, 240, 0.0)');
-        vGrad.addColorStop(0.15, 'rgba(100, 170, 240, 0.15)');
-        vGrad.addColorStop(0.85, 'rgba(100, 170, 240, 0.15)');
+        vGrad.addColorStop(0.15, 'rgba(100, 170, 240, 0.075)');
+        vGrad.addColorStop(0.85, 'rgba(100, 170, 240, 0.075)');
         vGrad.addColorStop(1.0, 'rgba(100, 170, 240, 0.0)');
         hudCtx.strokeStyle = vGrad;
         hudCtx.beginPath(); hudCtx.moveTo(cx, 0); hudCtx.lineTo(cx, h); hudCtx.stroke();

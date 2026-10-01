@@ -890,7 +890,7 @@
                 vec3 cR = RM * vec3(cos(an), sin(an), 0.0), tT = RM * vec3(-sin(an), cos(an), 0.0);
                 // уголки глаза строго на орбите: положение вдоль кольца — по дуге (угол + x·размер/радиус), наружу — y·размер; моргание: веки сходятся (y·открытие)
                 float hh = fract(sin((aL.x + float(ri) * 3.7) * 12.9898) * 43758.5453), bt = fract(uTime / (4.0 + 3.5 * hh) + hh * 7.0);
-                float open = 1.0 - 0.97 * (bt < 0.06 ? sin(bt / 0.06 * 3.14159265) : 0.0);
+                float open = 1.0;   // звёзды не моргают
                 vec3 cx = RM * vec3(cos(an + aL.y * Pq.y / Pq.x), sin(an + aL.y * Pq.y / Pq.x), 0.0);
                 pos = vec3(0.0, ${FIG_Y.toFixed(3)}, 0.0) + Pq.x * cx + Pq.y * aL.z * open * cR;
             }
@@ -1129,9 +1129,9 @@
         // КОЛЬЦА-ОРБИТЫ (эскиз автора): круг лицом к зрителю + два вытянутых эллипса (в экране: один идёт вниз-вправо, другой вверх-вправо). Ориентация КАЖДОГО кольца ФИКСИРОВАНА,
         // кольцо вращается только вокруг СВОЕЙ нормали (в своей плоскости, наклон не меняется). На кольцах — глаза (в плоскости кольца, смотрят по нормали), вместо звёздочек.
         const RING_DEFS = [
-            { r: 2.1, phi: 0.0, th: 0.0, speed: 0.05, eyes: [0.5, 2.6, 4.7], w: 0.34 },
-            { r: 5.4, phi: 1.40, th: -0.39, speed: -0.035, eyes: [1.0, 3.2, 5.3], w: 0.5 },
-            { r: 3.5, phi: 1.39, th: 0.46, speed: 0.03, eyes: [2.1, 5.2], w: 0.42 }
+            { r: 2.1, phi: 0.0, th: 0.0, speed: 0.05, eyes: [0.5, 2.6, 4.7], w: 0.6 },
+            { r: 4.9, phi: 1.40, th: -0.28, speed: -0.035, eyes: [1.0, 3.2, 5.3], w: 0.8 },
+            { r: 3.5, phi: 1.39, th: 0.46, speed: 0.03, eyes: [2.1, 5.2], w: 0.7 }
         ];
         const ringM4 = (R) => new THREE.Matrix4().makeScale(1, 1, 0.25).multiply(new THREE.Matrix4().makeRotationZ(R.th).multiply(new THREE.Matrix4().makeRotationX(R.phi)));   // z сплющен (×0.25): сильный наклон кольца иначе давал бы перспективное разбухание ближнего края — орбиты остаются плоскими эллипсами, как на эскизе
         const partsNow = DP.params.get('parts') || DEFAULT_PARTS;
@@ -1356,12 +1356,22 @@
             // всё в плоскости кольца (x — вдоль кольца, y — наружу), положение/вращение считаются в шейдере (aL = (угол, x, y))
             R.eyes.forEach((a0) => {
                 const pushL = (lx, ly, al) => { const cc = new THREE.Vector3(Math.cos(a0) * R.r, Math.sin(a0) * R.r, 0), tt = new THREE.Vector3(-Math.sin(a0), Math.cos(a0), 0), rr = new THREE.Vector3(Math.cos(a0), Math.sin(a0), 0); v.copy(cc).addScaledVector(tt, lx * R.w).addScaledVector(rr, ly * R.w).applyMatrix4(M); rp.push(v.x, v.y + FIG_Y, v.z); ra.push(ri, al); rl.push(a0, lx, ly); };
-                const upO = (x) => 0.55 * Math.pow(Math.max(0, 1 - x * x), 1.3), upI = (x) => 0.24 * Math.pow(Math.max(0, 1 - x * x), 1.0), loI = (x) => -0.41 * Math.pow(Math.max(0, 1 - x * x), 1.0), loO = (x) => -0.6 * Math.pow(Math.max(0, 1 - x * x), 1.3);
-                const stepX = 0.022 / R.w * 0.45 * 0.6 / 0.7;   // глаза на орбитах на 30% реже (автор: орбита выглядит прерывистой рядом со слитно-плотным глазом)
-                [upO, upI, loI, loO].forEach((f) => { for (let x = -1; x <= 1.0001; x += stepX) pushL(x, f(x), 1.9); });
-                const ir = 0.34, nI = Math.round(2 * Math.PI * ir / stepX);
-                for (let k = 0; k < nI; k++) { const t = k / nI * Math.PI * 2, x = Math.cos(t) * ir, y = Math.sin(t) * ir; if (y <= upI(x) - 0.01) pushL(x, y, 1.9); }   // радужка — круг, обрезанный верхним веком
-                for (let rr2 = 0.035; rr2 <= 0.14; rr2 += 0.035) { const nP = Math.round(2 * Math.PI * rr2 / stepX); for (let k = 0; k < nP; k++) { const t = k / nP * Math.PI * 2; pushL(Math.cos(t) * rr2, Math.sin(t) * rr2, 2.4); } }   // зрачок — диск
+                // четырёхконечная звезда (автор, эскиз): четыре полупараболы между концами лучей (вогнутые бока) + центр; лежит в плоскости кольца, лучи вдоль кольца и наружу
+                const Lx = 0.5, Ly = 0.8, c0 = 0.06;                      // длины лучей (доли R.w) и «талия»
+                const stepW = 0.011 / R.w;                                 // шаг точек вдоль линии
+                const arm = (sx, sy) => {                                   // парабола-Безье от конца луча по x к концу луча по y, управляющая точка у центра
+                    const P0 = [sx * Lx, 0], P1 = [sx * c0, sy * c0], P2 = [0, sy * Ly];
+                    let px = P0[0], py = P0[1], acc = 0;
+                    pushL(px, py, 2.4);
+                    for (let i = 1; i <= 400; i++) {
+                        const t = i / 400, m = 1 - t;
+                        const x = m * m * P0[0] + 2 * m * t * P1[0] + t * t * P2[0], y = m * m * P0[1] + 2 * m * t * P1[1] + t * t * P2[1];
+                        acc += Math.hypot(x - px, y - py); px = x; py = y;
+                        if (acc >= stepW) { acc = 0; pushL(x, y, 2.4); }
+                    }
+                };
+                arm(1, 1); arm(-1, 1); arm(1, -1); arm(-1, -1);
+                pushL(0, 0, 3.0);
             });
         });
         const ringGeo = new THREE.BufferGeometry();
