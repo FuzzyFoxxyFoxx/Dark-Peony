@@ -718,7 +718,7 @@
             vec4 tex = texture2D(uTexture, gl_PointCoord);
             if (tex.a < 0.02) discard;
             float tipGlow = smoothstep(0.1, 0.85, vV) * 1.4;
-            float a = tex.a * (4.5 + 5.0 * vFresnel + tipGlow * 1.0) * smoothstep(0.05, 0.35, vV);   // объём: френель (края колец ярче), у основания прозрачны (уходят в центр)   // у основания прозрачны — растут из-под центра
+            float a = tex.a * (6.0 + 6.0 * vFresnel + tipGlow * 1.2) * smoothstep(0.05, 0.3, vV);   // объём: френель (края колец ярче), у основания прозрачны (уходят в центр)   // у основания прозрачны — растут из-под центра
             a = a / (0.45 + a * 1.2) * vDepthK;
             vec3 base = mix(vec3(0.1, 0.22, 0.38), vec3(0.7, 0.85, 1.0), vFresnel * 1.1);
             gl_FragColor = dpMorphColor(mix(base, vec3(0.4, 0.7, 0.95), smoothstep(0.4, 0.85, vV)), a, tex.a);
@@ -1143,20 +1143,20 @@
         // ---------- ТЕНТАКЛИ МЕДУЗНОГО ТИПА (трубки из колец) ----------
         const bp = [], bn = [], bc = [], btn = [], bt = [];
         // [x, длина, seed, радиус у основания, шаг колец]: все выходят из ОДНОЙ точки в центре цветка, у начала расходятся каждая в свою сторону, потом плавно свисают вниз (набросок автора: контур пучка — сужается к центру)
-        const TUBES = [[-0.34, 4.6, 0.7, 0.10, 0.085], [-0.17, 4.9, 3.1, 0.11, 0.085], [0.0, 4.4, 5.4, 0.10, 0.085], [0.17, 4.8, 6.6, 0.11, 0.085], [0.35, 4.5, 7.9, 0.10, 0.085],
-            [-0.58, 6.0, 8.3, 0.15, 0.095], [0.6, 6.3, 9.7, 0.15, 0.095],
+        const TUBES = [[-0.46, 4.6, 0.7, 0.10, 0.09], [-0.23, 4.9, 3.1, 0.11, 0.09], [0.0, 4.4, 5.4, 0.10, 0.09], [0.23, 4.8, 6.6, 0.11, 0.09], [0.46, 4.5, 7.9, 0.10, 0.09],
+            [-0.74, 6.0, 8.3, 0.15, 0.1], [0.76, 6.3, 9.7, 0.15, 0.1],
             [-0.45, 2.3, 11.1, 0.055, 0.05], [-0.15, 2.0, 12.3, 0.05, 0.05], [0.18, 2.6, 13.5, 0.055, 0.05], [0.46, 2.1, 14.7, 0.05, 0.05], [0.78, 2.4, 15.9, 0.055, 0.05]];   // последние пять — мелкие, как у медузы
-        const NRAD = 18, TILT = 0.85;   // как у медузы: отдельные кольца, шаг ≈ радиус, кольцо наклонено к зрителю (плоскость серафима лицом к камере — иначе чёрточки)
+        const NRAD = 20, TILT = 0.85, TUBE_K = 1.45;   // TUBE_K — крупнее кольца: у медузы тентакли заметнее (автор)   // как у медузы: отдельные кольца, шаг ≈ радиус, кольцо наклонено к зрителю (плоскость серафима лицом к камере — иначе чёрточки)
         TUBES.forEach(([x0, len, sdT, rad, RSTEP]) => {
             const pts = [];
             for (let q = 0; q <= 48; q++) {
-                const sd = q / 48 * len, t = sd / len, e = Math.min(1, sd / 2.8), sp = e * e * (3 - 2 * e);   // расходятся из точки плавно, за ≈2.8 ед. длины (угол мягкий; автор: «слишком жёстко и растопырены»)
+                const sd = q / 48 * len, t = sd / len, e = Math.min(1, sd / 1.5), sp = 0.4 + 0.6 * e * e * (3 - 2 * e);   // расходятся быстрее и стартуют уже не из точки (40% разноса сразу): у нижнего малого глаза ещё нет единого столба;   // расходятся из точки плавно, за ≈2.8 ед. длины (угол мягкий; автор: «слишком жёстко и растопырены»)
                 pts.push(new THREE.Vector3(x0 * sp * (1 + 0.1 * t) + Math.sin(t * Math.PI * 1.3 + sdT) * 0.18 * t, FIG_Y - 0.3 - sd, Math.cos(t * Math.PI * 0.9 + sdT * 1.3) * 0.2 * t * sp));
             }
             const path = new THREE.CatmullRomCurve3(pts), segs = Math.round(len / RSTEP), frames = path.computeFrenetFrames(segs, false), Lp = path.getLength();
             for (let i = 0; i <= segs; i++) {
                 const v = i / segs, c = path.getPointAt(v), Tg = frames.tangents[i], Nn = frames.normals[i], Bb = frames.binormals[i];
-                const r = rad * Math.max(0.08, Math.pow(1 - v * 0.88, 1.1));   // широкое кольцо у основания, к концу сужается (как у медузы и пиона)
+                const r = TUBE_K * rad * Math.max(0.08, Math.pow(1 - v * 0.88, 1.1));   // широкое кольцо у основания, к концу сужается (как у медузы и пиона)
                 for (let j = 0; j < NRAD; j++) {
                     const th = j / NRAD * Math.PI * 2 + i * 0.3, cs = Math.cos(th), sn = Math.sin(th);
                     let nx = Nn.x * cs + Bb.x * sn, ny = Nn.y * cs + Bb.y * sn, nz = Nn.z * cs + Bb.z * sn;
@@ -1318,7 +1318,7 @@
             const mEye = mat(eyeVertex, eyeFragment, eyeU);
             const mBack = mat(eyeVertex, eyeFragment, eyeU, { blending: THREE.NormalBlending });
             const mTend = mat(tendrilVertex, tendrilFragment, { uSize: { value: 2.0 } });
-            const mTube = mat(tubeVertex, tubeFragment, { uSize: { value: 2.3 }, uTubeSway: { value: 1.0 } });
+            const mTube = mat(tubeVertex, tubeFragment, { uSize: { value: 2.6 }, uTubeSway: { value: 1.0 } });
             const ringU = data.RINGS.map(R => new THREE.Vector4(R.axis[0], R.axis[1], R.axis[2], R.speed));
             const mRing = mat(ringVertex, ringFragment, { uSize: { value: 2.0 }, uRing: { value: ringU }, uT0 });
 
