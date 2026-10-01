@@ -870,7 +870,7 @@
         uniform vec3 uRingP[3];            // x — радиус кольца, y — размер глаза
         attribute vec2 aR;
         attribute vec3 aL;
-        varying float vA;
+        varying float vA, vMsk;
         vec3 rotAxis(vec3 p, vec3 ax, float a) { float c = cos(a), s = sin(a); return p * c + cross(ax, p) * s + ax * dot(ax, p) * (1.0 - c); }
         void main() {
             vec3 dpRest = position;
@@ -899,6 +899,8 @@
             float dist = max(-mv.z, 0.1);
             ${depthVert}
             vA = aR.y;
+            // маска «за Серафимом» (автор: орбиты и глаза не должны просвечивать сквозь цветок): задняя половина кольца (z < 0) гаснет в пределах силуэта цветка (эллипс 3.6 × 2.3 вокруг центра), спереди — как есть
+            { vec2 dd = (pos.xy - vec2(0.0, ${FIG_Y.toFixed(3)})) / vec2(3.7, 2.4); float back = smoothstep(0.05, -0.05, pos.z); vMsk = 1.0 - back * (1.0 - smoothstep(0.9, 1.25, length(dd))); }
             gl_PointSize = uSize * uViewportScale * (0.85 / (0.4 + 0.06 * dist)) * (aL.x > -9.0 ? 0.8 : 1.0);
             dpMorphFinish();
         }
@@ -906,11 +908,11 @@
     const ringFragment = (G) => `
         ${G.pointsFragment}
         uniform sampler2D uTexture;
-        varying float vA, vDepthK;
+        varying float vA, vDepthK, vMsk;
         void main() {
             vec4 tex = texture2D(uTexture, gl_PointCoord);
             if (tex.a < 0.01) discard;
-            gl_FragColor = dpMorphColor(vec3(0.62, 0.8, 1.0), tex.a * vA * 2.2, tex.a);   // орбиты ярче (автор: кольца как на эскизе, видны); без дальнего затемнения
+            gl_FragColor = dpMorphColor(vec3(0.62, 0.8, 1.0), tex.a * vA * 2.2 * vMsk, tex.a);   // орбиты ярче (автор: кольца как на эскизе, видны); без дальнего затемнения
         }
     `;
 
@@ -1128,8 +1130,8 @@
         // кольцо вращается только вокруг СВОЕЙ нормали (в своей плоскости, наклон не меняется). На кольцах — глаза (в плоскости кольца, смотрят по нормали), вместо звёздочек.
         const RING_DEFS = [
             { r: 2.1, phi: 0.0, th: 0.0, speed: 0.05, eyes: [0.5, 2.6, 4.7], w: 0.34 },
-            { r: 5.0, phi: 1.40, th: -0.39, speed: -0.035, eyes: [1.0, 3.2, 5.3], w: 0.5 },
-            { r: 4.5, phi: 1.39, th: 0.46, speed: 0.03, eyes: [2.1, 5.2], w: 0.5 }
+            { r: 5.4, phi: 1.40, th: -0.39, speed: -0.035, eyes: [1.0, 3.2, 5.3], w: 0.5 },
+            { r: 3.5, phi: 1.39, th: 0.46, speed: 0.03, eyes: [2.1, 5.2], w: 0.42 }
         ];
         const ringM4 = (R) => new THREE.Matrix4().makeScale(1, 1, 0.25).multiply(new THREE.Matrix4().makeRotationZ(R.th).multiply(new THREE.Matrix4().makeRotationX(R.phi)));   // z сплющен (×0.25): сильный наклон кольца иначе давал бы перспективное разбухание ближнего края — орбиты остаются плоскими эллипсами, как на эскизе
         const partsNow = DP.params.get('parts') || DEFAULT_PARTS;
