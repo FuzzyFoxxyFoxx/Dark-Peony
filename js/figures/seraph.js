@@ -147,6 +147,13 @@
         }
         float dpBob() { return 0.07 * sin(uTime * 0.6) + 0.025 * sin(uTime * 1.13 + 1.3); }   // парение
     `;
+    // ЕДИНАЯ РАМПА ЦВЕТА ЧАСТИЦЫ серафима (автор, 2026-10-01): лепестки, глаза и тентакли берут цвет отсюда (как у пиона: цвет частицы один — от тёмно-синего к светло-голубому; яркость — только альфа).
+    // Значения — DP.config.seraphColor (по умолчанию = рампа лепестков пиона из peony.js). Менять в одном месте.
+    DP.config.seraphColor = Object.assign({ dark: [0.04, 0.1, 0.2], light: [0.7, 0.88, 1.0] }, DP.config.seraphColor || {});
+    const colorGlsl = `
+        uniform vec3 uColD, uColL;
+        vec3 sColor(float t) { return mix(uColD, uColL, clamp(t, 0.0, 1.0)); }
+    `;
     const depthGlsl = `
         uniform vec2 uDepth;
         varying float vDepthK;
@@ -359,6 +366,7 @@
     `;
     const petalFragment = (G) => `
         ${G.pointsFragment}
+        ${colorGlsl}
         uniform sampler2D uTexture;
         uniform float uRollGlow, uHoleIn, uHoleOut;
         uniform float uBlueLift, uRedK, uSatK;
@@ -373,9 +381,7 @@
             float base = 1.0 - smoothstep(0.0, 0.25, vU);                        // у основания — свечение
             float a = tex.a * (uLookA.x + uLookA.y * vFresnel + uLookA.z * vVein + uLookA.w * edge + uTipGlow * tip + 0.25 * base + uRollGlow * vUpE) * smoothstep(0.0, 0.06, vU);
             // цвет частицы — ТОЧНО как у лепестков пиона (peony.js): рампа mix((0.04, 0.10, 0.20) → (0.70, 0.88, 1.0), френель·1.1); яркость задаёт только альфа (как в Particular: цвет частицы один, остальное — прозрачность)
-            float cf = clamp(vFresnel * 1.1 + 0.18 * edge, 0.0, 1.0);
-            // трёхточечная рампа с голубой серединой (по визуальному сравнению со скриншотом пиона: у пиона середина и света холодно-голубые, у серафима были нейтрально-серыми)
-            vec3 color = cf < 0.5 ? mix(vec3(0.04, 0.1, 0.2), vec3(0.15, 0.34, 0.5), cf * 2.0) : mix(vec3(0.15, 0.34, 0.5), vec3(0.72, 0.93, 1.0), (cf - 0.5) * 2.0);
+            vec3 color = sColor(vFresnel * 1.1);   // единая рампа цвета частицы (colorGlsl)
             a = a / (0.45 + a * 2.0) * vDepthK * vEdgeFade * vBaseFd * smoothstep(uHoleIn, uHoleOut, vR);   // «гнездо»: лепестки к центру уходят в нулевую прозрачность, на их месте — глаз
             gl_FragColor = dpMorphColor(color, a, tex.a);
         }
@@ -657,11 +663,13 @@
             gl_PointSize = uSize * uViewportScale * (0.7 + aSizeScale * 0.5) * (kind > 4.5 ? 3.2 : (kind > 3.5 ? 0.7 : 1.0)) * min(2.2, sqrt(stretch)) / (0.35 + 0.06 * dist);
             dpMorphFinish();
             // спрятать: глаз не показан или точка закрыта (размер 0 на Metal не прячет — выносим за экран)
+            if (kind < 4.5) vA *= aF.x;   // затухание у кромки лепестка (кожа/белок/радужка не выходят за лепесток)
             if (er.y < 0.5 || vA < 0.01) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; }
         }
     `;
     const eyeFragment = (G) => `
         ${G.pointsFragment}
+        ${colorGlsl}
         uniform sampler2D uTexture;
         uniform float uBlueLift, uRedK;
         uniform vec4 uEyeLook, uEyeLook2;           // x — кант, y — яркость яблока, z — кожа: база, w — кожа: изгибы
@@ -676,7 +684,7 @@
             else if (vKind < 3.5) k = 0.18;                                 // лучи
             else k = uEyeLook.y * (0.14 + 0.9 * pow(1.0 - max(0.0, vFres), 1.2) * (0.6 + 0.6 * uEyeLook2.x * max(0.0, vLit))) * mix(1.0, vShade, uEyeLook2.y);   // яблоко: середина почти невидима, к краям — френель (как у светила), у век — тень
             vec3 hi = vKind < 2.5 && vKind > 1.5 ? vec3(0.7, 0.86, 1.0) : vec3(0.82, 0.93, 1.0);
-            vec3 color = mix(vec3(0.04, 0.1, 0.2), hi, clamp(k * 0.9, 0.0, 1.0));   // как у пиона: тёмный конец (0.04, 0.10, 0.20)
+            vec3 color = sColor(k * 0.9);   // единая рампа цвета частицы (colorGlsl)
             float a = tex.a * k * vA;
             a = a / (0.45 + a * 1.6) * vDepthK;
             // у глаз подъём не применяется (радужка не должна синеть)   // «кривая синего от нуля» (автор: +4/255 в тенях) только внутри точек — фон остаётся чёрным; uRedK — опыт с красным
@@ -728,6 +736,7 @@
     `;
     const tubeFragment = (G) => `
         ${G.pointsFragment}
+        ${colorGlsl}
         uniform sampler2D uTexture;
         varying float vFresnel, vV, vDepthK, vMask;
         void main() {
@@ -736,8 +745,7 @@
             float tipGlow = smoothstep(0.1, 0.85, vV) * 1.4;
             float a = tex.a * (3.4 + 3.6 * pow(vFresnel, 1.3) + tipGlow * 0.6) * smoothstep(0.05, 0.3, vV) * vMask;   // как у медузы: тонкие чёткие кольца, фронтальная сторона тусклая, края колец (френель) яркие   // объём: френель (края колец ярче), у основания прозрачны (уходят в центр)   // у основания прозрачны — растут из-под центра
             a = a / (0.45 + a * 1.2) * vDepthK;
-            vec3 base = mix(vec3(0.3, 0.52, 0.8), vec3(0.8, 0.93, 1.0), vFresnel);   // фронтальная сторона кольца не чёрная — кольцо видно целиком, края светлее
-            gl_FragColor = dpMorphColor(mix(base, vec3(0.45, 0.75, 1.0), smoothstep(0.4, 0.85, vV)), a, tex.a);
+            gl_FragColor = dpMorphColor(sColor(vFresnel * 1.1), a, tex.a);   // единая рампа цвета частицы (colorGlsl)
         }
     `;
 
@@ -1022,19 +1030,32 @@
             const P = PETALS[E.petal], c = petalPoint(P, E.u, 0), b0 = petalPoint(P, 0, 0), hw = P.W * 0.5 * (shapeWidth(P.shape, E.u, 1) + shapeWidth(P.shape, E.u, 2));
             // глаз вписан в плоскость лепестка: разрез — вдоль оси лепестка, верх глаза — «вверх» по экрану
             const roll = P.a > 0 ? Math.PI / 2 - P.a : -Math.PI / 2 - P.a;
-            return { c: [c[0], c[1], c[2] + 0.02], w: E.k ? E.k * hw : E.w, roll, att: [E.u, P.ph, P.seed, P.L], pet: { B: [b0[0], b0[1], P.a, hw], K: [P.open || 0, P.twK === undefined ? 1 : P.twK, P.flK === undefined ? 1 : P.flK, P.roll || 0], Q: [P.sideRoll || 0, P.latLim || 0, P.swp || 0] } };
+            return { P, c: [c[0], c[1], c[2] + 0.02], w: E.k ? E.k * hw : E.w, roll, att: [E.u, P.ph, P.seed, P.L], pet: { B: [b0[0], b0[1], P.a, hw], K: [P.open || 0, P.twK === undefined ? 1 : P.twK, P.flK === undefined ? 1 : P.flK, P.roll || 0], Q: [P.sideRoll || 0, P.latLim || 0, P.swp || 0] } };
         });
         DP.seraphStats.eyeInfo = eyes.map((E, i) => ({ i, w: +E.w.toFixed(3), hw: E.pet ? +E.pet.B[3].toFixed(3) : null }));
         const partsNow = DP.params.get('parts') || DEFAULT_PARTS;
         const ep = [], ee = [], eq = [], ef = [], eatt = [], es = [], eS = [], eEB = [], eEK = [], eEQ = [];
         eyes.forEach((E, i) => {
             const wShow = E.w * (E.main && partsNow === 'eye' ? EYE_STUDY : 1);     // размер на экране — для плотности точек
+            const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+            const rc = Math.cos(E.roll || 0), rs = Math.sin(E.roll || 0);
             const push = (kind, qx, qy, lx, ly, lz, sd, sx = 0, sy = 0, sz = 0) => {
+                // кожа глаза не выходит за контур лепестка (автор): положение точки в покое → (u, поперёк) лепестка → мягкое затухание у кромки и кончика
+                let fadeP = 1;
+                if (E.P) {
+                    const Pp = E.P, Sh = Pp.shape, b0p = petalPoint(Pp, 0, 0);
+                    const wx = E.c[0] + (lx * rc - ly * rs) * E.w, wy = E.c[1] + (lx * rs + ly * rc) * E.w;
+                    const dx = wx - b0p[0], dy = wy - b0p[1], ca = Math.cos(Pp.a), sa = Math.sin(Pp.a);
+                    const uu = (dx * sa + dy * ca) / Pp.L, across = dx * ca - dy * sa;
+                    const wl = Math.max(0.02, shapeWidth(Sh, Math.min(1, Math.max(0, uu)), across < 0 ? 1 : 2) * Sh.W * (1 + (Sh.wb || 0) * Math.exp(-Math.pow((uu - 0.3) / 0.2, 2))));
+                    const vr = Math.abs(across) / wl;
+                    fadeP = (1 - sm(0.78, 0.98, vr)) * (1 - sm(0.93, 1.0, uu)) * (uu < 0 ? 0 : 1);
+                    if (fadeP < 0.02 && kind < 5) return;
+                }
                 ep.push(E.c[0] + lx * E.w, E.c[1] + ly * E.w, E.c[2] + lz * E.w);
                 ee.push(i, kind, 0, 0); eq.push(qx, qy); eS.push(sx, sy, sz);
-                ef.push(seededRandom(sd), seededRandom(sd * 1.7)); eatt.push(...E.att); es.push(seededRandom(sd * 2.3)); { const pt = E.pet || { B: [0, 0, 0, 0.5], K: [0, 1, 1, 0], Q: [0, 0, 0] }; eEB.push(...pt.B); eEK.push(...pt.K); eEQ.push(...pt.Q); }
+                ef.push(E.P ? fadeP : 1, seededRandom(sd * 1.7)); eatt.push(...E.att); es.push(seededRandom(sd * 2.3)); { const pt = E.pet || { B: [0, 0, 0, 0.5], K: [0, 1, 1, 0], Q: [0, 0, 0] }; eEB.push(...pt.B); eEK.push(...pt.K); eEQ.push(...pt.Q); }
             };
-            const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
             const domeC = (x, y) => eyeSurfZ(x, y);                                // = eSurf(...).z (GLSL)
             let sd = i * 977.1;
             // кожа: сетка рядками (как у лепестков), без точек в разрезе (глаз открыт)
@@ -1305,7 +1326,8 @@
             const data = cache[ctx.quality] || (cache[ctx.quality] = buildGeometry(ctx.qualityTier));
             const G = DP.morph.glsl, S = DP.shared, mu = DP.morph.uniformsFor(ctx.uniforms);
             const list = [];
-            const common = { uTime: S.uTime, uTexture: S.uTexture, uViewportScale: S.uViewportScale, uDepth: { value: new THREE.Vector2(8.1, 0.35) } };
+            const cvD = new THREE.Vector3(), cvL = new THREE.Vector3();
+            const common = { uColD: { get value() { return cvD.fromArray(DP.config.seraphColor.dark); } }, uColL: { get value() { return cvL.fromArray(DP.config.seraphColor.light); } }, uTime: S.uTime, uTexture: S.uTexture, uViewportScale: S.uViewportScale, uDepth: { value: new THREE.Vector2(8.1, 0.35) } };
             const mat = (vs, fs, extra, cfg) => { const m = new THREE.ShaderMaterial(Object.assign({}, DP.pointsMaterialConfig, cfg || {}, {
                 uniforms: Object.assign({}, common, extra, mu), vertexShader: vs(G), fragmentShader: fs(G) })); list.push(m); return m; };
             const gz = createGaze(data);
