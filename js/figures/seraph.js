@@ -718,10 +718,10 @@
             vec4 tex = texture2D(uTexture, gl_PointCoord);
             if (tex.a < 0.02) discard;
             float tipGlow = smoothstep(0.1, 0.85, vV) * 1.4;
-            float a = tex.a * (0.55 + 3.2 * pow(vFresnel, 1.3) + tipGlow * 0.35) * smoothstep(0.05, 0.3, vV);   // как у медузы: тонкие чёткие кольца, фронтальная сторона тусклая, края колец (френель) яркие   // объём: френель (края колец ярче), у основания прозрачны (уходят в центр)   // у основания прозрачны — растут из-под центра
+            float a = tex.a * (1.5 + 2.0 * pow(vFresnel, 1.3) + tipGlow * 0.35) * smoothstep(0.05, 0.3, vV);   // как у медузы: тонкие чёткие кольца, фронтальная сторона тусклая, края колец (френель) яркие   // объём: френель (края колец ярче), у основания прозрачны (уходят в центр)   // у основания прозрачны — растут из-под центра
             a = a / (0.45 + a * 1.2) * vDepthK;
-            vec3 base = mix(vec3(0.1, 0.22, 0.38), vec3(0.7, 0.85, 1.0), vFresnel * 1.1);
-            gl_FragColor = dpMorphColor(mix(base, vec3(0.4, 0.7, 0.95), smoothstep(0.4, 0.85, vV)), a, tex.a);
+            vec3 base = mix(vec3(0.3, 0.52, 0.8), vec3(0.8, 0.93, 1.0), vFresnel);   // фронтальная сторона кольца не чёрная — кольцо видно целиком, края светлее
+            gl_FragColor = dpMorphColor(mix(base, vec3(0.45, 0.75, 1.0), smoothstep(0.4, 0.85, vV)), a, tex.a);
         }
     `;
 
@@ -1145,8 +1145,8 @@
         // [x, длина, seed, радиус у основания, шаг колец]: все выходят из ОДНОЙ точки в центре цветка, у начала расходятся каждая в свою сторону, потом плавно свисают вниз (набросок автора: контур пучка — сужается к центру)
         const TUBES = [[-0.40, 4.6, 0.7, 0.10, 0.09], [-0.20, 4.9, 3.1, 0.11, 0.09], [0.0, 4.4, 5.4, 0.10, 0.09], [0.20, 4.8, 6.6, 0.11, 0.09], [0.40, 4.5, 7.9, 0.10, 0.09],
             [-0.66, 6.0, 8.3, 0.15, 0.1], [0.68, 6.3, 9.7, 0.15, 0.1],
-            [-0.45, 2.3, 11.1, 0.055, 0.05], [-0.15, 2.0, 12.3, 0.05, 0.05], [0.18, 2.6, 13.5, 0.055, 0.05], [0.46, 2.1, 14.7, 0.05, 0.05], [0.78, 2.4, 15.9, 0.055, 0.05]];   // последние пять — мелкие, как у медузы
-        const NRAD = 16, TILT = 0.85, TUBE_K = 1.3;   // TUBE_K — крупнее кольца: у медузы тентакли заметнее (автор)   // как у медузы: отдельные кольца, шаг ≈ радиус, кольцо наклонено к зрителю (плоскость серафима лицом к камере — иначе чёрточки)
+            [-0.62, 2.3, 11.1, 0.055, 0.05], [-0.31, 2.0, 12.3, 0.05, 0.05], [0.0, 2.6, 13.5, 0.055, 0.05], [0.31, 2.1, 14.7, 0.05, 0.05], [0.62, 2.4, 15.9, 0.055, 0.05]];   // последние пять — мелкие, как у медузы
+        const NRAD = 22, TILT = 0.85, TUBE_K = 1.1;   // TUBE_K — крупнее кольца: у медузы тентакли заметнее (автор)   // как у медузы: отдельные кольца, шаг ≈ радиус, кольцо наклонено к зрителю (плоскость серафима лицом к камере — иначе чёрточки)
         TUBES.forEach(([x0, len, sdT, rad, RSTEP]) => {
             const pts = [];
             for (let q = 0; q <= 48; q++) {
@@ -1247,7 +1247,9 @@
                     v.set(E.c[0], E.c[1], E.c[2]).applyMatrix4(root.matrixWorld).project(DP.stage.camera);
                     const ex = (v.x + 1) / 2 * innerWidth, ey = (1 - v.y) / 2 * innerHeight;
                     const dx = pointer.x - ex, dy = ey - pointer.y, d = Math.hypot(dx, dy) || 1, k = Math.min(1, d / (innerHeight * 0.3));
-                    s.tx = dx / d * k; s.ty = dy / d * k;
+                    // взгляд — в системе самого глаза, а глаз на лепестке повёрнут (E.roll): переводим направление на экране в локальное (поворот на −roll); иначе верхние глаза смотрели «вниз», когда курсор у соседнего (автор)
+                    const rl = E.roll || 0, cr = Math.cos(-rl), sr = Math.sin(-rl), ux = dx / d * k, uy = dy / d * k;
+                    s.tx = ux * cr - uy * sr; s.ty = ux * sr + uy * cr;
                     if (T > s.next) { s.tp = 0.7 + rnd() * 0.15; s.next = T + 0.8 + rnd(); }
                 } else if (T > s.next) {                                         // хамелеон: каждый глаз — своя точка
                     const a = rnd() * Math.PI * 2, r = Math.sqrt(rnd());
@@ -1287,6 +1289,7 @@
             const mat = (vs, fs, extra, cfg) => { const m = new THREE.ShaderMaterial(Object.assign({}, DP.pointsMaterialConfig, cfg || {}, {
                 uniforms: Object.assign({}, common, extra, mu), vertexShader: vs(G), fragmentShader: fs(G) })); list.push(m); return m; };
             const gz = createGaze(data);
+            DP.seraphGaze = { gaze: gz.gaze, eyes: data.eyes };   // отладка
             const partsParam = DP.params.get('parts') || DEFAULT_PARTS;
             const show = (k) => !partsParam || partsParam.split(',').indexOf(k) >= 0 || (k === 'petals' && (onlyPetalOf(partsParam) !== -1 || /shapes/.test(partsParam)));
             const study = partsParam === 'eye' ? EYE_STUDY : 1;
