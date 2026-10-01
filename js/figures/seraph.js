@@ -1358,7 +1358,7 @@
                 const pushL = (lx, ly, al) => { const cc = new THREE.Vector3(Math.cos(a0) * R.r, Math.sin(a0) * R.r, 0), tt = new THREE.Vector3(-Math.sin(a0), Math.cos(a0), 0), rr = new THREE.Vector3(Math.cos(a0), Math.sin(a0), 0); v.copy(cc).addScaledVector(tt, lx * R.w).addScaledVector(rr, ly * R.w).applyMatrix4(M); rp.push(v.x, v.y + FIG_Y, v.z); ra.push(ri, al); rl.push(a0, lx, ly); };
                 // четырёхконечная звезда (автор, эскиз): четыре полупараболы между концами лучей (вогнутые бока) + центр; лежит в плоскости кольца, лучи вдоль кольца и наружу
                 // форма по эскизу автора: кривая |x/Lx|^p + |y/Ly|^p = 1 (p ≈ 0.45) — длинные тонкие лучи, маленькая ромбовидная сердцевина; чередуются «высокая» (лучи наружу длиннее) и «широкая» (вдоль кольца длиннее)
-                const tall = (si % 2 === 0), Lx = tall ? 0.19 : 0.4, Ly = tall ? 0.4 : 0.23, pw = 0.45, ex = 2 / pw;
+                const Lx = 0.095, Ly = 0.4, pw = 0.45, ex = 2 / pw;
                 const stepW = 0.011 / R.w;                                 // шаг точек вдоль линии
                 const arm = (sx, sy) => {
                     let px = sx * Lx, py = 0, acc = 0;
