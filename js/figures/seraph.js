@@ -97,7 +97,7 @@
         ruffleK: 7.7,                // рюши: сколько волн по длине (× длина, вершин ≈ K·L/π)
         ruffleSpeed: 0.64,           // рюши: темп бега волны от основания к кончику
         roll: 0.3,                   // крен лепестков креста: верхней кромкой к камере (рад, 0.3 ≈ 17°; минус — от камеры), нарастает с 15–40% длины
-        look: { body: 0.03, fres: 0.19, vein: 0.15, edge: 0.68, tip: 0.8, feather: 0, featherMin: 0.15, veinSize: 0.25, edgeSize: 0.1 },   // вид листа: яркость тела/френеля/жилок/кромки, добавка к размеру точки на жилках/кромке (как у лент медузы: кромка ×4–6 к телу)
+        look: { body: 0.03, fres: 0.19, vein: 0.34, edge: 0.68, tip: 1.45, feather: 0, featherMin: 0.15, veinSize: 0.25, edgeSize: 0.1 },   // вид листа: яркость тела/френеля/жилок/кромки, добавка к размеру точки на жилках/кромке (как у лент медузы: кромка ×4–6 к телу)
         latCross: 0.45,              // волна в плоскости экрана у лепестков креста и пары 5/7 ч (× колыхание): видна с фронта; 0 — нет
         blueLift: 0.0157,            // подъём синей кривой от нуля на 4/255 (по вашему фотошопу), только внутри точек
         satK: 1.8,                   // насыщенность цвета лепестков (1 — как было): убирает серость в средних тонах
@@ -149,10 +149,10 @@
     `;
     // ЕДИНАЯ РАМПА ЦВЕТА ЧАСТИЦЫ серафима (автор, 2026-10-01): лепестки, глаза и тентакли берут цвет отсюда (как у пиона: цвет частицы один — от тёмно-синего к светло-голубому; яркость — только альфа).
     // Значения — DP.config.seraphColor (по умолчанию = рампа лепестков пиона из peony.js). Менять в одном месте.
-    DP.config.seraphColor = Object.assign({ dark: [0.04, 0.1, 0.2], light: [0.7, 0.88, 1.0], gain: 3.0, gamma: 0.5 }, DP.config.seraphColor || {});
+    DP.config.seraphColor = Object.assign({ dark: [0.04, 0.1, 0.2], light: [0.7, 0.88, 1.0], gain: 1.4, gamma: 0.8, hot: 0.85 }, DP.config.seraphColor || {});
     const colorGlsl = `
         uniform vec3 uColD, uColL;
-        uniform float uGain, uColGamma;
+        uniform float uGain, uColGamma, uHot;
         vec3 sColor(float t) { return mix(uColD, uColL, clamp(t, 0.0, 1.0)); }
     `;
     const depthGlsl = `
@@ -384,6 +384,7 @@
             // цвет частицы — ТОЧНО как у лепестков пиона (peony.js): рампа mix((0.04, 0.10, 0.20) → (0.70, 0.88, 1.0), френель·1.1); яркость задаёт только альфа (как в Particular: цвет частицы один, остальное — прозрачность)
             vec3 color = sColor(pow(clamp(vFresnel * 1.1, 0.0, 1.0), uColGamma));   // единая рампа цвета частицы (colorGlsl); gamma < 1 — середины светлее и бледнее (края не кобальтовые)
             a *= uGain;   // общая яркость лепестков (автор: стали темнее, чем были)
+            color = mix(color, uColL, smoothstep(0.3, 1.1, a) * uHot);   // «кислотный синий»: где много точек тёмного (насыщенно-синего) конца рампы накладываются, сумма становится ярко-синей; в сильных светах цвет тянем к светлому концу рампы
             a = a / (0.45 + a * 2.0) * vDepthK * vEdgeFade * vBaseFd * smoothstep(uHoleIn, uHoleOut, vR);   // «гнездо»: лепестки к центру уходят в нулевую прозрачность, на их месте — глаз
             gl_FragColor = dpMorphColor(color, a, tex.a);
         }
@@ -1187,7 +1188,7 @@
             [-0.62, 2.3, 11.1, 0.075, 0.05], [-0.31, 2.0, 12.3, 0.07, 0.05], [0.0, 2.6, 13.5, 0.075, 0.05], [0.31, 2.1, 14.7, 0.07, 0.05], [0.62, 2.4, 15.9, 0.075, 0.05]];   // последние пять — мелкие, как у медузы
         // горизонтальные малые тентакли вместо узких лепестков на 9 и 3 ч (автор): с каждой стороны 3 — верхний подлиннее, средний самый длинный, нижний покороче; зеркально
         const SIDE = [[8, 2.88, 0.065], [0, 3.48, 0.075], [-9, 2.04, 0.06]];   // на 20% длиннее и вдвое тоньше (автор)   // [угол над горизонталью°, длина, радиус]
-        if (TUBES_ON) [-1, 1].forEach(sg => SIDE.forEach(([ang, ln, rr], k) => TUBES.push([sg * 0.001, ln, 20 + k * 3.7 + (sg > 0 ? 1.3 : 0), rr, 0.05, (sd, len, kz) => { const a = ang * Math.PI / 180, e = Math.min(1, sd / 1.4), ease = 1 - Math.pow(1 - e, 2.0); return new THREE.Vector3(sg * Math.cos(a) * sd / kz * (0.6 + 0.4 * ease), FIG_Y + Math.sin(a) * sd / kz - 0.04 * sd * sd / Math.max(1, len), -SLOPE * sd / kz); }, 0.2])));   // шаг колец 0.2·r: горизонтальная трубка видна вдоль — овалы узкие, чтобы читались пружиной, а не отдельными кольцами
+        if (TUBES_ON) [-1, 1].forEach(sg => SIDE.forEach(([ang, ln, rr], k) => TUBES.push([sg * 0.001, ln, 20 + k * 3.7 + (sg > 0 ? 1.3 : 0), rr, 0.05, (sd, len, kz) => { const a = ang * Math.PI / 180, e = Math.min(1, sd / 1.4), ease = 1 - Math.pow(1 - e, 2.0); return new THREE.Vector3(sg * Math.cos(a) * sd / kz * (0.6 + 0.4 * ease), FIG_Y + Math.sin(a) * sd / kz - 0.04 * sd * sd / Math.max(1, len), -0.95 * sd / kz); }, 0.4])));   // горизонтальные уходят от камеры сильнее (z −0.95·длины): кольца перпендикулярны оси, и видны овалами только если ось не лежит в плоскости экрана   // шаг колец 0.2·r: горизонтальная трубка видна вдоль — овалы узкие, чтобы читались пружиной, а не отдельными кольцами
         const NRAD = 16, TUBE_K = 1.1, SLOPE = 0.45;   // как у медузы: 16 точек в кольце, шаг колец ≈ 0.47 радиуса; кольца СТРОГО перпендикулярны нити (автор) — овалами их делает наклон самих тентаклей от камеры (z = −SLOPE·длина), как наклон сцены у медузы   // TUBE_K — крупнее кольца: у медузы тентакли заметнее (автор)   // как у медузы: отдельные кольца, шаг ≈ радиус, кольцо наклонено к зрителю (плоскость серафима лицом к камере — иначе чёрточки)
         TUBES.forEach(([x0, len0, sdT, rad, RSTEP0, customPath, stepK]) => {
             const kz = Math.sqrt(1 + SLOPE * SLOPE), len = len0 * kz * 0.97, RSTEP = (stepK || 0.47) * TUBE_K * rad, pts = [];   // длина по нити с запасом на наклон от камеры (проекция ≈ len0); шаг колец — как у медузы
@@ -1329,7 +1330,7 @@
             const G = DP.morph.glsl, S = DP.shared, mu = DP.morph.uniformsFor(ctx.uniforms);
             const list = [];
             const cvD = new THREE.Vector3(), cvL = new THREE.Vector3();
-            const common = { uGain: { get value() { return DP.config.seraphColor.gain; } }, uColGamma: { get value() { return DP.config.seraphColor.gamma; } }, uColD: { get value() { return cvD.fromArray(DP.config.seraphColor.dark); } }, uColL: { get value() { return cvL.fromArray(DP.config.seraphColor.light); } }, uTime: S.uTime, uTexture: S.uTexture, uViewportScale: S.uViewportScale, uDepth: { value: new THREE.Vector2(8.1, 0.35) } };
+            const common = { uHot: { get value() { return DP.config.seraphColor.hot; } }, uGain: { get value() { return DP.config.seraphColor.gain; } }, uColGamma: { get value() { return DP.config.seraphColor.gamma; } }, uColD: { get value() { return cvD.fromArray(DP.config.seraphColor.dark); } }, uColL: { get value() { return cvL.fromArray(DP.config.seraphColor.light); } }, uTime: S.uTime, uTexture: S.uTexture, uViewportScale: S.uViewportScale, uDepth: { value: new THREE.Vector2(8.1, 0.35) } };
             const mat = (vs, fs, extra, cfg) => { const m = new THREE.ShaderMaterial(Object.assign({}, DP.pointsMaterialConfig, cfg || {}, {
                 uniforms: Object.assign({}, common, extra, mu), vertexShader: vs(G), fragmentShader: fs(G) })); list.push(m); return m; };
             const gz = createGaze(data);
