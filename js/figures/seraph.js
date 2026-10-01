@@ -132,7 +132,7 @@
     const CROSS = [2, 3, 8, 9];
     const keepPetal = (only, k) => only === -1 || (only === -2 ? CROSS.indexOf(k) >= 0 : k === only);
     const EYE_SCALE = 1.36;           // центральный глаз в сборке крупнее (на эскизе — размером с основания лепестков)
-    DP.config.seraphIris = Object.assign({ flow: true, fibers: 240, per: 2, tail: 14, life: 4.0, speed: 1.0, freq: 1.5, clump: 0.5, wave: 0.9, gain: 4.5, drift: 0.18, flare: 0.5, flareSpeed: 1.0, rim: 1.6, rimRows: 2, die: 0.78, dieSoft: 0.18, ringMid: 0.18, ringReach: 0.45, rings: 16, ringGain: 1.3, ringStep: 0.3 }, DP.config.seraphIris || {});   // радужка-поток: волокон на 0.46 ширины глаза, частиц на волокно, хвост, секунд на пробег, темп, число «вен», стягивание, волнистость, яркость
+    DP.config.seraphIris = Object.assign({ flow: true, fibers: 240, per: 2, tail: 14, life: 4.0, speed: 0.9, freq: 1.5, clump: 0.4, wave: 0.9, gain: 5.0, drift: 0.18, flare: 0.0, flareSpeed: 1.0, rim: 1.6, rimRows: 2, die: 1.1, dieSoft: 0.4, ringMid: 0.16, ringReach: 1.0, rings: 16, ringGain: 1.1, ringStep: 0.3 }, DP.config.seraphIris || {});   // радужка-поток: волокон на 0.46 ширины глаза, частиц на волокно, хвост, секунд на пробег, темп, число «вен», стягивание, волнистость, яркость
     const IRIS_ONLY = (DP.params.get('parts') || '') === 'iris';   // режим доводки радужки (автор, 2026-10-01): только радужка центрального глаза, крупно, без век/кожи/белка
     const IRIS_STUDY = 4.5;
     const EYE_STUDY = 2.2;            // когда показан только центральный глаз — он крупнее, для разглядывания
