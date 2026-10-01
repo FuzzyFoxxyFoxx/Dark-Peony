@@ -680,10 +680,10 @@
         ${flapGlsl}
         ${depthGlsl}
         ${G.pointsVertex}
-        uniform float uViewportScale, uSize, uTubeSway;
+        uniform float uViewportScale, uSize, uTubeSway, uCenterY;
         attribute vec3 aC, aTn;
         attribute vec2 aT;
-        varying float vFresnel, vV, vDepthK2;
+        varying float vFresnel, vV, vDepthK2, vMask;
         vec3 dpTubeSway(float v, float sd) {
             float whip = pow(v, 1.3);
             float t1 = uTime * 1.2 - v * 7.0 + sd * 9.1, t2 = uTime * 0.9 - v * 9.5 + sd * 4.3;
@@ -710,6 +710,8 @@
             vDepthK = 1.0;   // дальнее затемнение для трубок отключено (они уходят от камеры — гасли)
             vFresnel = pow(clamp(1.0 - abs(dot(normalize(normalMatrix * nrm), normalize(-mv.xyz))), 0.0, 1.0), 1.2);
             vV = v;
+            // очень мягкая маска под центральными глазами (автор: тентакли видны сквозь глаз): боковые — по расстоянию от центра цветка, висящие — по глубине под центром
+            vMask = sd > 19.0 ? smoothstep(0.55, 1.9, length(pos.xy - vec2(0.0, uCenterY))) : smoothstep(0.85, 2.4, uCenterY - pos.y);
             gl_PointSize = uSize * uViewportScale * (0.85 / (0.4 + 0.06 * dist));
             dpMorphFinish();
         }
@@ -717,12 +719,12 @@
     const tubeFragment = (G) => `
         ${G.pointsFragment}
         uniform sampler2D uTexture;
-        varying float vFresnel, vV, vDepthK;
+        varying float vFresnel, vV, vDepthK, vMask;
         void main() {
             vec4 tex = texture2D(uTexture, gl_PointCoord);
             if (tex.a < 0.02) discard;
             float tipGlow = smoothstep(0.1, 0.85, vV) * 1.4;
-            float a = tex.a * (3.4 + 3.6 * pow(vFresnel, 1.3) + tipGlow * 0.6) * smoothstep(0.05, 0.3, vV);   // как у медузы: тонкие чёткие кольца, фронтальная сторона тусклая, края колец (френель) яркие   // объём: френель (края колец ярче), у основания прозрачны (уходят в центр)   // у основания прозрачны — растут из-под центра
+            float a = tex.a * (3.4 + 3.6 * pow(vFresnel, 1.3) + tipGlow * 0.6) * smoothstep(0.05, 0.3, vV) * vMask;   // как у медузы: тонкие чёткие кольца, фронтальная сторона тусклая, края колец (френель) яркие   // объём: френель (края колец ярче), у основания прозрачны (уходят в центр)   // у основания прозрачны — растут из-под центра
             a = a / (0.45 + a * 1.2) * vDepthK;
             vec3 base = mix(vec3(0.3, 0.52, 0.8), vec3(0.8, 0.93, 1.0), vFresnel);   // фронтальная сторона кольца не чёрная — кольцо видно целиком, края светлее
             gl_FragColor = dpMorphColor(mix(base, vec3(0.45, 0.75, 1.0), smoothstep(0.4, 0.85, vV)), a, tex.a);
@@ -1151,7 +1153,7 @@
             [-0.66, 6.0, 8.3, 0.15, 0.1], [0.68, 6.3, 9.7, 0.15, 0.1],
             [-0.62, 2.3, 11.1, 0.075, 0.05], [-0.31, 2.0, 12.3, 0.07, 0.05], [0.0, 2.6, 13.5, 0.075, 0.05], [0.31, 2.1, 14.7, 0.07, 0.05], [0.62, 2.4, 15.9, 0.075, 0.05]];   // последние пять — мелкие, как у медузы
         // горизонтальные малые тентакли вместо узких лепестков на 9 и 3 ч (автор): с каждой стороны 3 — верхний подлиннее, средний самый длинный, нижний покороче; зеркально
-        const SIDE = [[8, 2.4, 0.13], [0, 2.9, 0.15], [-9, 1.7, 0.12]];   // [угол над горизонталью°, длина, радиус]
+        const SIDE = [[8, 2.88, 0.065], [0, 3.48, 0.075], [-9, 2.04, 0.06]];   // на 20% длиннее и вдвое тоньше (автор)   // [угол над горизонталью°, длина, радиус]
         if (TUBES_ON) [-1, 1].forEach(sg => SIDE.forEach(([ang, ln, rr], k) => TUBES.push([sg * 0.001, ln, 20 + k * 3.7 + (sg > 0 ? 1.3 : 0), rr, 0.05, (sd, len, kz) => { const a = ang * Math.PI / 180, e = Math.min(1, sd / 1.4), ease = 1 - Math.pow(1 - e, 2.0); return new THREE.Vector3(sg * Math.cos(a) * sd / kz * (0.6 + 0.4 * ease), FIG_Y + Math.sin(a) * sd / kz - 0.04 * sd * sd / Math.max(1, len), -SLOPE * sd / kz); }, 0.2])));   // шаг колец 0.2·r: горизонтальная трубка видна вдоль — овалы узкие, чтобы читались пружиной, а не отдельными кольцами
         const NRAD = 16, TUBE_K = 1.1, SLOPE = 0.45;   // как у медузы: 16 точек в кольце, шаг колец ≈ 0.47 радиуса; кольца СТРОГО перпендикулярны нити (автор) — овалами их делает наклон самих тентаклей от камеры (z = −SLOPE·длина), как наклон сцены у медузы   // TUBE_K — крупнее кольца: у медузы тентакли заметнее (автор)   // как у медузы: отдельные кольца, шаг ≈ радиус, кольцо наклонено к зрителю (плоскость серафима лицом к камере — иначе чёрточки)
         TUBES.forEach(([x0, len0, sdT, rad, RSTEP0, customPath, stepK]) => {
@@ -1329,7 +1331,7 @@
             const mEye = mat(eyeVertex, eyeFragment, eyeU);
             const mBack = mat(eyeVertex, eyeFragment, eyeU, { blending: THREE.NormalBlending });
             const mTend = mat(tendrilVertex, tendrilFragment, { uSize: { value: 2.0 } });
-            const mTube = mat(tubeVertex, tubeFragment, { uSize: { value: 2.3 }, uTubeSway: { value: 1.0 } });
+            const mTube = mat(tubeVertex, tubeFragment, { uSize: { value: 2.3 }, uTubeSway: { value: 1.0 }, uCenterY: { value: FIG_Y } });
             const ringU = data.RINGS.map(R => new THREE.Vector4(R.axis[0], R.axis[1], R.axis[2], R.speed));
             const mRing = mat(ringVertex, ringFragment, { uSize: { value: 2.0 }, uRing: { value: ringU }, uT0 });
 
