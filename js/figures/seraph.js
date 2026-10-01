@@ -373,7 +373,9 @@
             float base = 1.0 - smoothstep(0.0, 0.25, vU);                        // у основания — свечение
             float a = tex.a * (uLookA.x + uLookA.y * vFresnel + uLookA.z * vVein + uLookA.w * edge + uTipGlow * tip + 0.25 * base + uRollGlow * vUpE) * smoothstep(0.0, 0.06, vU);
             // цвет частицы — ТОЧНО как у лепестков пиона (peony.js): рампа mix((0.04, 0.10, 0.20) → (0.70, 0.88, 1.0), френель·1.1); яркость задаёт только альфа (как в Particular: цвет частицы один, остальное — прозрачность)
-            vec3 color = mix(vec3(0.04, 0.1, 0.2), vec3(0.7, 0.88, 1.0), clamp(vFresnel * 1.1, 0.0, 1.0));
+            float cf = clamp(vFresnel * 1.1 + 0.18 * edge, 0.0, 1.0);
+            // трёхточечная рампа с голубой серединой (по визуальному сравнению со скриншотом пиона: у пиона середина и света холодно-голубые, у серафима были нейтрально-серыми)
+            vec3 color = cf < 0.5 ? mix(vec3(0.04, 0.1, 0.2), vec3(0.15, 0.34, 0.5), cf * 2.0) : mix(vec3(0.15, 0.34, 0.5), vec3(0.72, 0.93, 1.0), (cf - 0.5) * 2.0);
             a = a / (0.45 + a * 2.0) * vDepthK * vEdgeFade * vBaseFd * smoothstep(uHoleIn, uHoleOut, vR);   // «гнездо»: лепестки к центру уходят в нулевую прозрачность, на их месте — глаз
             gl_FragColor = dpMorphColor(color, a, tex.a);
         }
