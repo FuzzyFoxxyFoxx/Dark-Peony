@@ -98,6 +98,7 @@
         ruffleSpeed: 0.64,           // рюши: темп бега волны от основания к кончику
         roll: 0.3,                   // крен лепестков креста: верхней кромкой к камере (рад, 0.3 ≈ 17°; минус — от камеры), нарастает с 15–40% длины
         look: { body: 0.03, fres: 0.19, vein: 0.15, edge: 0.68, tip: 0.8, feather: 0, featherMin: 0.15, veinSize: 0.25, edgeSize: 0.1 },   // вид листа: яркость тела/френеля/жилок/кромки, добавка к размеру точки на жилках/кромке (как у лент медузы: кромка ×4–6 к телу)
+        persp: 1.0,                  // компенсация перспективы: 1 — длина лепестка в проекции не меняется при движении к камере/от неё (0 — как раньше)
         fold: 0.15,                  // продольные складки (плиссе): размах × полуширина; 0 — гладкие листы (складки дают френель — светлые линии)
         sweepK: 0.3,                 // живая дуга оси у креста и пары 5/7 ч: множитель размаха (0 — статичная форма)
         sweepSpeed: 1.0,             // её темп
@@ -150,7 +151,7 @@
 
     // Общая деформация лепестка (колыхание, рюши, вращение, крен, раскрытие, живая дуга): одна и та же для точек лепестка и для кожи глаза, вросшего в лепесток.
     const petalDeformGlsl = `
-        uniform float uPetalFlap, uFlapAmp, uSpread, uFlapWave, uFlapVar, uFlapSpeed, uFlapFresnel, uPetTwist, uPetTwistSpeed, uRufAmp, uRufK, uRufSpeed, uOpenK, uCalm, uTwShape, uRoll, uSideRoll, uLatAmp, uTwLim, uSweepK, uSweepSpeed, uFold;
+        uniform float uPetalFlap, uFlapAmp, uSpread, uFlapWave, uFlapVar, uFlapSpeed, uFlapFresnel, uPetTwist, uPetTwistSpeed, uRufAmp, uRufK, uRufSpeed, uOpenK, uCalm, uTwShape, uRoll, uSideRoll, uLatAmp, uTwLim, uSweepK, uSweepSpeed, uFold, uPersp, uCenterY;
         // Колыхание с переменной длиной и высотой волны: фаза искажена медленными синусами (местная длина волны гуляет вдоль лепестка и во времени),
         // высота — огибающая из бегущих «пакетов»; вторая, короткая волна добавляет рябь к кончику.
         // Рюши кромки — по принципу лент медузы (кривая Безье по вершинам, dpBezWave в jellyfish.js): вершины чередуются влево-вправо, высота своя у каждой,
@@ -299,6 +300,8 @@
                 pos.z = ol * os + pos.z * oc;
                 pos.xy = B.xy + vec2(sin(B.z), cos(B.z)) * nl + vec2(cos(B.z), -sin(B.z)) * ocr;
             }
+            // Компенсация перспективы (автор: «лепестки вытягиваются и стягиваются»): смещение к камере (колыхание, вращение, раскрытие) увеличивало проекцию — кончик «вылезал». Сжимаем xy на (1 − z/D): проекция остаётся прежней, меняются освещение и нормали.
+            { vec2 cc = vec2(0.0, uCenterY); pos.xy = cc + (pos.xy - cc) * (1.0 - uPersp * clamp(pos.z, -1.5, 1.5) / 7.7); }
             pos.y += uPetalFlap * dpBob();
             // нормаль следует за изгибом (иначе френель считался бы по нормали покоя и волны не подсвечивались):
             // наклон поверхности вдоль оси = производная смещения z по длине (конечная разность) + наклон от «распускания»
@@ -321,7 +324,6 @@
         uniform vec2 uLookS;                                 // x — прибавка размера точки на жилках, y — на кромке
         attribute vec4 aP;
         attribute float aL, aSizeScale, aVein, aHW;
-        uniform float uCenterY;                              // центр цветка по высоте (основания лепестков теперь смещены — от них центр не взять)
         uniform vec2 uFeather;                               // x — ширина мягкого края (мировые ед.), y — прозрачность самой крайней нити
         varying float vEdgeFade, vBaseFd;
         attribute vec4 aK;                                   // x — раскрытие (наклон к зрителю, рад), y — множитель вращения вокруг оси, z — множитель колыхания, w — крен верхней кромки к камере (1 — у креста)
@@ -689,6 +691,7 @@
             vec3 dpRest = position;
             float v = aT.x, sd = aT.y;
             vec3 sw = dpTubeSway(v, sd);
+            sw.x += aC.x * 0.22 * sin(uTime * 0.55 + sd * 3.1) * smoothstep(0.03, 0.45, v);   // «дыхание» разбега у основания: угол между тентаклями меняется
             vec3 swD = (dpTubeSway(min(v + 0.01, 1.0), sd) - dpTubeSway(max(v - 0.01, 0.0), sd)) / 0.02;
             vec3 ta = normalize(aTn), tb = normalize(aTn + swD), ax = cross(ta, tb);
             float cs = dot(ta, tb);
@@ -867,7 +870,7 @@
         { name: 'экваториальный 2, УЗКИЙ длинный (9 и 3 ч): ланцет / кукурузный лист', keys: ['F', 'E'], L: 1.84, ex: 0.8, wm: 0.55 },
         { name: 'нижнее крыло креста (≈3.5 и 8.5 ч) — САМЫЙ БОЛЬШОЙ: асимметричная линза / ложка', keys: ['H', 'H'], L: 3.58, ex: 1.0, wm: 1.0, wb: 0, curve: -0.08 },
         { name: 'нижние на 5 и 7 часов: ланцет / асимметричная линза', keys: ['E', 'D'], L: 2.53, ex: 0.9, wm: 1.0 },
-        { name: 'тентакли на 6 ч, узкие внутренние: кукурузный лист / ланцет', keys: ['F', 'E'], L: 3.3, ex: 1.0, wm: 0.45 },
+        { name: 'тентакли на 6 ч, узкие внутренние: кукурузный лист / ланцет', keys: ['F', 'E'], L: 3.3, ex: 1.0, wm: 0.85 },
         { name: 'тентакли на 6 ч, узкие внешние: кукурузный лист / асимметричная линза', keys: ['F', 'D'], L: 4.03, ex: 1.0, wm: 0.45 },
         { name: 'тентакли на 6 ч, толстая пара: кукурузный лист / асимметричная линза', keys: ['F', 'D'], L: 3.34, ex: 1.0, wm: 0.8 },
         { name: 'тентакль на 6 ч, толстый по центру: кукурузный лист / ланцет', keys: ['F', 'E'], L: 3.45, ex: 1.0, wm: 0.85 },
@@ -1140,14 +1143,14 @@
         // ---------- ТЕНТАКЛИ МЕДУЗНОГО ТИПА (трубки из колец) ----------
         const bp = [], bn = [], bc = [], btn = [], bt = [];
         // [x, длина, seed, радиус у основания, шаг колец]: все выходят из ОДНОЙ точки в центре цветка, у начала расходятся каждая в свою сторону, потом плавно свисают вниз (набросок автора: контур пучка — сужается к центру)
-        const TUBES = [[-0.62, 4.6, 0.7, 0.10, 0.085], [-0.30, 4.9, 3.1, 0.11, 0.085], [0.0, 4.4, 5.4, 0.10, 0.085], [0.30, 4.8, 6.6, 0.11, 0.085], [0.64, 4.5, 7.9, 0.10, 0.085],
-            [-0.95, 6.0, 8.3, 0.15, 0.095], [0.98, 6.3, 9.7, 0.15, 0.095],
+        const TUBES = [[-0.34, 4.6, 0.7, 0.10, 0.085], [-0.17, 4.9, 3.1, 0.11, 0.085], [0.0, 4.4, 5.4, 0.10, 0.085], [0.17, 4.8, 6.6, 0.11, 0.085], [0.35, 4.5, 7.9, 0.10, 0.085],
+            [-0.58, 6.0, 8.3, 0.15, 0.095], [0.6, 6.3, 9.7, 0.15, 0.095],
             [-0.45, 2.3, 11.1, 0.055, 0.05], [-0.15, 2.0, 12.3, 0.05, 0.05], [0.18, 2.6, 13.5, 0.055, 0.05], [0.46, 2.1, 14.7, 0.05, 0.05], [0.78, 2.4, 15.9, 0.055, 0.05]];   // последние пять — мелкие, как у медузы
         const NRAD = 18, TILT = 0.85;   // как у медузы: отдельные кольца, шаг ≈ радиус, кольцо наклонено к зрителю (плоскость серафима лицом к камере — иначе чёрточки)
         TUBES.forEach(([x0, len, sdT, rad, RSTEP]) => {
             const pts = [];
             for (let q = 0; q <= 48; q++) {
-                const sd = q / 48 * len, t = sd / len, e = Math.min(1, sd / 1.7), sp = e * e * (3 - 2 * e);   // расходятся из точки за ≈1.7 ед. длины
+                const sd = q / 48 * len, t = sd / len, e = Math.min(1, sd / 2.8), sp = e * e * (3 - 2 * e);   // расходятся из точки плавно, за ≈2.8 ед. длины (угол мягкий; автор: «слишком жёстко и растопырены»)
                 pts.push(new THREE.Vector3(x0 * sp * (1 + 0.1 * t) + Math.sin(t * Math.PI * 1.3 + sdT) * 0.18 * t, FIG_Y - 0.3 - sd, Math.cos(t * Math.PI * 0.9 + sdT * 1.3) * 0.2 * t * sp));
             }
             const path = new THREE.CatmullRomCurve3(pts), segs = Math.round(len / RSTEP), frames = path.computeFrenetFrames(segs, false), Lp = path.getLength();
@@ -1294,7 +1297,7 @@
                 eyeR.push(new THREE.Vector4(E.roll, (main ? show('eye') : show('eyes')) && i < data.eyes.length ? 1 : 0, 0, 0));
             }
             const uT0 = { value: 0 };
-            const petalU = { uCenterY: { value: FIG_Y }, uPetalFlap: { get value() { return DP.config.seraphPetal.flap; } }, uFlapAmp: { get value() { return DP.config.seraphPetal.flapAmp; } }, uSpread: { get value() { return DP.config.seraphPetal.spread; } }, uFlapWave: { get value() { return DP.config.seraphPetal.flapWave; } }, uFlapVar: { get value() { return DP.config.seraphPetal.flapVar; } }, uPetTwist: { get value() { return DP.config.seraphPetal.twist; } }, uPetTwistSpeed: { get value() { return DP.config.seraphPetal.twistSpeed; } }, uRufAmp: { get value() { return DP.config.seraphPetal.ruffleAmp; } }, uRufK: { get value() { return DP.config.seraphPetal.ruffleK; } }, uRufSpeed: { get value() { return DP.config.seraphPetal.ruffleSpeed; } }, uLookA: { get value() { const L = DP.config.seraphPetal.look; return lookA.set(L.body, L.fres, L.vein, L.edge); } }, uLookS: { get value() { const L = DP.config.seraphPetal.look; return lookS.set(L.veinSize, L.edgeSize); } }, uTipGlow: { get value() { return DP.config.seraphPetal.look.tip; } }, uFeather: { get value() { const L = DP.config.seraphPetal.look; return lookF.set(L.feather, L.featherMin); } }, uHoleIn: { get value() { return DP.config.seraphPetal.holeIn; } }, uHoleOut: { get value() { return DP.config.seraphPetal.holeOut; } }, uRollGlow: { get value() { return DP.config.seraphPetal.rollGlow; } }, uFold: { get value() { return DP.config.seraphPetal.fold; } }, uSweepK: { get value() { return DP.config.seraphPetal.sweepK; } }, uSweepSpeed: { get value() { return DP.config.seraphPetal.sweepSpeed; } }, uTwLim: { get value() { return DP.config.seraphPetal.twistLimit; } }, uLatAmp: { get value() { return DP.config.seraphPetal.latAmp; } }, uSideRoll: { get value() { return DP.config.seraphPetal.sideRoll; } }, uRoll: { get value() { return DP.config.seraphPetal.roll; } }, uCalm: { get value() { return DP.config.seraphPetal.calm; } }, uTwShape: { get value() { return DP.config.seraphPetal.twistShape; } }, uOpenK: { get value() { return DP.config.seraphPetal.openK; } }, uFlapFresnel: { get value() { return DP.config.seraphPetal.flapFresnel; } }, uFlapSpeed: { get value() { return DP.config.seraphPetal.flapSpeed; } } };
+            const petalU = { uCenterY: { value: FIG_Y }, uPetalFlap: { get value() { return DP.config.seraphPetal.flap; } }, uFlapAmp: { get value() { return DP.config.seraphPetal.flapAmp; } }, uSpread: { get value() { return DP.config.seraphPetal.spread; } }, uFlapWave: { get value() { return DP.config.seraphPetal.flapWave; } }, uFlapVar: { get value() { return DP.config.seraphPetal.flapVar; } }, uPetTwist: { get value() { return DP.config.seraphPetal.twist; } }, uPetTwistSpeed: { get value() { return DP.config.seraphPetal.twistSpeed; } }, uRufAmp: { get value() { return DP.config.seraphPetal.ruffleAmp; } }, uRufK: { get value() { return DP.config.seraphPetal.ruffleK; } }, uRufSpeed: { get value() { return DP.config.seraphPetal.ruffleSpeed; } }, uLookA: { get value() { const L = DP.config.seraphPetal.look; return lookA.set(L.body, L.fres, L.vein, L.edge); } }, uLookS: { get value() { const L = DP.config.seraphPetal.look; return lookS.set(L.veinSize, L.edgeSize); } }, uTipGlow: { get value() { return DP.config.seraphPetal.look.tip; } }, uFeather: { get value() { const L = DP.config.seraphPetal.look; return lookF.set(L.feather, L.featherMin); } }, uHoleIn: { get value() { return DP.config.seraphPetal.holeIn; } }, uHoleOut: { get value() { return DP.config.seraphPetal.holeOut; } }, uRollGlow: { get value() { return DP.config.seraphPetal.rollGlow; } }, uFold: { get value() { return DP.config.seraphPetal.fold; } }, uPersp: { get value() { return DP.config.seraphPetal.persp; } }, uSweepK: { get value() { return DP.config.seraphPetal.sweepK; } }, uSweepSpeed: { get value() { return DP.config.seraphPetal.sweepSpeed; } }, uTwLim: { get value() { return DP.config.seraphPetal.twistLimit; } }, uLatAmp: { get value() { return DP.config.seraphPetal.latAmp; } }, uSideRoll: { get value() { return DP.config.seraphPetal.sideRoll; } }, uRoll: { get value() { return DP.config.seraphPetal.roll; } }, uCalm: { get value() { return DP.config.seraphPetal.calm; } }, uTwShape: { get value() { return DP.config.seraphPetal.twistShape; } }, uOpenK: { get value() { return DP.config.seraphPetal.openK; } }, uFlapFresnel: { get value() { return DP.config.seraphPetal.flapFresnel; } }, uFlapSpeed: { get value() { return DP.config.seraphPetal.flapSpeed; } } };
             const mPetal = mat(petalVertex, petalFragment, Object.assign({ uSize: { value: 2.0 } }, petalU));;
             const EL = DP.config.seraphEye;
             const eyeU = Object.assign({ uSize: { value: 1.9 },
