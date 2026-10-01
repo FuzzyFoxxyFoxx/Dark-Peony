@@ -132,7 +132,7 @@
     const CROSS = [2, 3, 8, 9];
     const keepPetal = (only, k) => only === -1 || (only === -2 ? CROSS.indexOf(k) >= 0 : k === only);
     const EYE_SCALE = 1.36;           // центральный глаз в сборке крупнее (на эскизе — размером с основания лепестков)
-    DP.config.seraphIris = Object.assign({ flow: true, fibers: 450, per: 2, tail: 20, life: 4.0, speed: 1.0, freq: 2.0, clump: 0.15, wave: 0.75, gain: 3.5 }, DP.config.seraphIris || {});   // радужка-поток: волокон на 0.46 ширины глаза, частиц на волокно, хвост, секунд на пробег, темп, число «вен», стягивание, волнистость, яркость
+    DP.config.seraphIris = Object.assign({ flow: true, fibers: 450, per: 2, tail: 20, life: 4.0, speed: 1.0, freq: 2.0, clump: 0.15, wave: 0.75, gain: 3.5, drift: 0.18, flare: 1.0, flareSpeed: 1.0 }, DP.config.seraphIris || {});   // радужка-поток: волокон на 0.46 ширины глаза, частиц на волокно, хвост, секунд на пробег, темп, число «вен», стягивание, волнистость, яркость
     const IRIS_ONLY = (DP.params.get('parts') || '') === 'iris';   // режим доводки радужки (автор, 2026-10-01): только радужка центрального глаза, крупно, без век/кожи/белка
     const IRIS_STUDY = 4.5;
     const EYE_STUDY = 2.2;            // когда показан только центральный глаз — он крупнее, для разглядывания
@@ -573,7 +573,7 @@
         ${petalDeformGlsl}
         uniform float uViewportScale, uSize;
         uniform vec4 uGaze[${MAX_EYES}];
-        uniform float uIrisOnly, uIrisSpeed, uIrisFreq, uIrisClump, uIrisWave;
+        uniform float uIrisOnly, uIrisSpeed, uIrisFreq, uIrisClump, uIrisWave, uIrisDrift, uIrisFlare, uIrisFlareSpeed;
         uniform vec4 uEyeC[${MAX_EYES}];     // центр (x, y, z) и полуширина
         uniform vec4 uEyeR[${MAX_EYES}];     // x — поворот в плоскости, y — глаз показан
         uniform float uEdgeFade, uCornea, uLidFollow, uLidLocal, uLidW, uLidSide;
@@ -600,7 +600,7 @@
                 gLid = vec4(sin(gz.x * 0.55) * E_RB * uLidSide, gu * lcU, gl * lc, uLidW);
                 oU += gu * (1.0 - lcU); oL += gl * (1.0 - lc);
             }
-            float stretch = 1.0;
+            float stretch = 1.0, irisSz = 1.0;
             vec3 loc, nrmW = vec3(0.0, 0.0, 1.0); vA = 1.0; vFres = 0.0; vRim = 0.0; vLit = 0.0; vShade = 1.0; vHalo = 0.0;
             if (kind < 0.5) {                                  // кожа
                 vec2 q = eSkin(aQ, oU, oL);
@@ -656,7 +656,7 @@
                         for (int i = 0; i < 10; i++) {
                             float u = (float(i) + 0.5) / 10.0 * s;
                             vec2 rd = pp / max(length(pp), 1e-3);
-                            vec3 q3 = vec3(pp * uIrisFreq, uTime * 0.06 + r2 * 0.3);
+                            vec3 q3 = vec3(pp * uIrisFreq, uTime * uIrisDrift + r2 * 0.3);
                             vec4 n1 = dpSnoiseGrad(q3), n2 = dpSnoiseGrad(q3 * 2.3 + vec3(7.1, 3.3, 1.7));
                             vec2 cu = vec2(n1.y, -n1.x) + 0.5 * vec2(n2.y, -n2.x), gr = n1.xy + 0.5 * n2.xy;
                             float amp = smoothstep(0.0, 0.3, u) * uIrisWave;
@@ -666,7 +666,15 @@
                         tt = clamp((rr - 0.4) / 0.6, 0.0, 1.0);
                         ph = atan(pp.y, pp.x);
                         float cl = smoothstep(0.2, 0.9, tt) * uIrisClump;
-                        irisFl = smoothstep(0.0, 0.1, s) * (1.0 - smoothstep(0.62 + 0.3 * r1, 1.0, s)) * (1.0 - smoothstep(0.9, 1.02, rr)) * smoothstep(0.39, 0.45, rr);
+                        // ЖИЗНЬ ЧАСТИЦЫ (как в Particular, автор): прозрачность линейно 100% → 0 за всю жизнь (рождается из нуля за первые ~4%); размер: из нуля за 5%, потом постоянный до 70% жизни, затем плавно в ноль
+                        irisFl = smoothstep(0.0, 0.04, s) * (1.0 - s) * (1.0 - smoothstep(0.9, 1.02, rr)) * smoothstep(0.39, 0.45, rr);
+                        irisSz = smoothstep(0.0, 0.05, s) * (1.0 - smoothstep(0.7, 1.0, s));
+                        // ВСПОЛОХИ (как по оку Саурона): неоднородные волны яркости бегут от зрачка к краю
+                        float fa = atan(pp.y, pp.x);
+                        float fl = dpSnoise(vec3(cos(fa) * 1.6, sin(fa) * 1.6, tt * 2.6 - uTime * 0.9 * uIrisFlareSpeed));
+                        float flare = smoothstep(0.15, 0.75, fl) * uIrisFlare;
+                        irisSz *= 1.0 + 0.6 * flare;
+                        cl = cl + 1.1 * flare;
                         irisB = 0.55 + 0.95 * cl;
                     }
                     float th = mix(E_IRIS * E_PUP * gz.z, E_IRIS, tt);
@@ -699,7 +707,7 @@
             float dist = max(-mv.z, 0.1);
             ${depthVert}
             vKind = kind;
-            gl_PointSize = uSize * uViewportScale * (0.7 + aSizeScale * 0.5) * (kind > 4.5 ? 3.2 : (kind > 3.5 ? 0.7 : 1.0)) * min(2.2, sqrt(stretch)) / (0.35 + 0.06 * dist);
+            gl_PointSize = irisSz * uSize * uViewportScale * (0.7 + aSizeScale * 0.5) * (kind > 4.5 ? 3.2 : (kind > 3.5 ? 0.7 : 1.0)) * min(2.2, sqrt(stretch)) / (0.35 + 0.06 * dist);
             dpMorphFinish();
             // спрятать: глаз не показан или точка закрыта (размер 0 на Metal не прячет — выносим за экран)
             if (kind < 4.5) vA *= aF.x;   // затухание у кромки лепестка (кожа/белок/радужка не выходят за лепесток)
@@ -1397,7 +1405,7 @@
             const petalU = { uBlueLift: { get value() { return DP.config.seraphPetal.blueLift; } }, uRedK: { get value() { return DP.config.seraphPetal.redK; } }, uSatK: { get value() { return DP.config.seraphPetal.satK; } }, uCenterY: { value: FIG_Y }, uPetalFlap: { get value() { return DP.config.seraphPetal.flap; } }, uFlapAmp: { get value() { return DP.config.seraphPetal.flapAmp; } }, uSpread: { get value() { return DP.config.seraphPetal.spread; } }, uFlapWave: { get value() { return DP.config.seraphPetal.flapWave; } }, uFlapVar: { get value() { return DP.config.seraphPetal.flapVar; } }, uPetTwist: { get value() { return DP.config.seraphPetal.twist; } }, uPetTwistSpeed: { get value() { return DP.config.seraphPetal.twistSpeed; } }, uRufAmp: { get value() { return DP.config.seraphPetal.ruffleAmp; } }, uRufK: { get value() { return DP.config.seraphPetal.ruffleK; } }, uRufSpeed: { get value() { return DP.config.seraphPetal.ruffleSpeed; } }, uLookA: { get value() { const L = DP.config.seraphPetal.look; return lookA.set(L.body, L.fres, L.vein, L.edge); } }, uLookS: { get value() { const L = DP.config.seraphPetal.look; return lookS.set(L.veinSize, L.edgeSize); } }, uTipGlow: { get value() { return DP.config.seraphPetal.look.tip; } }, uFeather: { get value() { const L = DP.config.seraphPetal.look; return lookF.set(L.feather, L.featherMin); } }, uHoleIn: { get value() { return DP.config.seraphPetal.holeIn; } }, uHoleOut: { get value() { return DP.config.seraphPetal.holeOut; } }, uRollGlow: { get value() { return DP.config.seraphPetal.rollGlow; } }, uFold: { get value() { return DP.config.seraphPetal.fold; } }, uLatCross: { get value() { return DP.config.seraphPetal.latCross; } }, uPersp: { get value() { return DP.config.seraphPetal.persp; } }, uSweepK: { get value() { return DP.config.seraphPetal.sweepK; } }, uSweepSpeed: { get value() { return DP.config.seraphPetal.sweepSpeed; } }, uTwLim: { get value() { return DP.config.seraphPetal.twistLimit; } }, uLatAmp: { get value() { return DP.config.seraphPetal.latAmp; } }, uSideRoll: { get value() { return DP.config.seraphPetal.sideRoll; } }, uRoll: { get value() { return DP.config.seraphPetal.roll; } }, uCalm: { get value() { return DP.config.seraphPetal.calm; } }, uTwShape: { get value() { return DP.config.seraphPetal.twistShape; } }, uOpenK: { get value() { return DP.config.seraphPetal.openK; } }, uFlapFresnel: { get value() { return DP.config.seraphPetal.flapFresnel; } }, uFlapSpeed: { get value() { return DP.config.seraphPetal.flapSpeed; } } };
             const mPetal = mat(petalVertex, petalFragment, Object.assign({ uSize: { value: 2.0 } }, petalU));;
             const EL = DP.config.seraphEye;
-            const eyeU = Object.assign({ uIrisSpeed: { get value() { return DP.config.seraphIris.speed; } }, uIrisFreq: { get value() { return DP.config.seraphIris.freq; } }, uIrisClump: { get value() { return DP.config.seraphIris.clump; } }, uIrisWave: { get value() { return DP.config.seraphIris.wave; } }, uIrisGain: { get value() { return DP.config.seraphIris.gain; } }, uIrisOnly: { value: IRIS_ONLY ? 1 : 0 }, uSize: { value: IRIS_ONLY ? 2.6 : 1.9 },
+            const eyeU = Object.assign({ uIrisSpeed: { get value() { return DP.config.seraphIris.speed; } }, uIrisFreq: { get value() { return DP.config.seraphIris.freq; } }, uIrisDrift: { get value() { return DP.config.seraphIris.drift; } }, uIrisFlare: { get value() { return DP.config.seraphIris.flare; } }, uIrisFlareSpeed: { get value() { return DP.config.seraphIris.flareSpeed; } }, uIrisClump: { get value() { return DP.config.seraphIris.clump; } }, uIrisWave: { get value() { return DP.config.seraphIris.wave; } }, uIrisGain: { get value() { return DP.config.seraphIris.gain; } }, uIrisOnly: { value: IRIS_ONLY ? 1 : 0 }, uSize: { value: IRIS_ONLY ? 2.6 : 1.9 },
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
                 uEdgeFade: { get value() { return EL.edgeFade; } },
                 uCornea: { get value() { return EL.cornea; } },
