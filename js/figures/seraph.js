@@ -126,7 +126,7 @@
     // Доводим по частям, как медузу и светило ('' — все). ?parts= в адресе важнее.
     // petals — лепестки, eye — центральный глаз, eyes — малые глаза, tendrils — усики, rings — кольца.
     // petalN (petal1 — верхний правый) — только один лепесток (доводка по одному, как глаз; потом — по его образцу все остальные).
-    const DEFAULT_PARTS = 'petals,eye,eyes';
+    const DEFAULT_PARTS = 'petals,eye,eyes,rings';
     const onlyPetalOf = (parts) => { const m = /petal(\d+)/.exec(parts || ''); return m ? +m[1] : (/cross/.test(parts || '') ? -2 : -1); };
     // cross — «андреевский крест»: четыре самых крупных лепестка (диагональные верхние 2, 3 и нижние крылья 8, 9); остальные добавим между ними позже.
     const CROSS = [2, 3, 8, 9];
@@ -573,6 +573,9 @@
         ${petalDeformGlsl}
         uniform float uViewportScale, uSize;
         uniform vec4 uGaze[${MAX_EYES}];
+        uniform vec4 uRing[3];
+        uniform mat3 uRingM[3];
+        uniform float uT0;
         uniform float uIrisOnly, uIrisSpeed, uIrisFreq, uIrisClump, uIrisWave, uIrisDrift, uIrisFlare, uIrisFlareSpeed, uRingGain, uRimIris, uIrisDie, uRingMid, uRingFrom, uDieSoft;
         uniform vec4 uEyeC[${MAX_EYES}];     // центр (x, y, z) и полуширина
         uniform vec4 uEyeR[${MAX_EYES}];     // x — поворот в плоскости, y — глаз показан
@@ -713,6 +716,14 @@
                 vec2 dd = pos.xy - aEB.xy;
                 float uE = clamp(dot(dd, vec2(sin(aEB.z), cos(aEB.z))) / aP.w, 0.02, 0.98), vE = clamp(dot(dd, vec2(cos(aEB.z), -sin(aEB.z))) / max(aEB.w, 0.1), -1.0, 1.0);
                 dpPetalDeform(pos, nrmW, uE, vE, aP.y, aP.z, aP.w, aEB.xyz, aEK, aEQ.xy, aEQ.z, aEB.w);
+            } else if (aP.x < -1.5) {                          // глаз на кольце: плоскость кольца, вращение по кольцу вокруг нормали, наклон не меняется
+                int ri = int(aEB.x + 0.5);
+                mat3 RM = uRingM[0]; vec4 Rg = uRing[0];
+                for (int i = 0; i < 3; i++) if (i == ri) { RM = uRingM[i]; Rg = uRing[i]; }
+                float ang = aEB.y + Rg.w * (uTime - uT0);
+                vec3 cR = RM * vec3(cos(ang), sin(ang), 0.0), tT = RM * vec3(-sin(ang), cos(ang), 0.0), nN = RM * vec3(0.0, 0.0, 1.0);
+                pos = vec3(0.0, ${FIG_Y.toFixed(3)}, 0.0) + aEB.z * cR + ec.w * (loc.x * tT + loc.y * cR + loc.z * nN);
+                nrmW = nrmW.x * tT + nrmW.y * cR + nrmW.z * nN;
             } else pos.y += dpBob();
             vec3 dpRest = position;
             vec4 mv = viewMatrix * dpMorph(dpRest, pos);
@@ -855,7 +866,10 @@
         ${G.pointsVertex}
         uniform float uTime, uT0, uViewportScale, uSize;
         uniform vec4 uRing[3];
+        uniform mat3 uRingM[3];
+        uniform vec3 uRingP[3];            // x — радиус кольца, y — размер глаза
         attribute vec2 aR;
+        attribute vec3 aL;
         varying float vA;
         vec3 rotAxis(vec3 p, vec3 ax, float a) { float c = cos(a), s = sin(a); return p * c + cross(ax, p) * s + ax * dot(ax, p) * (1.0 - c); }
         void main() {
@@ -864,12 +878,19 @@
             vec4 R = uRing[0];
             for (int i = 0; i < 3; i++) if (i == ri) R = uRing[i];
             vec3 pos = rotAxis(position - vec3(0.0, ${FIG_Y.toFixed(3)}, 0.0), normalize(R.xyz), R.w * (uTime - uT0)) + vec3(0.0, ${FIG_Y.toFixed(3)}, 0.0);
+            if (aL.x > -9.0) {                                                   // простой глаз на кольце: считается по текущему углу (вращение в плоскости кольца)
+                mat3 RM = uRingM[0]; vec3 Pq = uRingP[0];
+                for (int i = 0; i < 3; i++) if (i == ri) { RM = uRingM[i]; Pq = uRingP[i]; }
+                float an = aL.x + R.w * (uTime - uT0);
+                vec3 cR = RM * vec3(cos(an), sin(an), 0.0), tT = RM * vec3(-sin(an), cos(an), 0.0);
+                pos = vec3(0.0, ${FIG_Y.toFixed(3)}, 0.0) + Pq.x * cR + Pq.y * (aL.y * tT + aL.z * cR);
+            }
             vec4 mv = viewMatrix * dpMorph(dpRest, pos);
             gl_Position = projectionMatrix * mv;
             float dist = max(-mv.z, 0.1);
             ${depthVert}
             vA = aR.y;
-            gl_PointSize = uSize * uViewportScale * (0.85 / (0.4 + 0.06 * dist));
+            gl_PointSize = uSize * uViewportScale * (0.85 / (0.4 + 0.06 * dist)) * (aL.x > -9.0 ? 0.8 : 1.0);
             dpMorphFinish();
         }
     `;
@@ -880,7 +901,7 @@
         void main() {
             vec4 tex = texture2D(uTexture, gl_PointCoord);
             if (tex.a < 0.01) discard;
-            gl_FragColor = dpMorphColor(vec3(0.62, 0.8, 1.0), tex.a * vA * 1.0 * vDepthK, tex.a);
+            gl_FragColor = dpMorphColor(vec3(0.62, 0.8, 1.0), tex.a * vA * 2.2, tex.a);   // орбиты ярче (автор: кольца как на эскизе, видны); без дальнего затемнения
         }
     `;
 
@@ -1094,6 +1115,14 @@
             return { P, c: [c[0], c[1], c[2] + 0.02], w: E.k ? E.k * hw : E.w, roll, att: [E.u, P.ph, P.seed, P.L], pet: { B: [b0[0], b0[1], P.a, hw], K: [P.open || 0, P.twK === undefined ? 1 : P.twK, P.flK === undefined ? 1 : P.flK, P.roll || 0], Q: [P.sideRoll || 0, P.latLim || 0, P.swp || 0] } };
         });
         DP.seraphStats.eyeInfo = eyes.map((E, i) => ({ i, w: +E.w.toFixed(3), hw: E.pet ? +E.pet.B[3].toFixed(3) : null }));
+        // КОЛЬЦА-ОРБИТЫ (эскиз автора): круг лицом к зрителю + два вытянутых эллипса (в экране: один идёт вниз-вправо, другой вверх-вправо). Ориентация КАЖДОГО кольца ФИКСИРОВАНА,
+        // кольцо вращается только вокруг СВОЕЙ нормали (в своей плоскости, наклон не меняется). На кольцах — глаза (в плоскости кольца, смотрят по нормали), вместо звёздочек.
+        const RING_DEFS = [
+            { r: 3.1, phi: 0.0, th: 0.0, speed: 0.05, eyes: [0.5, 2.6, 4.7], w: 0.4 },
+            { r: 4.0, phi: 1.22, th: -0.38, speed: -0.035, eyes: [1.0, 3.2, 5.3], w: 0.5 },
+            { r: 3.8, phi: 1.15, th: 0.34, speed: 0.03, eyes: [2.1, 5.2], w: 0.5 }
+        ];
+        const ringM4 = (R) => new THREE.Matrix4().makeRotationZ(R.th).multiply(new THREE.Matrix4().makeRotationX(R.phi));
         const partsNow = DP.params.get('parts') || DEFAULT_PARTS;
         const ep = [], ee = [], eq = [], ef = [], eatt = [], es = [], eS = [], eEB = [], eEK = [], eEQ = [];
         eyes.forEach((E, i) => {
@@ -1122,7 +1151,7 @@
             const domeC = (x, y) => eyeSurfZ(x, y);                                // = eSurf(...).z (GLSL)
             let sd = i * 977.1;
             // кожа: сетка рядками (как у лепестков), без точек в разрезе (глаз открыт)
-            const dens = E.main ? 1 : 0.55;                                   // малые глаза — втрое-вдвое реже (вес; на таком размере деталей всё равно не видно)
+            const dens = E.main ? 1 : (E.ring ? 0.3 : 0.55);                                   // малые глаза — втрое-вдвое реже (вес; на таком размере деталей всё равно не видно)
             const hStep = 0.0105 / wShow * Math.sqrt(1 / Math.max(0.3, q)) / Math.sqrt(dens);
             if (DP.params.get('eyerows') === '0') {                          // прежняя декартова сетка (для сравнения): ступенчатый край разреза
                 const nX = Math.ceil(2 * EYE.ax / hStep), nY = Math.ceil(2 * EYE.ay / (hStep * 1.25));
@@ -1218,7 +1247,7 @@
         // «подложка» под малыми глазами: тёмное пятно (обычное смешивание, рисуется после лепестков и до глаз) — прожилки лепестков не просвечивают сквозь глаз. Точки подложки (kind 5) — в конце массивов.
         const nMainEye = ep.length / 3;
         eyes.forEach((E, i) => {
-            if (E.main) return;
+            if (E.main || E.ring) return;   // подложка под глазами на кольцах не нужна (кольца висят в пустоте)
             const step = 0.02 / E.w, bx = E.pet ? 1.45 : 2.1, by = E.pet ? 0.95 : 1.35;   // подложка нижнего (не на лепестке) глаза шире: сквозь его белок были видны лепестки и тентакли
             for (let y = -by; y <= by; y += step * 0.9) for (let x = -bx; x <= bx; x += step) {
                 if ((x / bx) ** 2 + (y / by) ** 2 > 1) continue;
@@ -1271,7 +1300,7 @@
             [-0.66, 6.0, 8.3, 0.15, 0.1], [0.68, 6.3, 9.7, 0.15, 0.1],
             [-0.62, 2.3, 11.1, 0.075, 0.05], [-0.31, 2.0, 12.3, 0.07, 0.05], [0.0, 2.6, 13.5, 0.075, 0.05], [0.31, 2.1, 14.7, 0.07, 0.05], [0.62, 2.4, 15.9, 0.075, 0.05]];   // последние пять — мелкие, как у медузы
         // горизонтальные малые тентакли вместо узких лепестков на 9 и 3 ч (автор): с каждой стороны 3 — верхний подлиннее, средний самый длинный, нижний покороче; зеркально
-        const SIDE = [[8, 2.88, 0.065], [0, 3.48, 0.075], [-9, 2.04, 0.06]];   // на 20% длиннее и вдвое тоньше (автор)   // [угол над горизонталью°, длина, радиус]
+        const SIDE = [[8, 3.31, 0.065], [0, 4.0, 0.075], [-9, 2.35, 0.06]];   // на 20% длиннее и вдвое тоньше (автор)   // [угол над горизонталью°, длина, радиус]
         if (TUBES_ON) [-1, 1].forEach(sg => SIDE.forEach(([ang, ln, rr], k) => TUBES.push([sg * 0.001, ln, 20 + k * 3.7 + (sg > 0 ? 1.3 : 0), rr, 0.05, (sd, len, kz) => { const a = ang * Math.PI / 180, e = Math.min(1, sd / 1.4), ease = 1 - Math.pow(1 - e, 2.0); return new THREE.Vector3(sg * Math.cos(a) * sd / kz * (0.6 + 0.4 * ease), FIG_Y + Math.sin(a) * sd / kz - 0.04 * sd * sd / Math.max(1, len), -0.95 * sd / kz); }, 0.4])));   // горизонтальные уходят от камеры сильнее (z −0.95·длины): кольца перпендикулярны оси, и видны овалами только если ось не лежит в плоскости экрана   // шаг колец 0.2·r: горизонтальная трубка видна вдоль — овалы узкие, чтобы читались пружиной, а не отдельными кольцами
         const NRAD = 16, TUBE_K = 1.1, SLOPE = 0.45;   // как у медузы: 16 точек в кольце, шаг колец ≈ 0.47 радиуса; кольца СТРОГО перпендикулярны нити (автор) — овалами их делает наклон самих тентаклей от камеры (z = −SLOPE·длина), как наклон сцены у медузы   // TUBE_K — крупнее кольца: у медузы тентакли заметнее (автор)   // как у медузы: отдельные кольца, шаг ≈ радиус, кольцо наклонено к зрителю (плоскость серафима лицом к камере — иначе чёрточки)
         TUBES.forEach(([x0, len0, sdT, rad, RSTEP0, customPath, stepK]) => {
@@ -1302,32 +1331,32 @@
         DP.seraphStats.tubes = bp.length / 3;
 
         // ---------- КОЛЬЦА ----------
-        const RINGS = [
-            { r: 2.55, tilt: [0.25, 0, 0.1], axis: [0.1, 1, 0.15], speed: 0.07 },
-            { r: 2.85, tilt: [1.2, 0.3, 0], axis: [0.3, 0.2, 1], speed: -0.05 },
-            { r: 3.1, tilt: [0.6, -0.8, 0.4], axis: [1, 0.4, 0.2], speed: 0.035 }
-        ];
-        const rp = [], ra = [];
+        const RINGS = RING_DEFS.map((R) => { const M = ringM4(R), m3 = new THREE.Matrix3().setFromMatrix4(M), nrm = new THREE.Vector3(0, 0, 1).applyMatrix4(M); return Object.assign({}, R, { m3, axis: [nrm.x, nrm.y, nrm.z] }); });
+        const rp = [], ra = [], rl = [];
         RINGS.forEach((R, ri) => {
-            const e = new THREE.Euler(R.tilt[0], R.tilt[1], R.tilt[2]), v = new THREE.Vector3();
+            const M = ringM4(R), v = new THREE.Vector3();
             const n = Math.round(2 * Math.PI * R.r / 0.01 * Math.sqrt(q));
             for (let i = 0; i < n; i++) {
                 const a = i / n * Math.PI * 2;
-                v.set(Math.cos(a) * R.r, 0, Math.sin(a) * R.r).applyEuler(e);
-                rp.push(v.x, v.y + FIG_Y, v.z); ra.push(ri, 0.5 + 0.5 * seededRandom(ri * 31 + i));
+                v.set(Math.cos(a) * R.r, Math.sin(a) * R.r, 0).applyMatrix4(M);
+                rp.push(v.x, v.y + FIG_Y, v.z); ra.push(ri, 0.5 + 0.5 * seededRandom(ri * 31 + i)); rl.push(-10, 0, 0);
             }
-            // четырёхлучевые звёздочки на кольце
-            for (let m = 0; m < 4; m++) {
-                const a = m / 4 * Math.PI * 2 + ri;
-                const c = new THREE.Vector3(Math.cos(a) * R.r, 0, Math.sin(a) * R.r).applyEuler(e);
-                const t1 = new THREE.Vector3(-Math.sin(a), 0, Math.cos(a)).applyEuler(e), t2 = new THREE.Vector3(0, 1, 0).applyEuler(e);
-                [t1, t2].forEach(t => { for (let k = -14; k <= 14; k++) { const s = k / 14, L = 0.12 * (1 - Math.abs(s) * 0.2);
-                    v.copy(c).addScaledVector(t, s * L); rp.push(v.x, v.y + FIG_Y, v.z); ra.push(ri, 1.6 * (1 - Math.abs(s))); } });
-            }
+            // ПРОСТЫЕ ГЛАЗА НА КОЛЬЦАХ (автор: «прости глаза, как на векторном рисунке», не сложные глаза фигуры): контур-«миндалина» из двух пар дуг (верхнее и нижнее веко: внешняя и внутренняя), радужка — круг, обрезанный верхним веком, зрачок — маленький кружок;
+            // всё в плоскости кольца (x — вдоль кольца, y — наружу), положение/вращение считаются в шейдере (aL = (угол, x, y))
+            R.eyes.forEach((a0) => {
+                const pushL = (lx, ly, al) => { const cc = new THREE.Vector3(Math.cos(a0) * R.r, Math.sin(a0) * R.r, 0), tt = new THREE.Vector3(-Math.sin(a0), Math.cos(a0), 0), rr = new THREE.Vector3(Math.cos(a0), Math.sin(a0), 0); v.copy(cc).addScaledVector(tt, lx * R.w).addScaledVector(rr, ly * R.w).applyMatrix4(M); rp.push(v.x, v.y + FIG_Y, v.z); ra.push(ri, al); rl.push(a0, lx, ly); };
+                const upO = (x) => 0.55 * Math.pow(Math.max(0, 1 - x * x), 1.3), upI = (x) => 0.24 * Math.pow(Math.max(0, 1 - x * x), 1.0), loI = (x) => -0.41 * Math.pow(Math.max(0, 1 - x * x), 1.0), loO = (x) => -0.6 * Math.pow(Math.max(0, 1 - x * x), 1.3);
+                const stepX = 0.022 / R.w * 0.45 * 0.6;
+                [upO, upI, loI, loO].forEach((f) => { for (let x = -1; x <= 1.0001; x += Math.max(stepX, 0.012)) pushL(x, f(x), 1.9); });
+                const ir = 0.34, nI = Math.round(2 * Math.PI * ir / Math.max(stepX, 0.012));
+                for (let k = 0; k < nI; k++) { const t = k / nI * Math.PI * 2, x = Math.cos(t) * ir, y = Math.sin(t) * ir; if (y <= upI(x) - 0.01) pushL(x, y, 1.9); }   // радужка — круг, обрезанный верхним веком
+                for (let rr2 = 0.035; rr2 <= 0.14; rr2 += 0.035) { const nP = Math.round(2 * Math.PI * rr2 / Math.max(stepX, 0.012)); for (let k = 0; k < nP; k++) { const t = k / nP * Math.PI * 2; pushL(Math.cos(t) * rr2, Math.sin(t) * rr2, 2.4); } }   // зрачок — диск
+            });
         });
         const ringGeo = new THREE.BufferGeometry();
         ringGeo.setAttribute('position', new THREE.Float32BufferAttribute(rp, 3));
         ringGeo.setAttribute('aR', new THREE.Float32BufferAttribute(ra, 2));
+        ringGeo.setAttribute('aL', new THREE.Float32BufferAttribute(rl, 3));
 
         const rootMatrix = new THREE.Matrix4();
         const data = { petalGeo, eyeGeo, backGeo, tendGeo, tubeGeo, ringGeo, meshes, eyes, RINGS, rootMatrix };
@@ -1369,7 +1398,7 @@
             if (focus && !focused) st.forEach(s => { s.tp = 0.62; });            // навелись — зрачки сузились
             focused = focus;
             st.forEach((s, i) => {
-                if (focus) {
+                if (focus && !data.eyes[i].ring) {
                     // направление от глаза к курсору на экране
                     const E = data.eyes[i];
                     v.set(E.c[0], E.c[1], E.c[2]).applyMatrix4(root.matrixWorld).project(DP.stage.camera);
@@ -1426,13 +1455,14 @@
             for (let i = 0; i < MAX_EYES; i++) {
                 const E = data.eyes[i] || data.eyes[0], main = i === 0;
                 eyeC.push(new THREE.Vector4(E.c[0], E.c[1], E.c[2], E.w * (main ? study : 1)));
-                eyeR.push(new THREE.Vector4(E.roll, (main ? show('eye') : show('eyes')) && i < data.eyes.length ? 1 : 0, 0, 0));
+                eyeR.push(new THREE.Vector4(E.roll, (main ? show('eye') : (i >= 8 ? show('eyes') && show('rings') : show('eyes'))) && i < data.eyes.length ? 1 : 0, 0, 0));
             }
-            const uT0 = { value: 0 };
             const petalU = { uBlueLift: { get value() { return DP.config.seraphPetal.blueLift; } }, uRedK: { get value() { return DP.config.seraphPetal.redK; } }, uSatK: { get value() { return DP.config.seraphPetal.satK; } }, uCenterY: { value: FIG_Y }, uPetalFlap: { get value() { return DP.config.seraphPetal.flap; } }, uFlapAmp: { get value() { return DP.config.seraphPetal.flapAmp; } }, uSpread: { get value() { return DP.config.seraphPetal.spread; } }, uFlapWave: { get value() { return DP.config.seraphPetal.flapWave; } }, uFlapVar: { get value() { return DP.config.seraphPetal.flapVar; } }, uPetTwist: { get value() { return DP.config.seraphPetal.twist; } }, uPetTwistSpeed: { get value() { return DP.config.seraphPetal.twistSpeed; } }, uRufAmp: { get value() { return DP.config.seraphPetal.ruffleAmp; } }, uRufK: { get value() { return DP.config.seraphPetal.ruffleK; } }, uRufSpeed: { get value() { return DP.config.seraphPetal.ruffleSpeed; } }, uLookA: { get value() { const L = DP.config.seraphPetal.look; return lookA.set(L.body, L.fres, L.vein, L.edge); } }, uLookS: { get value() { const L = DP.config.seraphPetal.look; return lookS.set(L.veinSize, L.edgeSize); } }, uTipGlow: { get value() { return DP.config.seraphPetal.look.tip; } }, uFeather: { get value() { const L = DP.config.seraphPetal.look; return lookF.set(L.feather, L.featherMin); } }, uHoleIn: { get value() { return DP.config.seraphPetal.holeIn; } }, uHoleOut: { get value() { return DP.config.seraphPetal.holeOut; } }, uRollGlow: { get value() { return DP.config.seraphPetal.rollGlow; } }, uFold: { get value() { return DP.config.seraphPetal.fold; } }, uLatCross: { get value() { return DP.config.seraphPetal.latCross; } }, uPersp: { get value() { return DP.config.seraphPetal.persp; } }, uSweepK: { get value() { return DP.config.seraphPetal.sweepK; } }, uSweepSpeed: { get value() { return DP.config.seraphPetal.sweepSpeed; } }, uTwLim: { get value() { return DP.config.seraphPetal.twistLimit; } }, uLatAmp: { get value() { return DP.config.seraphPetal.latAmp; } }, uSideRoll: { get value() { return DP.config.seraphPetal.sideRoll; } }, uRoll: { get value() { return DP.config.seraphPetal.roll; } }, uCalm: { get value() { return DP.config.seraphPetal.calm; } }, uTwShape: { get value() { return DP.config.seraphPetal.twistShape; } }, uOpenK: { get value() { return DP.config.seraphPetal.openK; } }, uFlapFresnel: { get value() { return DP.config.seraphPetal.flapFresnel; } }, uFlapSpeed: { get value() { return DP.config.seraphPetal.flapSpeed; } } };
             const mPetal = mat(petalVertex, petalFragment, Object.assign({ uSize: { value: 2.0 } }, petalU));;
             const EL = DP.config.seraphEye;
-            const eyeU = Object.assign({ uIrisSpeed: { get value() { return DP.config.seraphIris.speed; } }, uIrisFreq: { get value() { return DP.config.seraphIris.freq; } }, uRingMid: { get value() { return DP.config.seraphIris.ringMid; } }, uRingFrom: { get value() { return 0.95 - 0.7 * DP.config.seraphIris.ringReach; } }, uDieSoft: { get value() { return DP.config.seraphIris.dieSoft; } }, uIrisDie: { get value() { return DP.config.seraphIris.die; } }, uRimIris: { get value() { return DP.config.seraphIris.rim; } }, uRingGain: { get value() { return DP.config.seraphIris.ringGain; } }, uIrisDrift: { get value() { return DP.config.seraphIris.drift; } }, uIrisFlare: { get value() { return DP.config.seraphIris.flare; } }, uIrisFlareSpeed: { get value() { return DP.config.seraphIris.flareSpeed; } }, uIrisClump: { get value() { return DP.config.seraphIris.clump; } }, uIrisWave: { get value() { return DP.config.seraphIris.wave; } }, uIrisGain: { get value() { return DP.config.seraphIris.gain; } }, uIrisOnly: { value: IRIS_ONLY ? 1 : 0 }, uSize: { value: IRIS_ONLY ? 2.6 : 1.9 },
+            const uT0 = { value: 0 };
+            const ringU = data.RINGS.map(R => new THREE.Vector4(R.axis[0], R.axis[1], R.axis[2], R.speed)), ringM = data.RINGS.map(R => R.m3);
+            const eyeU = Object.assign({ uRing: { value: ringU }, uRingM: { value: ringM }, uT0 }, { uIrisSpeed: { get value() { return DP.config.seraphIris.speed; } }, uIrisFreq: { get value() { return DP.config.seraphIris.freq; } }, uRingMid: { get value() { return DP.config.seraphIris.ringMid; } }, uRingFrom: { get value() { return 0.95 - 0.7 * DP.config.seraphIris.ringReach; } }, uDieSoft: { get value() { return DP.config.seraphIris.dieSoft; } }, uIrisDie: { get value() { return DP.config.seraphIris.die; } }, uRimIris: { get value() { return DP.config.seraphIris.rim; } }, uRingGain: { get value() { return DP.config.seraphIris.ringGain; } }, uIrisDrift: { get value() { return DP.config.seraphIris.drift; } }, uIrisFlare: { get value() { return DP.config.seraphIris.flare; } }, uIrisFlareSpeed: { get value() { return DP.config.seraphIris.flareSpeed; } }, uIrisClump: { get value() { return DP.config.seraphIris.clump; } }, uIrisWave: { get value() { return DP.config.seraphIris.wave; } }, uIrisGain: { get value() { return DP.config.seraphIris.gain; } }, uIrisOnly: { value: IRIS_ONLY ? 1 : 0 }, uSize: { value: IRIS_ONLY ? 2.6 : 1.9 },
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
                 uEdgeFade: { get value() { return EL.edgeFade; } },
                 uCornea: { get value() { return EL.cornea; } },
@@ -1451,8 +1481,7 @@
             const mBack = mat(eyeVertex, eyeFragment, eyeU, { blending: THREE.NormalBlending });
             const mTend = mat(tendrilVertex, tendrilFragment, { uSize: { value: 2.0 } });
             const mTube = mat(tubeVertex, tubeFragment, { uSize: { value: 2.3 }, uTubeSway: { value: 1.0 }, uCenterY: { value: FIG_Y } });
-            const ringU = data.RINGS.map(R => new THREE.Vector4(R.axis[0], R.axis[1], R.axis[2], R.speed));
-            const mRing = mat(ringVertex, ringFragment, { uSize: { value: 2.0 }, uRing: { value: ringU }, uT0 });
+            const mRing = mat(ringVertex, ringFragment, { uSize: { value: 2.5 }, uRing: { value: ringU }, uRingM: { value: ringM }, uRingP: { value: data.RINGS.map(R => new THREE.Vector3(R.r, R.w, 0)) }, uT0 });
 
             const root = new THREE.Group();
             const meshRoot = new THREE.Group(), pointsRoot = new THREE.Group();
