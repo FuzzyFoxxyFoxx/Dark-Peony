@@ -32,7 +32,8 @@
     // Ряды, у которых основание прозрачно до 15% длины и плавно проявляется к 45% (малые верхние 11/1, нижняя пара 5/7, экваториальные 9/3): растут из-под центрального глаза, но не с его поверхности
     const BASE_FADE_ROWS = [0, 5, 2, 3, 10];
     // Скрытые ряды (убрали вдвое меньше тентаклей на 6 ч; индексы PETALS не сдвигаются)
-    const HIDE_ROWS = [7, 9];
+    const TUBES_ON = DP.params.get('tubes') === '1';   // эксперимент: тентакли медузного типа вместо лепестков-тентаклей на 6 ч (по умолчанию выкл.: на сайте — проверенное состояние)
+    const HIDE_ROWS = TUBES_ON ? [6, 7, 8, 9] : [7, 9];
     // Последнее число — «раскрытие» в градусах: на сколько лепесток приподнят к зрителю от плоскости цветоложа (0 — раскинут полностью, как «крест»; больше — собраннее, к бутону).
     // Внешние (крест: пары 1 и 4) — 0°, дальше внутрь шагами по 15°: нижняя горизонтальная 15°, верхняя горизонтальная и ленты 30°, верхние маленькие 45°.
     // Углы — по циферблату эскиза (автор, 2026-09-30): 12 ч — пусто; 11 и 1 ч — малые верхние (30°); 10 и 2 ч — верх креста (60°); низ креста ≈3.5 и 8.5 ч (108°);
@@ -669,6 +670,58 @@
         }
     `;
 
+    // ---------- ТЕНТАКЛИ МЕДУЗНОГО ТИПА (эксперимент автора, 2026-10-01): трубки из колец точек, кольцо перпендикулярно нити (как щупальца медузы, js/figures/jellyfish.js) ----------
+    // aC — центр кольца, aTn — касательная нити в покое, aT — (v вдоль 0..1, seed). Нить качается (dpTentSway), кольца поворачиваются за её изгибом (кратчайший поворот касательной).
+    const tubeVertex = (G) => `
+        ${flapGlsl}
+        ${depthGlsl}
+        ${G.pointsVertex}
+        uniform float uViewportScale, uSize, uTubeSway;
+        attribute vec3 aC, aTn;
+        attribute vec2 aT;
+        varying float vFresnel, vV, vDepthK2;
+        vec3 dpTubeSway(float v, float sd) {
+            float whip = pow(v, 1.3);
+            float t1 = uTime * 1.2 - v * 7.0 + sd * 9.1, t2 = uTime * 0.9 - v * 9.5 + sd * 4.3;
+            return vec3(sin(t1) * 0.22 + cos(t2) * 0.10, 0.0, cos(t1 * 0.85) * 0.22 + sin(t2 * 1.1) * 0.10) * whip * uTubeSway;
+        }
+        void main() {
+            vec3 dpRest = position;
+            float v = aT.x, sd = aT.y;
+            vec3 sw = dpTubeSway(v, sd);
+            vec3 swD = (dpTubeSway(min(v + 0.01, 1.0), sd) - dpTubeSway(max(v - 0.01, 0.0), sd)) / 0.02;
+            vec3 ta = normalize(aTn), tb = normalize(aTn + swD), ax = cross(ta, tb);
+            float cs = dot(ta, tb);
+            vec3 o = position - aC;
+            o = o * cs + cross(ax, o) + ax * (dot(ax, o) / (1.0 + cs));
+            vec3 nrm = normal * cs + cross(ax, normal) + ax * (dot(ax, normal) / (1.0 + cs));
+            vec3 pos = aC + sw + o;
+            pos.y += dpBob();
+            vec4 mv = viewMatrix * dpMorph(dpRest, pos);
+            gl_Position = projectionMatrix * mv;
+            float dist = max(-mv.z, 0.1);
+            ${depthVert}
+            vFresnel = pow(clamp(1.0 - abs(dot(normalize(normalMatrix * nrm), normalize(-mv.xyz))), 0.0, 1.0), 1.2);
+            vV = v;
+            gl_PointSize = uSize * uViewportScale * (0.85 / (0.4 + 0.06 * dist));
+            dpMorphFinish();
+        }
+    `;
+    const tubeFragment = (G) => `
+        ${G.pointsFragment}
+        uniform sampler2D uTexture;
+        varying float vFresnel, vV, vDepthK;
+        void main() {
+            vec4 tex = texture2D(uTexture, gl_PointCoord);
+            if (tex.a < 0.02) discard;
+            float tipGlow = smoothstep(0.1, 0.85, vV) * 1.4;
+            float a = tex.a * (0.55 + 1.1 * vFresnel + tipGlow * 0.5) * smoothstep(0.03, 0.2, vV);   // у основания прозрачны — растут из-под центра
+            a = a / (0.45 + a * 1.2) * vDepthK;
+            vec3 base = mix(vec3(0.1, 0.22, 0.38), vec3(0.7, 0.85, 1.0), vFresnel * 1.1);
+            gl_FragColor = dpMorphColor(mix(base, vec3(0.4, 0.7, 0.95), smoothstep(0.4, 0.85, vV)), a, tex.a);
+        }
+    `;
+
     // Усик: кольца точек; aT — (v вдоль 0..1, seed), качание.
     const tendrilVertex = (G) => `
         ${flapGlsl}
@@ -1084,6 +1137,32 @@
         tendGeo.setAttribute('normal', new THREE.Float32BufferAttribute(tn, 3));
         tendGeo.setAttribute('aT', new THREE.Float32BufferAttribute(tt, 2));
 
+        // ---------- ТЕНТАКЛИ МЕДУЗНОГО ТИПА (трубки из колец) ----------
+        const bp = [], bn = [], bc = [], btn = [], bt = [];
+        const TUBES = [[-0.42, 4.6, 0.7, 0.17], [-0.15, 5.2, 2.3, 0.2], [0.14, 4.9, 3.9, 0.2], [0.42, 4.3, 5.4, 0.17], [0.0, 5.6, 7.1, 0.15]];   // [x у основания, длина, seed, радиус у основания]
+        const RSTEP = 0.02, NRAD = 30;
+        TUBES.forEach(([x0, len, sdT, rad]) => {
+            const pts = [];
+            for (let s = 0; s <= 40; s++) { const t = s / 40; pts.push(new THREE.Vector3(x0 + Math.sin(t * Math.PI * 1.3 + sdT) * 0.3 * t + t * 0.08 * Math.sign(x0 || 1), FIG_Y - 0.45 - t * len, Math.cos(t * Math.PI * 0.9 + sdT * 1.3) * 0.24 * t)); }
+            const path = new THREE.CatmullRomCurve3(pts), segs = Math.round(len / RSTEP), frames = path.computeFrenetFrames(segs, false), Lp = path.getLength();
+            for (let i = 0; i <= segs; i++) {
+                const v = i / segs, c = path.getPointAt(v), Tg = frames.tangents[i], Nn = frames.normals[i], Bb = frames.binormals[i];
+                const r = rad * Math.max(0.08, Math.pow(1 - v * 0.88, 1.1));   // широкое кольцо у основания, к концу сужается (как у медузы и пиона)
+                for (let j = 0; j < NRAD; j++) {
+                    const th = j / NRAD * Math.PI * 2 + i * 0.3, cs = Math.cos(th), sn = Math.sin(th);
+                    const nx = Nn.x * cs + Bb.x * sn, ny = Nn.y * cs + Bb.y * sn, nz = Nn.z * cs + Bb.z * sn;
+                    bp.push(c.x + nx * r, c.y + ny * r, c.z + nz * r); bn.push(nx, ny, nz); bc.push(c.x, c.y, c.z); btn.push(Tg.x * Lp, Tg.y * Lp, Tg.z * Lp); bt.push(v, sdT);
+                }
+            }
+        });
+        const tubeGeo = new THREE.BufferGeometry();
+        tubeGeo.setAttribute('position', new THREE.Float32BufferAttribute(bp, 3));
+        tubeGeo.setAttribute('normal', new THREE.Float32BufferAttribute(bn, 3));
+        tubeGeo.setAttribute('aC', new THREE.Float32BufferAttribute(bc, 3));
+        tubeGeo.setAttribute('aTn', new THREE.Float32BufferAttribute(btn, 3));
+        tubeGeo.setAttribute('aT', new THREE.Float32BufferAttribute(bt, 2));
+        DP.seraphStats.tubes = bp.length / 3;
+
         // ---------- КОЛЬЦА ----------
         const RINGS = [
             { r: 2.55, tilt: [0.25, 0, 0.1], axis: [0.1, 1, 0.15], speed: 0.07 },
@@ -1113,7 +1192,7 @@
         ringGeo.setAttribute('aR', new THREE.Float32BufferAttribute(ra, 2));
 
         const rootMatrix = new THREE.Matrix4();
-        const data = { petalGeo, eyeGeo, backGeo, tendGeo, ringGeo, meshes, eyes, RINGS, rootMatrix };
+        const data = { petalGeo, eyeGeo, backGeo, tendGeo, tubeGeo, ringGeo, meshes, eyes, RINGS, rootMatrix };
         assignOrderAndLayout(data);
         return data;
     }
@@ -1121,7 +1200,7 @@
     // Порядок распада: от периферии (кольца, кончики, усики) к центральному глазу.
     function assignOrderAndLayout(data) {
         const dist = (x, y, z) => Math.hypot(x, y - FIG_Y, z) + ORDER_NOISE * (Math.sin(x * 1.7 + y * 0.9) * Math.sin(z * 1.9 - y * 1.3) + 0.5 * Math.sin(x * 3.1 - z * 2.7 + y * 2.3));
-        const geos = [data.petalGeo, data.eyeGeo, data.backGeo, data.tendGeo, data.ringGeo];
+        const geos = [data.petalGeo, data.eyeGeo, data.backGeo, data.tendGeo, data.tubeGeo, data.ringGeo];
         let dMin = Infinity, dMax = -Infinity;
         geos.concat(data.meshes).forEach(g => { const p = g.attributes.position; for (let i = 0; i < p.count; i++) { const d = dist(p.getX(i), p.getY(i), p.getZ(i)); if (d < dMin) dMin = d; if (d > dMax) dMax = d; } });
         const toOrder = (d) => 1 - Math.pow(Math.min(1, Math.max(0, (d - dMin) / (dMax - dMin))), 0.6);
@@ -1229,6 +1308,7 @@
             const mEye = mat(eyeVertex, eyeFragment, eyeU);
             const mBack = mat(eyeVertex, eyeFragment, eyeU, { blending: THREE.NormalBlending });
             const mTend = mat(tendrilVertex, tendrilFragment, { uSize: { value: 2.0 } });
+            const mTube = mat(tubeVertex, tubeFragment, { uSize: { value: 2.2 }, uTubeSway: { value: 1.0 } });
             const ringU = data.RINGS.map(R => new THREE.Vector4(R.axis[0], R.axis[1], R.axis[2], R.speed));
             const mRing = mat(ringVertex, ringFragment, { uSize: { value: 2.0 }, uRing: { value: ringU }, uT0 });
 
@@ -1241,6 +1321,7 @@
                 const eyeP = new THREE.Points(data.eyeGeo, mEye); eyeP.renderOrder = 2; pointsRoot.add(eyeP);
             }
             if (show('tendrils')) pointsRoot.add(new THREE.Points(data.tendGeo, mTend));
+            if (TUBES_ON && show('petals')) pointsRoot.add(new THREE.Points(data.tubeGeo, mTube));
             if (show('rings')) pointsRoot.add(new THREE.Points(data.ringGeo, mRing));
             const meshMat = new THREE.ShaderMaterial({
                 uniforms: Object.assign({}, mu),
