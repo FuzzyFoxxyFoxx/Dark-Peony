@@ -877,8 +877,13 @@
             int ri = int(aR.x + 0.5);
             vec4 R = uRing[0];
             for (int i = 0; i < 3; i++) if (i == ri) R = uRing[i];
-            vec3 pos = rotAxis(position - vec3(0.0, ${FIG_Y.toFixed(3)}, 0.0), normalize(R.xyz), R.w * (uTime - uT0)) + vec3(0.0, ${FIG_Y.toFixed(3)}, 0.0);
-            if (aL.x > -9.0) {                                                   // простой глаз на кольце: считается по текущему углу (вращение в плоскости кольца)
+            vec3 pos = position;
+            if (aL.x < -9.0) {                                                  // точка орбиты: по углу (вращение в плоскости кольца, форма не меняется)
+                mat3 RM0 = uRingM[0]; vec3 Pq0 = uRingP[0];
+                for (int i = 0; i < 3; i++) if (i == ri) { RM0 = uRingM[i]; Pq0 = uRingP[i]; }
+                float an0 = -10.0 - aL.x + R.w * (uTime - uT0);
+                pos = vec3(0.0, ${FIG_Y.toFixed(3)}, 0.0) + Pq0.x * (RM0 * vec3(cos(an0), sin(an0), 0.0));
+            } else if (aL.x > -9.0) {                                                   // простой глаз на кольце: считается по текущему углу (вращение в плоскости кольца)
                 mat3 RM = uRingM[0]; vec3 Pq = uRingP[0];
                 for (int i = 0; i < 3; i++) if (i == ri) { RM = uRingM[i]; Pq = uRingP[i]; }
                 float an = aL.x + R.w * (uTime - uT0);
@@ -1122,11 +1127,11 @@
         // КОЛЬЦА-ОРБИТЫ (эскиз автора): круг лицом к зрителю + два вытянутых эллипса (в экране: один идёт вниз-вправо, другой вверх-вправо). Ориентация КАЖДОГО кольца ФИКСИРОВАНА,
         // кольцо вращается только вокруг СВОЕЙ нормали (в своей плоскости, наклон не меняется). На кольцах — глаза (в плоскости кольца, смотрят по нормали), вместо звёздочек.
         const RING_DEFS = [
-            { r: 1.6, phi: 0.0, th: 0.0, speed: 0.05, eyes: [0.5, 2.6, 4.7], w: 0.3 },
-            { r: 4.2, phi: 1.24, th: -0.4, speed: -0.035, eyes: [1.0, 3.2, 5.3], w: 0.5 },
-            { r: 3.9, phi: 1.2, th: 0.38, speed: 0.03, eyes: [2.1, 5.2], w: 0.5 }
+            { r: 2.1, phi: 0.0, th: 0.0, speed: 0.05, eyes: [0.5, 2.6, 4.7], w: 0.34 },
+            { r: 5.0, phi: 1.40, th: -0.39, speed: -0.035, eyes: [1.0, 3.2, 5.3], w: 0.5 },
+            { r: 4.5, phi: 1.39, th: 0.46, speed: 0.03, eyes: [2.1, 5.2], w: 0.5 }
         ];
-        const ringM4 = (R) => new THREE.Matrix4().makeRotationZ(R.th).multiply(new THREE.Matrix4().makeRotationX(R.phi));
+        const ringM4 = (R) => new THREE.Matrix4().makeScale(1, 1, 0.25).multiply(new THREE.Matrix4().makeRotationZ(R.th).multiply(new THREE.Matrix4().makeRotationX(R.phi)));   // z сплющен (×0.25): сильный наклон кольца иначе давал бы перспективное разбухание ближнего края — орбиты остаются плоскими эллипсами, как на эскизе
         const partsNow = DP.params.get('parts') || DEFAULT_PARTS;
         const ep = [], ee = [], eq = [], ef = [], eatt = [], es = [], eS = [], eEB = [], eEK = [], eEQ = [];
         eyes.forEach((E, i) => {
@@ -1343,7 +1348,7 @@
             for (let i = 0; i < n; i++) {
                 const a = i / n * Math.PI * 2;
                 v.set(Math.cos(a) * R.r, Math.sin(a) * R.r, 0).applyMatrix4(M);
-                rp.push(v.x, v.y + FIG_Y, v.z); ra.push(ri, 0.5 + 0.5 * seededRandom(ri * 31 + i)); rl.push(-10, 0, 0);
+                rp.push(v.x, v.y + FIG_Y, v.z); ra.push(ri, 0.5 + 0.5 * seededRandom(ri * 31 + i)); rl.push(-10 - a, 0, 0);
             }
             // ПРОСТЫЕ ГЛАЗА НА КОЛЬЦАХ (автор: «прости глаза, как на векторном рисунке», не сложные глаза фигуры): контур-«миндалина» из двух пар дуг (верхнее и нижнее веко: внешняя и внутренняя), радужка — круг, обрезанный верхним веком, зрачок — маленький кружок;
             // всё в плоскости кольца (x — вдоль кольца, y — наружу), положение/вращение считаются в шейдере (aL = (угол, x, y))
