@@ -149,9 +149,10 @@
     `;
     // ЕДИНАЯ РАМПА ЦВЕТА ЧАСТИЦЫ серафима (автор, 2026-10-01): лепестки, глаза и тентакли берут цвет отсюда (как у пиона: цвет частицы один — от тёмно-синего к светло-голубому; яркость — только альфа).
     // Значения — DP.config.seraphColor (по умолчанию = рампа лепестков пиона из peony.js). Менять в одном месте.
-    DP.config.seraphColor = Object.assign({ dark: [0.04, 0.1, 0.2], light: [0.7, 0.88, 1.0] }, DP.config.seraphColor || {});
+    DP.config.seraphColor = Object.assign({ dark: [0.04, 0.1, 0.2], light: [0.7, 0.88, 1.0], gain: 3.0, gamma: 0.5 }, DP.config.seraphColor || {});
     const colorGlsl = `
         uniform vec3 uColD, uColL;
+        uniform float uGain, uColGamma;
         vec3 sColor(float t) { return mix(uColD, uColL, clamp(t, 0.0, 1.0)); }
     `;
     const depthGlsl = `
@@ -381,7 +382,8 @@
             float base = 1.0 - smoothstep(0.0, 0.25, vU);                        // у основания — свечение
             float a = tex.a * (uLookA.x + uLookA.y * vFresnel + uLookA.z * vVein + uLookA.w * edge + uTipGlow * tip + 0.25 * base + uRollGlow * vUpE) * smoothstep(0.0, 0.06, vU);
             // цвет частицы — ТОЧНО как у лепестков пиона (peony.js): рампа mix((0.04, 0.10, 0.20) → (0.70, 0.88, 1.0), френель·1.1); яркость задаёт только альфа (как в Particular: цвет частицы один, остальное — прозрачность)
-            vec3 color = sColor(vFresnel * 1.1);   // единая рампа цвета частицы (colorGlsl)
+            vec3 color = sColor(pow(clamp(vFresnel * 1.1, 0.0, 1.0), uColGamma));   // единая рампа цвета частицы (colorGlsl); gamma < 1 — середины светлее и бледнее (края не кобальтовые)
+            a *= uGain;   // общая яркость лепестков (автор: стали темнее, чем были)
             a = a / (0.45 + a * 2.0) * vDepthK * vEdgeFade * vBaseFd * smoothstep(uHoleIn, uHoleOut, vR);   // «гнездо»: лепестки к центру уходят в нулевую прозрачность, на их месте — глаз
             gl_FragColor = dpMorphColor(color, a, tex.a);
         }
@@ -1327,7 +1329,7 @@
             const G = DP.morph.glsl, S = DP.shared, mu = DP.morph.uniformsFor(ctx.uniforms);
             const list = [];
             const cvD = new THREE.Vector3(), cvL = new THREE.Vector3();
-            const common = { uColD: { get value() { return cvD.fromArray(DP.config.seraphColor.dark); } }, uColL: { get value() { return cvL.fromArray(DP.config.seraphColor.light); } }, uTime: S.uTime, uTexture: S.uTexture, uViewportScale: S.uViewportScale, uDepth: { value: new THREE.Vector2(8.1, 0.35) } };
+            const common = { uGain: { get value() { return DP.config.seraphColor.gain; } }, uColGamma: { get value() { return DP.config.seraphColor.gamma; } }, uColD: { get value() { return cvD.fromArray(DP.config.seraphColor.dark); } }, uColL: { get value() { return cvL.fromArray(DP.config.seraphColor.light); } }, uTime: S.uTime, uTexture: S.uTexture, uViewportScale: S.uViewportScale, uDepth: { value: new THREE.Vector2(8.1, 0.35) } };
             const mat = (vs, fs, extra, cfg) => { const m = new THREE.ShaderMaterial(Object.assign({}, DP.pointsMaterialConfig, cfg || {}, {
                 uniforms: Object.assign({}, common, extra, mu), vertexShader: vs(G), fragmentShader: fs(G) })); list.push(m); return m; };
             const gz = createGaze(data);
