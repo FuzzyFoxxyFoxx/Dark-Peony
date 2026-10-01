@@ -819,8 +819,10 @@
         const onlyPetal = onlyPetalOf(partsG);
         const petalList = /shapes/.test(partsG) ? SHAPE_KEYS.map((key, i) => { const Sh = makeShape(key, 10 + ({ A1: 0, B: 1, C: 2, D: 3, E: 4, F: 5, A2: 6, A3: 7, A4: 8 })[key] * 17.3); const k = 0.5, wk = parseFloat(DP.params.get('wk') || '1.25'); Sh.L *= k; Sh.W *= k * wk; return { shape: Sh, ox: -2.0 + (i % 3) * 2.0, oy: FIG_Y + 0.75 - Math.floor(i / 3) * 1.75, L: Sh.L, W: Sh.W, ph: i * 0.9, seed: i * 3.1 };
         }) : PETALS;
+        const statP = [];                                                  // отладка: сколько точек у каждого лепестка (DP.seraphStats)
         petalList.forEach((P, k) => {
             if (!keepPetal(onlyPetal, k)) return;
+            const n0 = pp.length / 3;
             const nU = Math.ceil(P.L / h), nV = Math.ceil(2 * P.W / h);
             let sd = k * 101.7;
             const base = petalPoint(P, 0, 0);
@@ -849,7 +851,9 @@
             }
             mg.computeVertexNormals();
             meshes.push(mg);
+            statP.push({ k, type: P.type, a: +(P.a || 0).toFixed(2), L: +P.L.toFixed(2), W: +(P.W || 0).toFixed(2), pts: pp.length / 3 - n0 });
         });
+        DP.seraphStats = { petals: statP };
         const petalGeo = new THREE.BufferGeometry();
         petalGeo.setAttribute('position', new THREE.Float32BufferAttribute(pp, 3));
         petalGeo.setAttribute('normal', new THREE.Float32BufferAttribute(pn, 3));
@@ -945,6 +949,7 @@
             }
         });
         const nBackEye = ep.length / 3 - nMainEye;
+        DP.seraphStats.eyes = { total: nMainEye, back: nBackEye };
         const eyeGeo = new THREE.BufferGeometry();
         eyeGeo.setAttribute('position', new THREE.Float32BufferAttribute(ep, 3));
         eyeGeo.setAttribute('aE', new THREE.Float32BufferAttribute(ee, 4));
