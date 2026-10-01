@@ -1146,12 +1146,13 @@
         const TUBES = [[-0.40, 4.6, 0.7, 0.10, 0.09], [-0.20, 4.9, 3.1, 0.11, 0.09], [0.0, 4.4, 5.4, 0.10, 0.09], [0.20, 4.8, 6.6, 0.11, 0.09], [0.40, 4.5, 7.9, 0.10, 0.09],
             [-0.66, 6.0, 8.3, 0.15, 0.1], [0.68, 6.3, 9.7, 0.15, 0.1],
             [-0.62, 2.3, 11.1, 0.055, 0.05], [-0.31, 2.0, 12.3, 0.05, 0.05], [0.0, 2.6, 13.5, 0.055, 0.05], [0.31, 2.1, 14.7, 0.05, 0.05], [0.62, 2.4, 15.9, 0.055, 0.05]];   // последние пять — мелкие, как у медузы
-        const NRAD = 22, TILT = 0.85, TUBE_K = 1.1;   // TUBE_K — крупнее кольца: у медузы тентакли заметнее (автор)   // как у медузы: отдельные кольца, шаг ≈ радиус, кольцо наклонено к зрителю (плоскость серафима лицом к камере — иначе чёрточки)
-        TUBES.forEach(([x0, len, sdT, rad, RSTEP]) => {
-            const pts = [];
-            for (let q = 0; q <= 48; q++) {
-                const sd = q / 48 * len, t = sd / len, e = Math.min(1, sd / 2.1), sp = 0.22 + 0.78 * e * e * (3 - 2 * e);   // расходятся быстрее и стартуют уже не из точки (40% разноса сразу): у нижнего малого глаза ещё нет единого столба;   // расходятся из точки плавно, за ≈2.8 ед. длины (угол мягкий; автор: «слишком жёстко и растопырены»)
-                pts.push(new THREE.Vector3(x0 * sp * (1 + 0.1 * t) + Math.sin(t * Math.PI * 1.3 + sdT) * 0.18 * t, FIG_Y - 0.3 - sd, Math.cos(t * Math.PI * 0.9 + sdT * 1.3) * 0.2 * t * sp));
+        const NRAD = 16, TUBE_K = 1.1, SLOPE = 0.45;   // как у медузы: 16 точек в кольце, шаг колец ≈ 0.47 радиуса; кольца СТРОГО перпендикулярны нити (автор) — овалами их делает наклон самих тентаклей от камеры (z = −SLOPE·длина), как наклон сцены у медузы   // TUBE_K — крупнее кольца: у медузы тентакли заметнее (автор)   // как у медузы: отдельные кольца, шаг ≈ радиус, кольцо наклонено к зрителю (плоскость серафима лицом к камере — иначе чёрточки)
+        TUBES.forEach(([x0, len0, sdT, rad, RSTEP0]) => {
+            const kz = Math.sqrt(1 + SLOPE * SLOPE), len = len0 * kz * 0.97, RSTEP = 0.47 * TUBE_K * rad, pts = [];   // длина по нити с запасом на наклон от камеры (проекция ≈ len0); шаг колец — как у медузы
+            for (let q = 0; q <= 56; q++) {
+                const sd = q / 56 * len, t = sd / len, e = Math.min(1, sd / 2.4), ease = 1 - Math.pow(1 - e, 2.2);   // плавная кривая Безье: выходят из одной точки без угла, выпуклый разбег
+                const sp = (0.15 + 0.85 * ease) * (1 - 0.22 * Math.max(0, Math.min(1, (sd - 2.4) / Math.max(1, len - 2.4))));   // и снова плавно сужаются к низу (набросок автора: воздушный шар)
+                pts.push(new THREE.Vector3(x0 * sp + Math.sin(t * Math.PI * 1.3 + sdT) * 0.14 * t, FIG_Y - 0.3 - sd / kz, -SLOPE * sd / kz * 1.0 + Math.cos(t * Math.PI * 0.9 + sdT * 1.3) * 0.16 * t * sp));
             }
             const path = new THREE.CatmullRomCurve3(pts), segs = Math.round(len / RSTEP), frames = path.computeFrenetFrames(segs, false), Lp = path.getLength();
             for (let i = 0; i <= segs; i++) {
@@ -1160,7 +1161,6 @@
                 for (let j = 0; j < NRAD; j++) {
                     const th = j / NRAD * Math.PI * 2 + i * 0.3, cs = Math.cos(th), sn = Math.sin(th);
                     let nx = Nn.x * cs + Bb.x * sn, ny = Nn.y * cs + Bb.y * sn, nz = Nn.z * cs + Bb.z * sn;
-                    { const cy = Math.cos(TILT), sy = Math.sin(TILT), y2 = ny * cy - nz * sy, z2 = ny * sy + nz * cy; ny = y2; nz = z2; }   // наклон кольца вокруг оси x
                     bp.push(c.x + nx * r, c.y + ny * r, c.z + nz * r); bn.push(nx, ny, nz); bc.push(c.x, c.y, c.z); btn.push(Tg.x * Lp, Tg.y * Lp, Tg.z * Lp); bt.push(v, sdT);
                 }
             }
