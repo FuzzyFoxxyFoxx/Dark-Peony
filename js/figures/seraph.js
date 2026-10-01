@@ -868,7 +868,10 @@
         petalList.forEach((P, k) => {
             if (!keepPetal(onlyPetal, k)) return;
             const n0 = pp.length / 3;
-            const nU = Math.ceil(P.L / h), nV = Math.ceil(2 * P.W / h);
+            // «Нити» (идея автора, 2026-10-01): точки лежат на линиях v = const — они повторяют контур лепестка (у кромки — по краю, к середине всё уже, сходятся у основания и кончика), как жилки пиона.
+            // ?rows=0 — прежнее облако (случайный разброс ±0.4 клетки в обе стороны). rowK — во сколько раз реже нити, чем шаг h (вдоль нити точки плотнее).
+            const ROWS = DP.params.get('rows') !== '0', rowK = ROWS ? parseFloat(DP.params.get('rowk') || '1.35') : 1;
+            const nU = Math.ceil(P.L / h), nV = Math.ceil(2 * P.W / (h * rowK));
             let sd = k * 101.7;
             const base = petalPoint(P, 0, 0);
             const emit = (u, v, edgeLine) => {
@@ -888,8 +891,10 @@
             for (let i = 0; i <= nU; i++) {
                 // ровная сетка (рядки вдоль лепестка выровнены, как у пиона): число точек поперёк одно на все ряды. Пробовали число по местной ширине — рядки разъезжаются, «зерно» (автор: хуже)
                 for (let j = 0; j <= nV; j++) for (let m = 0; m < MULT; m++) {
-                    const u = Math.min(1, Math.max(0, (i + (seededRandom(sd += 1.1) - 0.5) * 0.8) / nU));
-                    const v = Math.min(1, Math.max(-1, ((j + (seededRandom(sd += 1.3) - 0.5) * 0.8) / nV) * 2 - 1));
+                    const du = ROWS ? ((m + 0.5) / MULT - 0.5) + (seededRandom(k * 7.3 + j * 13.7) - 0.5) + (seededRandom(sd += 1.1) - 0.5) * 0.25 : (seededRandom(sd += 1.1) - 0.5) * 0.8;      // нити: MULT точек подряд вдоль нити, небольшой разброс
+                    const dv = ROWS ? (seededRandom(sd += 1.3) - 0.5) * 0.12 : (seededRandom(sd += 1.3) - 0.5) * 0.8;                              // поперёк нити — почти без разброса
+                    const u = Math.min(1, Math.max(0, (i + du) / nU));
+                    const v = Math.min(1, Math.max(-1, ((j + dv) / nV) * 2 - 1));
                     if (Math.abs(v) > 0.999) continue;
                     emit(u, v, false);
                 }
