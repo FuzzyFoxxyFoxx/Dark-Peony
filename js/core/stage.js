@@ -471,6 +471,19 @@
         hudCtx.strokeStyle = vGrad;
         hudCtx.beginPath(); hudCtx.moveTo(cx, 0); hudCtx.lineTo(cx, h); hudCtx.stroke();
 
+        // Центр (автор, 2026-10-01): в точке, где сходятся вертикаль, горизонталь и вершины всех кругов, слишком много насыщенных пересечений просвечивало сквозь фигуры.
+        // Линии в центре прозрачнее в 2–2.5 раза и плавно возвращаются к обычным к радиусу R·centerR. Радиальный градиент-«ластик» один раз при отрисовке сетки (дёшево, везде работает).
+        if (H.centerFade > 0) {
+            hudCtx.save();
+            hudCtx.globalCompositeOperation = 'destination-out';
+            const eg = hudCtx.createRadialGradient(cx, cy, 0, cx, cy, R * H.centerR);
+            eg.addColorStop(0, 'rgba(0,0,0,' + H.centerFade + ')');
+            eg.addColorStop(1, 'rgba(0,0,0,0)');
+            hudCtx.fillStyle = eg;
+            hudCtx.fillRect(0, 0, w, h);
+            hudCtx.restore();
+        }
+
         // Точки пересечения: круг r в центре с кругами сверху/снизу — под углом ±30° от горизонтали.
         const marks = (r) => { const ox = r * Math.sin(Math.PI / 3); return [[cx - ox, cy - r / 2], [cx + ox, cy - r / 2], [cx - ox, cy + r / 2], [cx + ox, cy + r / 2]]; };
         const crossSz = R * H.crossK, crossW = Math.max(0.35, R * H.crossLineK);   // тоньше 1 px — на ретине это 1 физ. пиксель

@@ -368,7 +368,7 @@
             float tip = smoothstep(0.3, 0.95, vU);                                // и к кончику: у пиона центр чистый, периферия ярче
             float base = 1.0 - smoothstep(0.0, 0.25, vU);                        // у основания — свечение
             float a = tex.a * (uLookA.x + uLookA.y * vFresnel + uLookA.z * vVein + uLookA.w * edge + uTipGlow * tip + 0.25 * base + uRollGlow * vUpE) * smoothstep(0.0, 0.06, vU);
-            vec3 color = mix(vec3(0.3, 0.5, 0.8), vec3(0.82, 0.93, 1.0), 0.3 + 0.7 * vFresnel + 0.4 * vVein + 0.5 * base + 0.35 * edge + 1.2 * uRollGlow * vUpE);
+            vec3 color = mix(vec3(0.015, 0.07, 0.24), vec3(0.78, 0.92, 1.0), pow(clamp(0.05 + 0.85 * vFresnel + 0.4 * vVein + 0.5 * base + 0.35 * edge + 1.2 * uRollGlow * vUpE, 0.0, 1.0), 1.25));   // как у пиона: тени уходят не в серость, а в глубокую синеву (0.04, 0.1, 0.22), свет — холодно-белый
             a = a / (0.45 + a * 2.0) * vDepthK * vEdgeFade * vBaseFd * smoothstep(uHoleIn, uHoleOut, vR);   // «гнездо»: лепестки к центру уходят в нулевую прозрачность, на их месте — глаз
             gl_FragColor = dpMorphColor(color, a, tex.a);
         }
@@ -614,7 +614,7 @@
                 vA *= smoothstep(0.0, uEdgeFade, dE);          // последние 2–3 частицы у края разреза уходят в ноль (≈ 5% → 30% → 70%): без «пикселя» на кромке
             } else if ((kind < 3.5 && kind > 2.5) || kind > 4.5) {   // лучи; kind 5 — тёмная подложка под глазом
                 loc = vec3(aQ, kind > 4.5 ? -0.05 : 0.0);
-                if (kind > 4.5) { vA = (1.0 - smoothstep(0.45, 1.0, length(aQ / vec2(1.45, 0.95)))) * (uMorphActive > 0.5 ? 0.0 : 1.0); }
+                if (kind > 4.5) { vA = (1.0 - smoothstep(0.7, 1.0, length(aQ / aF))) * (uMorphActive > 0.5 ? 0.0 : 1.0); }
             } else {                                           // яблоко: радужка / белок
                 vec3 sp;
                 if (kind < 2.5) {
@@ -661,13 +661,14 @@
         void main() {
             vec4 tex = texture2D(uTexture, gl_PointCoord);
             if (tex.a < 0.01) discard;
-            if (vKind > 4.5) { gl_FragColor = vec4(0.0, 0.0, 0.0, min(1.0, tex.a * 3.5) * vA * 0.94); return; }   // подложка: чёрное, обычное смешивание
+            if (vKind > 4.5) { gl_FragColor = vec4(0.0, 0.0, 0.0, min(1.0, tex.a * 4.0) * vA); return; }   // подложка: чёрное, обычное смешивание
             float k;
             if (vKind < 0.5) k = max(0.0, (uEyeLook.z + uEyeLook.w * min(1.0, vFres * 1.4)) * (1.0 + uEyeLook2.x * vLit * 2.2)) + uEyeLook.x * vRim + uEyeLook2.z * vHalo;   // кожа (со светотенью) + кант + ореол складки
             else if (vKind < 2.5) k = 0.5 * (0.35 + 0.65 * vFres);          // радужка: тоже темнеет к краю яблока
             else if (vKind < 3.5) k = 0.18;                                 // лучи
             else k = uEyeLook.y * (0.14 + 0.9 * pow(1.0 - max(0.0, vFres), 1.2) * (0.6 + 0.6 * uEyeLook2.x * max(0.0, vLit))) * mix(1.0, vShade, uEyeLook2.y);   // яблоко: середина почти невидима, к краям — френель (как у светила), у век — тень
-            vec3 color = vKind < 2.5 && vKind > 1.5 ? vec3(0.7, 0.86, 1.0) : vec3(0.82, 0.93, 1.0);
+            vec3 hi = vKind < 2.5 && vKind > 1.5 ? vec3(0.7, 0.86, 1.0) : vec3(0.82, 0.93, 1.0);
+            vec3 color = mix(vec3(0.02, 0.08, 0.26), hi, pow(clamp(k * 0.9, 0.0, 1.0), 1.25));   // как у пиона: тусклые точки — глубокая синева, а не серость; яркие — холодно-белые
             float a = tex.a * k * vA;
             a = a / (0.45 + a * 1.6) * vDepthK;
             gl_FragColor = dpMorphColor(color, a, tex.a);
@@ -711,7 +712,7 @@
             vFresnel = pow(clamp(1.0 - abs(dot(normalize(normalMatrix * nrm), normalize(-mv.xyz))), 0.0, 1.0), 1.2);
             vV = v;
             // очень мягкая маска под центральными глазами (автор: тентакли видны сквозь глаз): боковые — по расстоянию от центра цветка, висящие — по глубине под центром
-            vMask = sd > 19.0 ? smoothstep(0.55, 1.9, length(pos.xy - vec2(0.0, uCenterY))) : smoothstep(0.85, 2.4, uCenterY - pos.y);
+            vMask = sd > 19.0 ? smoothstep(1.0, 2.6, length(pos.xy - vec2(0.0, uCenterY))) : smoothstep(0.85, 2.4, uCenterY - pos.y);
             gl_PointSize = uSize * uViewportScale * (0.85 / (0.4 + 0.06 * dist));
             dpMorphFinish();
         }
@@ -1101,11 +1102,11 @@
         const nMainEye = ep.length / 3;
         eyes.forEach((E, i) => {
             if (E.main) return;
-            const step = 0.02 / E.w;
-            for (let y = -0.95; y <= 0.95; y += step * 0.9) for (let x = -1.45; x <= 1.45; x += step) {
-                if ((x / 1.45) ** 2 + (y / 0.95) ** 2 > 1) continue;
+            const step = 0.02 / E.w, bx = E.pet ? 1.45 : 2.1, by = E.pet ? 0.95 : 1.35;   // подложка нижнего (не на лепестке) глаза шире: сквозь его белок были видны лепестки и тентакли
+            for (let y = -by; y <= by; y += step * 0.9) for (let x = -bx; x <= bx; x += step) {
+                if ((x / bx) ** 2 + (y / by) ** 2 > 1) continue;
                 ep.push(E.c[0] + x * E.w, E.c[1] + y * E.w, E.c[2] - 0.05 * E.w);
-                ee.push(i, 5, 0, 0); eq.push(x, y); eS.push(0, 0, 0); ef.push(0.5, 0.5); eatt.push(...E.att); es.push(0.5);
+                ee.push(i, 5, 0, 0); eq.push(x, y); eS.push(0, 0, 0); ef.push(bx, by); eatt.push(...E.att); es.push(0.5);
                 const pt = E.pet || { B: [0, 0, 0, 0.5], K: [0, 1, 1, 0], Q: [0, 0, 0] }; eEB.push(...pt.B); eEK.push(...pt.K); eEQ.push(...pt.Q);
             }
         });
