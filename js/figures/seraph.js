@@ -883,7 +883,11 @@
                 for (int i = 0; i < 3; i++) if (i == ri) { RM = uRingM[i]; Pq = uRingP[i]; }
                 float an = aL.x + R.w * (uTime - uT0);
                 vec3 cR = RM * vec3(cos(an), sin(an), 0.0), tT = RM * vec3(-sin(an), cos(an), 0.0);
-                pos = vec3(0.0, ${FIG_Y.toFixed(3)}, 0.0) + Pq.x * cR + Pq.y * (aL.y * tT + aL.z * cR);
+                // уголки глаза строго на орбите: положение вдоль кольца — по дуге (угол + x·размер/радиус), наружу — y·размер; моргание: веки сходятся (y·открытие)
+                float hh = fract(sin((aL.x + float(ri) * 3.7) * 12.9898) * 43758.5453), bt = fract(uTime / (4.0 + 3.5 * hh) + hh * 7.0);
+                float open = 1.0 - 0.97 * (bt < 0.06 ? sin(bt / 0.06 * 3.14159265) : 0.0);
+                vec3 cx = RM * vec3(cos(an + aL.y * Pq.y / Pq.x), sin(an + aL.y * Pq.y / Pq.x), 0.0);
+                pos = vec3(0.0, ${FIG_Y.toFixed(3)}, 0.0) + Pq.x * cx + Pq.y * aL.z * open * cR;
             }
             vec4 mv = viewMatrix * dpMorph(dpRest, pos);
             gl_Position = projectionMatrix * mv;
@@ -1118,9 +1122,9 @@
         // КОЛЬЦА-ОРБИТЫ (эскиз автора): круг лицом к зрителю + два вытянутых эллипса (в экране: один идёт вниз-вправо, другой вверх-вправо). Ориентация КАЖДОГО кольца ФИКСИРОВАНА,
         // кольцо вращается только вокруг СВОЕЙ нормали (в своей плоскости, наклон не меняется). На кольцах — глаза (в плоскости кольца, смотрят по нормали), вместо звёздочек.
         const RING_DEFS = [
-            { r: 3.1, phi: 0.0, th: 0.0, speed: 0.05, eyes: [0.5, 2.6, 4.7], w: 0.4 },
-            { r: 4.0, phi: 1.22, th: -0.38, speed: -0.035, eyes: [1.0, 3.2, 5.3], w: 0.5 },
-            { r: 3.8, phi: 1.15, th: 0.34, speed: 0.03, eyes: [2.1, 5.2], w: 0.5 }
+            { r: 1.6, phi: 0.0, th: 0.0, speed: 0.05, eyes: [0.5, 2.6, 4.7], w: 0.3 },
+            { r: 4.2, phi: 1.24, th: -0.4, speed: -0.035, eyes: [1.0, 3.2, 5.3], w: 0.5 },
+            { r: 3.9, phi: 1.2, th: 0.38, speed: 0.03, eyes: [2.1, 5.2], w: 0.5 }
         ];
         const ringM4 = (R) => new THREE.Matrix4().makeRotationZ(R.th).multiply(new THREE.Matrix4().makeRotationX(R.phi));
         const partsNow = DP.params.get('parts') || DEFAULT_PARTS;
