@@ -563,7 +563,10 @@
     // ------------------------------------------
     let contextLost = false;
     renderer.domElement.addEventListener('webglcontextlost', (e) => { e.preventDefault(); contextLost = true; }, false);
-    renderer.domElement.addEventListener('webglcontextrestored', () => { contextLost = false; applySize(true); }, false);
+    renderer.domElement.addEventListener('webglcontextrestored', () => {   // видеокарта сбросила контекст (перегрузка / другие приложения): после восстановления фигуры с большими текстурами/буферами не оживают — перезагружаем страницу один раз (иначе чёрный экран)
+        contextLost = false; applySize(true);
+        try { if (!sessionStorage.getItem('dpCtxReload')) { sessionStorage.setItem('dpCtxReload', '1'); setTimeout(() => location.reload(), 400); } else sessionStorage.removeItem('dpCtxReload'); } catch (e) { /* без storage — оставляем как есть */ }
+    }, false);
 
     // ------------------------------------------
     // КАДР
