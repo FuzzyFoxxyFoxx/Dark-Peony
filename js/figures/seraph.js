@@ -644,14 +644,19 @@
                     if (aS.z > 0.0) {
                         // ПОТОК РАДУЖКИ (референсы автора, The Spirit): частицы вылетают от края зрачка, текут по поверхности радужки к краю и гаснут; цикл жизни; нити стягиваются в «вены»
                         float life = aS.y;
-                        float s = fract(uTime * uIrisSpeed / life + aS.x);
-                        tt = pow(s, 0.85);
-                        float cell = aQ.y * uIrisVeins / 6.2831853, ci = floor(cell + 0.5);
-                        float ca = ci * 6.2831853 / uIrisVeins + 0.22 * sin(ci * 2.7 + uTime * 0.15 + aS.z);
-                        float cl = smoothstep(0.1, 0.85, tt) * uIrisClump;
+                        float cyc = uTime * uIrisSpeed / life + aS.x;
+                        float cid = floor(cyc), s = cyc - cid;
+                        // КАЖДЫЙ ЦИКЛ — НОВЫЙ ПУТЬ (автор: «вижу математику, всё повторяется»): случайность от номера цикла; частица стартует в другом месте кромки зрачка, другие фазы/частоты волн, свой темп
+                        float r1 = fract(sin((aS.z + cid * 7.31) * 12.9898) * 43758.5453), r2 = fract(sin((aS.z * 1.7 + cid * 3.97) * 78.233) * 12345.678), r3 = fract(sin((aS.z * 2.3 + cid * 5.11) * 39.425) * 24634.634);
+                        ph += (r1 - 0.5) * 0.09;
+                        tt = pow(s, 0.8 + 0.3 * r2);
+                        float cell = ph * uIrisVeins / 6.2831853, ci = floor(cell + 0.5);
+                        float ca = ci * 6.2831853 / uIrisVeins + 0.34 * sin(ci * 2.7 + uTime * 0.21 + aS.z + cid * 0.7) + 0.2 * sin(ci * 5.3 - uTime * 0.13);
+                        float cl = smoothstep(0.1, 0.85, tt) * uIrisClump * (0.6 + 0.4 * r2);
                         ph = mix(ph, ca, cl);
-                        ph += (0.28 * sin(tt * 6.5 + aS.z * 3.0 + uTime * 0.35) + 0.14 * sin(tt * 13.0 + aS.z * 7.1 - uTime * 0.5)) * tt * uIrisWave;
-                        irisFl = smoothstep(0.0, 0.1, s) * (1.0 - smoothstep(0.72, 1.0, s));
+                        float ft = tt * (5.0 + 5.0 * r1);
+                        ph += (0.3 * sin(ft + r2 * 6.28 + uTime * 0.3) + 0.16 * sin(ft * 2.1 + r3 * 6.28 - uTime * 0.45) + 0.08 * sin(ft * 4.7 + r1 * 6.28 + uTime * 0.7)) * tt * uIrisWave * (0.7 + 0.6 * r3);
+                        irisFl = smoothstep(0.0, 0.1, s) * (1.0 - smoothstep(0.62 + 0.3 * r1, 1.0, s));
                         irisB = 0.55 + 0.95 * cl;
                     }
                     float th = mix(E_IRIS * E_PUP * gz.z, E_IRIS, tt);
