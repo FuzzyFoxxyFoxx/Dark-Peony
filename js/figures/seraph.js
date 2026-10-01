@@ -51,7 +51,7 @@
         { petal: 0, u: 0.82, w: 0.273 }, { petal: 1, u: 0.82, w: 0.273 },
         { petal: 2, u: 0.46, k: 0.72 }, { petal: 3, u: 0.46, k: 0.72 },
         // малый глаз под центральным — ближе к нему
-        { x: 0, y: -0.72, w: 0.3 },
+        { x: 0, y: -0.58, w: 0.4, z: 0.3 },
         // два крупных на нижних крыльях креста (≈3.5 и 8.5 ч): на ≈20–25% меньше центрального (0.46 × 1.36 ≈ 0.63 → 0.48)
         { petal: 8, u: 0.42, k: 0.72 }, { petal: 9, u: 0.42, k: 0.72 }
     ];
@@ -946,7 +946,7 @@
 
         // ---------- ГЛАЗА ----------
         const eyes = EYES.map((E, i) => {
-            if (E.petal == null) return { c: [E.x, FIG_Y + E.y, 0.06], w: E.w * (E.main ? EYE_SCALE : 1), roll: 0, att: [-1, 0, 0, 0], main: !!E.main };
+            if (E.petal == null) return { c: [E.x, FIG_Y + E.y, E.z === undefined ? 0.06 : E.z], w: E.w * (E.main ? EYE_SCALE : 1), roll: 0, att: [-1, 0, 0, 0], main: !!E.main };
             const P = PETALS[E.petal], c = petalPoint(P, E.u, 0), b0 = petalPoint(P, 0, 0), hw = P.W * 0.5 * (shapeWidth(P.shape, E.u, 1) + shapeWidth(P.shape, E.u, 2));
             // глаз вписан в плоскость лепестка: разрез — вдоль оси лепестка, верх глаза — «вверх» по экрану
             const roll = P.a > 0 ? Math.PI / 2 - P.a : -Math.PI / 2 - P.a;
