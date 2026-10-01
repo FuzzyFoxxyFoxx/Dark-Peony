@@ -132,6 +132,7 @@
     const CROSS = [2, 3, 8, 9];
     const keepPetal = (only, k) => only === -1 || (only === -2 ? CROSS.indexOf(k) >= 0 : k === only);
     const EYE_SCALE = 1.36;           // центральный глаз в сборке крупнее (на эскизе — размером с основания лепестков)
+    DP.config.seraphIris = Object.assign({ flow: true, fibers: 330, per: 2, tail: 20, life: 4.0, speed: 1.0, veins: 11, clump: 0.8, wave: 1.0, gain: 3.0 }, DP.config.seraphIris || {});   // радужка-поток: волокон на 0.46 ширины глаза, частиц на волокно, хвост, секунд на пробег, темп, число «вен», стягивание, волнистость, яркость
     const IRIS_ONLY = (DP.params.get('parts') || '') === 'iris';   // режим доводки радужки (автор, 2026-10-01): только радужка центрального глаза, крупно, без век/кожи/белка
     const IRIS_STUDY = 4.5;
     const EYE_STUDY = 2.2;            // когда показан только центральный глаз — он крупнее, для разглядывания
@@ -572,7 +573,7 @@
         ${petalDeformGlsl}
         uniform float uViewportScale, uSize;
         uniform vec4 uGaze[${MAX_EYES}];
-        uniform float uIrisOnly;
+        uniform float uIrisOnly, uIrisSpeed, uIrisVeins, uIrisClump, uIrisWave;
         uniform vec4 uEyeC[${MAX_EYES}];     // центр (x, y, z) и полуширина
         uniform vec4 uEyeR[${MAX_EYES}];     // x — поворот в плоскости, y — глаз показан
         uniform float uEdgeFade, uCornea, uLidFollow, uLidLocal, uLidW, uLidSide;
@@ -636,9 +637,24 @@
                 if (kind > 4.5) { vA = (1.0 - smoothstep(0.7, 1.0, length(aQ / aF))) * (uMorphActive > 0.5 ? 0.0 : 1.0); }
             } else {                                           // яблоко: радужка / белок
                 vec3 sp;
+                float irisFl = 1.0, irisB = 1.0;
                 if (kind < 2.5) {
-                    float th = mix(E_IRIS * E_PUP * gz.z, E_IRIS, aQ.x);
+                    float tt = aQ.x;
                     float ph = aQ.y + 0.03 * sin(uTime * 0.7 + aF.y * 6.0);
+                    if (aS.z > 0.0) {
+                        // ПОТОК РАДУЖКИ (референсы автора, The Spirit): частицы вылетают от края зрачка, текут по поверхности радужки к краю и гаснут; цикл жизни; нити стягиваются в «вены»
+                        float life = aS.y;
+                        float s = fract(uTime * uIrisSpeed / life + aS.x);
+                        tt = pow(s, 0.85);
+                        float cell = aQ.y * uIrisVeins / 6.2831853, ci = floor(cell + 0.5);
+                        float ca = ci * 6.2831853 / uIrisVeins + 0.22 * sin(ci * 2.7 + uTime * 0.15 + aS.z);
+                        float cl = smoothstep(0.1, 0.85, tt) * uIrisClump;
+                        ph = mix(ph, ca, cl);
+                        ph += (0.28 * sin(tt * 6.5 + aS.z * 3.0 + uTime * 0.35) + 0.14 * sin(tt * 13.0 + aS.z * 7.1 - uTime * 0.5)) * tt * uIrisWave;
+                        irisFl = smoothstep(0.0, 0.1, s) * (1.0 - smoothstep(0.72, 1.0, s));
+                        irisB = 0.55 + 0.95 * cl;
+                    }
+                    float th = mix(E_IRIS * E_PUP * gz.z, E_IRIS, tt);
                     sp = vec3(sin(th) * cos(ph), sin(th) * sin(ph), cos(th));
                 } else sp = aS;
                 float th0 = acos(clamp(sp.z, -1.0, 1.0));
@@ -646,11 +662,13 @@
                 sp = eRotGaze(sp, gz.xy);
                 loc = sp * E_RB * (1.0 + uCornea * cornea * cornea * (3.0 - 2.0 * cornea)) + vec3(0.0, 0.0, E_ZB);
                 vA = smoothstep(0.2, 0.3, sp.z) * (uIrisOnly > 0.5 && kind < 2.5 ? 1.0 : eInSlit(loc.xy, oU, oL));    // только передняя часть яблока — та, что видна в разрезе
+                vA *= irisFl;
                 vFres = sp.z;                                  // яблоко: к краям уходит в тень
                 vLit = dot(sp, E_LIGHT);
                 float lu2 = eHU(loc.x), ll2 = eHL(loc.x), yU2 = mix(-ll2 * 0.96, lu2, oU + gLid.y * lidBell(loc.x)), yL2 = mix(-ll2 * 0.96, -ll2, oL + gLid.z * lidBell(loc.x));
                 float dS = abs(loc.x) < 1.0 ? min((yU2 - loc.y) * uCrease2.w, loc.y - yL2) : 0.0;
                 vShade = smoothstep(0.0, 0.32, dS);            // тень век: у края разреза темнее
+                if (kind < 2.5 && aS.z > 0.0) vShade = (uIrisOnly > 0.5 ? 1.0 : vShade) * irisB;   // у потока радужки яркость — по «венам»
             }
             float c = cos(er.x), s = sin(er.x);
             vec3 pos = ec.xyz + vec3(loc.x * c - loc.y * s, loc.x * s + loc.y * c, loc.z) * ec.w;
@@ -677,7 +695,7 @@
         ${G.pointsFragment}
         ${colorGlsl}
         uniform sampler2D uTexture;
-        uniform float uBlueLift, uRedK;
+        uniform float uBlueLift, uRedK, uIrisGain;
         uniform vec4 uEyeLook, uEyeLook2;           // x — кант, y — яркость яблока, z — кожа: база, w — кожа: изгибы
         varying float vA, vKind, vFres, vRim, vLit, vShade, vHalo, vDepthK;
         void main() {
@@ -686,7 +704,7 @@
             if (vKind > 4.5) { gl_FragColor = vec4(0.0, 0.0, 0.0, min(1.0, tex.a * 4.0) * vA); return; }   // подложка: чёрное, обычное смешивание
             float k;
             if (vKind < 0.5) k = max(0.0, (uEyeLook.z + uEyeLook.w * min(1.0, vFres * 1.4)) * (1.0 + uEyeLook2.x * vLit * 2.2)) + uEyeLook.x * vRim + uEyeLook2.z * vHalo;   // кожа (со светотенью) + кант + ореол складки
-            else if (vKind < 2.5) k = 0.5 * (0.35 + 0.65 * vFres);          // радужка: тоже темнеет к краю яблока
+            else if (vKind < 2.5) k = 0.5 * (0.35 + 0.65 * vFres) * vShade * uIrisGain;          // радужка: тоже темнеет к краю яблока
             else if (vKind < 3.5) k = 0.18;                                 // лучи
             else k = uEyeLook.y * (0.14 + 0.9 * pow(1.0 - max(0.0, vFres), 1.2) * (0.6 + 0.6 * uEyeLook2.x * max(0.0, vLit))) * mix(1.0, vShade, uEyeLook2.y);   // яблоко: середина почти невидима, к краям — френель (как у светила), у век — тень
             vec3 hi = vKind < 2.5 && vKind > 1.5 ? vec3(0.7, 0.86, 1.0) : vec3(0.82, 0.93, 1.0);
@@ -1101,7 +1119,18 @@
             }
             // радужка: волокна от зрачка к краю, на сфере яблока
             const nF = Math.round(260 * wShow / 0.46 * Math.sqrt(q * dens)), nP = Math.round(24 * wShow / 0.46 * Math.sqrt(q * dens) + 6);
-            for (let f = 0; f < nF; f++) {
+            if (DP.config.seraphIris.flow && DP.params.get('iris') !== 'static') {
+                // радужка-поток: на волокно — K групп по tail+1 точек (короткий штрих), фазы разнесены; позиция считается в шейдере (время жизни, течение, вены)
+                const IC = DP.config.seraphIris, nFl = Math.max(40, Math.round(IC.fibers * E.w / 0.46 * Math.sqrt(q * dens)));   // число волокон не растёт с увеличением режима доводки (иначе слитая «крупа»)
+                for (let f = 0; f < nFl; f++) {
+                    const a0 = f / nFl * Math.PI * 2 + (seededRandom(sd += 1.3) - 0.5) * 0.02, sdF = 0.5 + seededRandom(sd += 1.7) * 10, lifeF = IC.life * (0.75 + 0.5 * seededRandom(sd += 1.1)), ph0 = seededRandom(sd += 0.9);
+                    for (let k = 0; k < IC.per; k++) for (let j = 0; j <= IC.tail; j++) {
+                        const phase = ph0 + k / IC.per - j * 0.012;
+                        const th = EYE.iris * (EYE.pupil + (1 - EYE.pupil) * 0.5), x = Math.sin(th) * Math.cos(a0) * EYE.rb, y = Math.sin(th) * Math.sin(a0) * EYE.rb, z = Math.cos(th) * EYE.rb + EYE.zb;
+                        push(2, 0.5, a0, x, y, z, sd += 0.3, phase, lifeF, sdF);
+                    }
+                }
+            } else for (let f = 0; f < nF; f++) {
                 const a0 = f / nF * Math.PI * 2 + (seededRandom(sd += 1.3) - 0.5) * 0.03, wav = seededRandom(sd += 1.7) * 6.28;
                 for (let k = 0; k < nP; k++) {
                     if (seededRandom(sd += 0.7) < 0.2) continue;
@@ -1353,7 +1382,7 @@
             const petalU = { uBlueLift: { get value() { return DP.config.seraphPetal.blueLift; } }, uRedK: { get value() { return DP.config.seraphPetal.redK; } }, uSatK: { get value() { return DP.config.seraphPetal.satK; } }, uCenterY: { value: FIG_Y }, uPetalFlap: { get value() { return DP.config.seraphPetal.flap; } }, uFlapAmp: { get value() { return DP.config.seraphPetal.flapAmp; } }, uSpread: { get value() { return DP.config.seraphPetal.spread; } }, uFlapWave: { get value() { return DP.config.seraphPetal.flapWave; } }, uFlapVar: { get value() { return DP.config.seraphPetal.flapVar; } }, uPetTwist: { get value() { return DP.config.seraphPetal.twist; } }, uPetTwistSpeed: { get value() { return DP.config.seraphPetal.twistSpeed; } }, uRufAmp: { get value() { return DP.config.seraphPetal.ruffleAmp; } }, uRufK: { get value() { return DP.config.seraphPetal.ruffleK; } }, uRufSpeed: { get value() { return DP.config.seraphPetal.ruffleSpeed; } }, uLookA: { get value() { const L = DP.config.seraphPetal.look; return lookA.set(L.body, L.fres, L.vein, L.edge); } }, uLookS: { get value() { const L = DP.config.seraphPetal.look; return lookS.set(L.veinSize, L.edgeSize); } }, uTipGlow: { get value() { return DP.config.seraphPetal.look.tip; } }, uFeather: { get value() { const L = DP.config.seraphPetal.look; return lookF.set(L.feather, L.featherMin); } }, uHoleIn: { get value() { return DP.config.seraphPetal.holeIn; } }, uHoleOut: { get value() { return DP.config.seraphPetal.holeOut; } }, uRollGlow: { get value() { return DP.config.seraphPetal.rollGlow; } }, uFold: { get value() { return DP.config.seraphPetal.fold; } }, uLatCross: { get value() { return DP.config.seraphPetal.latCross; } }, uPersp: { get value() { return DP.config.seraphPetal.persp; } }, uSweepK: { get value() { return DP.config.seraphPetal.sweepK; } }, uSweepSpeed: { get value() { return DP.config.seraphPetal.sweepSpeed; } }, uTwLim: { get value() { return DP.config.seraphPetal.twistLimit; } }, uLatAmp: { get value() { return DP.config.seraphPetal.latAmp; } }, uSideRoll: { get value() { return DP.config.seraphPetal.sideRoll; } }, uRoll: { get value() { return DP.config.seraphPetal.roll; } }, uCalm: { get value() { return DP.config.seraphPetal.calm; } }, uTwShape: { get value() { return DP.config.seraphPetal.twistShape; } }, uOpenK: { get value() { return DP.config.seraphPetal.openK; } }, uFlapFresnel: { get value() { return DP.config.seraphPetal.flapFresnel; } }, uFlapSpeed: { get value() { return DP.config.seraphPetal.flapSpeed; } } };
             const mPetal = mat(petalVertex, petalFragment, Object.assign({ uSize: { value: 2.0 } }, petalU));;
             const EL = DP.config.seraphEye;
-            const eyeU = Object.assign({ uIrisOnly: { value: IRIS_ONLY ? 1 : 0 }, uSize: { value: IRIS_ONLY ? 3.0 : 1.9 },
+            const eyeU = Object.assign({ uIrisSpeed: { get value() { return DP.config.seraphIris.speed; } }, uIrisVeins: { get value() { return DP.config.seraphIris.veins; } }, uIrisClump: { get value() { return DP.config.seraphIris.clump; } }, uIrisWave: { get value() { return DP.config.seraphIris.wave; } }, uIrisGain: { get value() { return DP.config.seraphIris.gain; } }, uIrisOnly: { value: IRIS_ONLY ? 1 : 0 }, uSize: { value: IRIS_ONLY ? 2.6 : 1.9 },
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
                 uEdgeFade: { get value() { return EL.edgeFade; } },
                 uCornea: { get value() { return EL.cornea; } },
