@@ -514,6 +514,10 @@
         lastW = w; lastH = h; currentPixelRatio = pr;
 
         camera.aspect = w / h;
+        {   // вертикальный экран (iPhone): фигура крупновато, не помещается — отодвигаем (автор, 2026-10-02: на ≈18% меньше; лепестки и тентакли по краям могут обрезаться)
+            const zoomOut = 1 + parseFloat(DP.params.get('pz') || '0.22') * Math.min(1, Math.max(0, (1 - camera.aspect) / 0.4));
+            camera.fov = 2 * Math.atan(Math.tan(20 * Math.PI / 180) * zoomOut) * 180 / Math.PI;
+        }
         camera.updateProjectionMatrix();
         renderer.setPixelRatio(pr);
         renderer.setSize(w, h);
