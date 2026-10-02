@@ -72,6 +72,7 @@
         lidT: 0.01,                   // толщина века у разреза (зазор до яблока); к уголкам сходит на нет
         lowerSq: 1.0,                // сжатие нижнего профиля по y (S-переход в скулу ближе)
         grooveDepth: 0.095, grooveW: 0.09, grooveY: 0.67,   // борозда (орбитопальпебральная): глубина, ширина, высота — гауссов провал поверх гладкого профиля, идёт вместе со складками, к уголкам гаснет
+        backIn: 0.0, backAlpha: 0.8,  // тёмная подложка под малыми глазами: где начинает спадать (0 — от центра, 0.7 — как было, резко) и макс. непрозрачность
         smallBoost: 0.9,              // яркость малых глаз: (полуширина центрального / полуширина глаза)^smallBoost, не более ×2.6
         edgeFade: 0.044,              // ширина перехода в ноль у края разреза (локальные единицы; ≈ 3 частицы)
         lidSide: 1.0,                 // 1 — изгиб века над зрачком; −1 — зеркально (изгиб на противоположной стороне)
@@ -580,7 +581,7 @@
         uniform float uIrisOnly, uIrisSpeed, uIrisFreq, uIrisClump, uIrisWave, uIrisDrift, uIrisFlare, uIrisFlareSpeed, uRingGain, uRimIris, uIrisDie, uRingMid, uRingFrom, uDieSoft;
         uniform vec4 uEyeC[${MAX_EYES}];     // центр (x, y, z) и полуширина
         uniform vec4 uEyeR[${MAX_EYES}];     // x — поворот в плоскости, y — глаз показан
-        uniform float uSmallBoost, uEdgeFade, uCornea, uLidFollow, uLidLocal, uLidW, uLidSide;
+        uniform float uBackIn, uBackAlpha, uSmallBoost, uEdgeFade, uCornea, uLidFollow, uLidLocal, uLidW, uLidSide;
         uniform vec4 uEyeFade;               // x — неровность контура прозрачности, y — скорость, z — где начинается спад
         attribute vec4 aE, aP;
         attribute vec4 aEB, aEK;             // глаз на лепестке: основание лепестка (x, y, угол оси, полуширина лепестка) и aK лепестка
@@ -638,7 +639,7 @@
                 vA *= smoothstep(0.0, uEdgeFade, dE);          // последние 2–3 частицы у края разреза уходят в ноль (≈ 5% → 30% → 70%): без «пикселя» на кромке
             } else if ((kind < 3.5 && kind > 2.5) || kind > 4.5) {   // лучи; kind 5 — тёмная подложка под глазом
                 loc = vec3(aQ, kind > 4.5 ? -0.05 : 0.0);
-                if (kind > 4.5) { vA = (1.0 - smoothstep(0.7, 1.0, length(aQ / aF))) * (uMorphActive > 0.5 ? 0.0 : 1.0); }
+                if (kind > 4.5) { vA = pow(1.0 - smoothstep(uBackIn, 1.0, length(aQ / aF)), 1.6) * uBackAlpha * (uMorphActive > 0.5 ? 0.0 : 1.0); }
             } else {                                           // яблоко: радужка / белок
                 vec3 sp;
                 float irisFl = 1.0, irisB = 1.0;
@@ -1489,6 +1490,8 @@
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
                 uEdgeFade: { get value() { return EL.edgeFade; } },
                 uSmallBoost: { get value() { return EL.smallBoost; } },
+                uBackIn: { get value() { return EL.backIn; } },
+                uBackAlpha: { get value() { return EL.backAlpha; } },
                 uCornea: { get value() { return EL.cornea; } },
                 uLidFollow: { get value() { return EL.lidFollow; } },
                 uDownK: { get value() { return EL.downK; } },
