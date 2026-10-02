@@ -97,6 +97,7 @@
         twistSpeed: 1.0,
         ruffleAmp: 0.275,             // рюши кромки (по принципу лент медузы): размах (доля местной ширины); 0 — гладкая кромка
         ruffleK: 7.7,                // рюши: сколько волн по длине (× длина, вершин ≈ K·L/π)
+        bodyA: 0.07, bodyFres: 2.0,   // тело лепестка (подложка под точками): яркость и добавка на изгибах; 0 — выкл.
         ruffleSpeed: 0.64,           // рюши: темп бега волны от основания к кончику
         roll: 0.3,                   // крен лепестков креста: верхней кромкой к камере (рад, 0.3 ≈ 17°; минус — от камеры), нарастает с 15–40% длины
         look: { body: 0.03, fres: 0.19, vein: 0.34, edge: 0.68, tip: 1.45, feather: 0, featherMin: 0.15, veinSize: 0.25, edgeSize: 0.1 },   // вид листа: яркость тела/френеля/жилок/кромки, добавка к размеру точки на жилках/кромке (как у лент медузы: кромка ×4–6 к телу)
@@ -368,6 +369,19 @@
             vUpE = aK.w * smoothstep(0.15, 0.45, aP.x) * smoothstep(0.55, 1.0, aP.y * (axP0.y < 0.0 ? -1.0 : 1.0));   // верхняя (по экрану) кромка креста
             gl_PointSize = uSize * uViewportScale * (0.7 + aSizeScale * 0.5) * (1.0 + uLookS.x * aVein + uLookS.y * smoothstep(0.7, 1.0, abs(aP.y))) / (0.35 + 0.06 * dist);   // жилки и кромка — крупнее точки (как у лент медузы)
             dpMorphFinish();
+        }
+    `;
+    // Тело лепестка: сплошная слабая подложка под точками (автор, 2026-10-02: «гладкая поверхность без +500 тыс. точек»). Та же деформация, что у точек (petalVertex); ярче у середины и на изгибах, к кромке гаснет.
+    const petalBodyFragment = (G) => `
+        ${G.pointsFragment}
+        ${colorGlsl}
+        uniform float uBodyA, uBodyFres, uHoleIn, uHoleOut, uMorphActive;
+        varying float vFresnel, vU, vV, vVein, vUpE, vR, vEdgeFade, vBaseFd;
+        void main() {
+            float across = 1.0 - smoothstep(0.35, 1.0, abs(vV));                   // к кромке гаснет: контур рисуют точки
+            float a = uBodyA * (1.0 + uBodyFres * vFresnel) * across * smoothstep(0.0, 0.08, vU) * (1.0 - smoothstep(0.9, 1.0, vU)) * vBaseFd * smoothstep(uHoleIn, uHoleOut, vR) * (1.0 - uMorphActive);
+            vec3 color = sColor(pow(clamp(vFresnel * 1.1, 0.0, 1.0), uColGamma));
+            gl_FragColor = dpMorphColor(color, a, 1.0);
         }
     `;
     const petalFragment = (G) => `
@@ -1047,7 +1061,8 @@
         const h = STEP / Math.sqrt(q);
 
         // ---------- ЛЕПЕСТКИ ----------
-        const pp = [], pn = [], pa = [], pl = [], ps = [], pv = [], pb = [], po = [], pr = [], pw = [], phw = [], pfd = [];
+        let pp = [], pn = [], pa = [], pl = [], ps = [], pv = [], pb = [], po = [], pr = [], pw = [], phw = [], pfd = [];
+        const bodyA = { pp: [], pn: [], pa: [], pl: [], ps: [], pv: [], pb: [], po: [], pr: [], pw: [], phw: [], idx: [] };   // «тело» лепестков: сплошная слабая подложка под точками (идея автора, 2026-10-02)
         const meshes = [];
         const partsG = DP.params.get('parts') || DEFAULT_PARTS;
         const onlyPetal = onlyPetalOf(partsG);
@@ -1064,9 +1079,9 @@
             let sd = k * 101.7;
             const base = petalPoint(P, 0, 0);
             const chordHalf = (uu) => { const q0 = petalPoint(P, uu, -0.999), q1 = petalPoint(P, uu, 0.999); return 0.5 * Math.hypot(q1[0] - q0[0], q1[1] - q0[1]); };   // местная полуширина (хорда между кромками): для мягкого края
-            const emit = (u, v, edgeLine, hw) => {
+            const emit = (u, v, edgeLine, hw, force) => {
                 const p = petalPoint(P, u, v);
-                if (Math.hypot(p[0], p[1] - FIG_Y) < 0.2) return;                     // в «гнезде» под центральным глазом лепестки и так прозрачны — точки не нужны
+                if (!force && Math.hypot(p[0], p[1] - FIG_Y) < 0.2) return;                     // в «гнезде» под центральным глазом лепестки и так прозрачны — точки не нужны
                 const e = 0.002;
                 const pu = petalPoint(P, Math.min(1, u + e), v), pvv = petalPoint(P, u, Math.min(1, v + e));
                 const a = [pu[0] - p[0], pu[1] - p[1], pu[2] - p[2]], b = [pvv[0] - p[0], pvv[1] - p[1], pvv[2] - p[2]];
@@ -1095,6 +1110,17 @@
                 const u = Math.min(0.999, (i + 0.5) / (nU * 3));
                 emit(u, sg * 0.992, true, chordHalf(u));
             }
+            // тело лепестка: сетка из треугольников с теми же атрибутами, что у точек (деформация та же — в petalVertex); рисуется отдельным материалом под точками
+            {
+                const sv = [pp, pn, pa, pl, ps, pv, pb, po, pr, pw, phw];
+                pp = []; pn = []; pa = []; pl = []; ps = []; pv = []; pb = []; po = []; pr = []; pw = []; phw = [];
+                const nuB = 30, nvB = 12, hwB = chordHalf(0.5);
+                for (let i = 0; i <= nuB; i++) for (let j = 0; j <= nvB; j++) emit(Math.min(0.999, i / nuB), ((j / nvB) * 2 - 1) * 0.985, false, chordHalf(Math.min(1, i / nuB)), true);
+                const off = bodyA.pp.length / 3;
+                [['pp', pp], ['pn', pn], ['pa', pa], ['pl', pl], ['ps', ps], ['pv', pv], ['pb', pb], ['po', po], ['pr', pr], ['pw', pw], ['phw', phw]].forEach(([n, a]) => { for (let q = 0; q < a.length; q++) bodyA[n].push(a[q]); });
+                for (let i = 0; i < nuB; i++) for (let j = 0; j < nvB; j++) { const a0 = off + i * (nvB + 1) + j, a1 = a0 + 1, a2 = a0 + nvB + 1, a3 = a2 + 1; bodyA.idx.push(a0, a1, a2, a1, a3, a2); }
+                [pp, pn, pa, pl, ps, pv, pb, po, pr, pw, phw] = sv;
+            }
             // поверхность (MESH)
             const mg = new THREE.PlaneGeometry(1, 1, 24, 12), mp = mg.attributes.position;
             const mo = new Float32Array(mp.count);
@@ -1119,6 +1145,11 @@
         petalGeo.setAttribute('aL', new THREE.Float32BufferAttribute(pl, 1));
         petalGeo.setAttribute('aSizeScale', new THREE.Float32BufferAttribute(ps, 1));
         petalGeo.setAttribute('aVein', new THREE.Float32BufferAttribute(pv, 1));
+        const bodyGeo = new THREE.BufferGeometry();
+        [['position', 'pp', 3], ['normal', 'pn', 3], ['aP', 'pa', 4], ['aK', 'po', 4], ['aR', 'pr', 2], ['aW', 'pw', 1], ['aHW', 'phw', 1], ['aB', 'pb', 3], ['aL', 'pl', 1], ['aSizeScale', 'ps', 1], ['aVein', 'pv', 1]]
+            .forEach(([a, n, c]) => bodyGeo.setAttribute(a, new THREE.Float32BufferAttribute(bodyA[n], c)));
+        bodyGeo.setIndex(bodyA.idx);
+        bodyGeo.setAttribute('aOrder', new THREE.Float32BufferAttribute(new Float32Array(bodyA.pp.length / 3), 1));
 
         // ---------- ГЛАЗА ----------
         const eyes = EYES.map((E, i) => {
@@ -1383,7 +1414,7 @@
         ringGeo.setAttribute('aL', new THREE.Float32BufferAttribute(rl, 3));
 
         const rootMatrix = new THREE.Matrix4();
-        const data = { petalGeo, eyeGeo, backGeo, tendGeo, tubeGeo, ringGeo, meshes, eyes, RINGS, rootMatrix };
+        const data = { petalGeo, bodyGeo, eyeGeo, backGeo, tendGeo, tubeGeo, ringGeo, meshes, eyes, RINGS, rootMatrix };
         assignOrderAndLayout(data);
         return data;
     }
@@ -1482,7 +1513,8 @@
                 eyeR.push(new THREE.Vector4(E.roll, (main ? show('eye') : (i >= 8 ? show('eyes') && show('rings') : show('eyes'))) && i < data.eyes.length ? 1 : 0, 0, 0));
             }
             const petalU = { uBlueLift: { get value() { return DP.config.seraphPetal.blueLift; } }, uRedK: { get value() { return DP.config.seraphPetal.redK; } }, uSatK: { get value() { return DP.config.seraphPetal.satK; } }, uCenterY: { value: FIG_Y }, uPetalFlap: { get value() { return DP.config.seraphPetal.flap; } }, uFlapAmp: { get value() { return DP.config.seraphPetal.flapAmp; } }, uSpread: { get value() { return DP.config.seraphPetal.spread; } }, uFlapWave: { get value() { return DP.config.seraphPetal.flapWave; } }, uFlapVar: { get value() { return DP.config.seraphPetal.flapVar; } }, uPetTwist: { get value() { return DP.config.seraphPetal.twist; } }, uPetTwistSpeed: { get value() { return DP.config.seraphPetal.twistSpeed; } }, uRufAmp: { get value() { return DP.config.seraphPetal.ruffleAmp; } }, uRufK: { get value() { return DP.config.seraphPetal.ruffleK; } }, uRufSpeed: { get value() { return DP.config.seraphPetal.ruffleSpeed; } }, uLookA: { get value() { const L = DP.config.seraphPetal.look; return lookA.set(L.body, L.fres, L.vein, L.edge); } }, uLookS: { get value() { const L = DP.config.seraphPetal.look; return lookS.set(L.veinSize, L.edgeSize); } }, uTipGlow: { get value() { return DP.config.seraphPetal.look.tip; } }, uFeather: { get value() { const L = DP.config.seraphPetal.look; return lookF.set(L.feather, L.featherMin); } }, uHoleIn: { get value() { return DP.config.seraphPetal.holeIn; } }, uHoleOut: { get value() { return DP.config.seraphPetal.holeOut; } }, uRollGlow: { get value() { return DP.config.seraphPetal.rollGlow; } }, uFold: { get value() { return DP.config.seraphPetal.fold; } }, uLatCross: { get value() { return DP.config.seraphPetal.latCross; } }, uPersp: { get value() { return DP.config.seraphPetal.persp; } }, uSweepK: { get value() { return DP.config.seraphPetal.sweepK; } }, uSweepSpeed: { get value() { return DP.config.seraphPetal.sweepSpeed; } }, uTwLim: { get value() { return DP.config.seraphPetal.twistLimit; } }, uLatAmp: { get value() { return DP.config.seraphPetal.latAmp; } }, uSideRoll: { get value() { return DP.config.seraphPetal.sideRoll; } }, uRoll: { get value() { return DP.config.seraphPetal.roll; } }, uCalm: { get value() { return DP.config.seraphPetal.calm; } }, uTwShape: { get value() { return DP.config.seraphPetal.twistShape; } }, uOpenK: { get value() { return DP.config.seraphPetal.openK; } }, uFlapFresnel: { get value() { return DP.config.seraphPetal.flapFresnel; } }, uFlapSpeed: { get value() { return DP.config.seraphPetal.flapSpeed; } } };
-            const mPetal = mat(petalVertex, petalFragment, Object.assign({ uSize: { value: 2.0 } }, petalU));;
+            const mPetal = mat(petalVertex, petalFragment, Object.assign({ uSize: { value: 2.0 } }, petalU));
+            const mBody = mat(petalVertex, petalBodyFragment, Object.assign({ uSize: { value: 2.0 }, uBodyA: { get value() { return DP.config.seraphPetal.bodyA; } }, uBodyFres: { get value() { return DP.config.seraphPetal.bodyFres; } } }, petalU), { side: THREE.DoubleSide });
             const EL = DP.config.seraphEye;
             const uT0 = { value: 0 };
             const ringU = data.RINGS.map(R => new THREE.Vector4(R.axis[0], R.axis[1], R.axis[2], R.speed)), ringM = data.RINGS.map(R => R.m3);
@@ -1513,6 +1545,7 @@
             const root = new THREE.Group();
             const meshRoot = new THREE.Group(), pointsRoot = new THREE.Group();
             root.add(meshRoot, pointsRoot);
+            if (show('petals')) { const bm = new THREE.Mesh(data.bodyGeo, mBody); bm.frustumCulled = false; bm.renderOrder = -1; pointsRoot.add(bm); }
             if (show('petals')) pointsRoot.add(new THREE.Points(data.petalGeo, mPetal));
             if (show('eye') || show('eyes')) {
                 const back = new THREE.Points(data.backGeo, mBack); back.renderOrder = 1; pointsRoot.add(back);   // подложка — после лепестков, до глаз
