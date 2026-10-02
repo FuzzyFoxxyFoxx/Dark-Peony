@@ -126,7 +126,7 @@
     // Доводим по частям, как медузу и светило ('' — все). ?parts= в адресе важнее.
     // petals — лепестки, eye — центральный глаз, eyes — малые глаза, tendrils — усики, rings — кольца.
     // petalN (petal1 — верхний правый) — только один лепесток (доводка по одному, как глаз; потом — по его образцу все остальные).
-    const DEFAULT_PARTS = 'petals,eye,eyes,rings';
+    const DEFAULT_PARTS = 'petals,eye,eyes';   // орбиты со звёздами пока выключены (автор, 2026-10-02): вернуть — ?parts=petals,eye,eyes,rings
     const onlyPetalOf = (parts) => { const m = /petal(\d+)/.exec(parts || ''); return m ? +m[1] : (/cross/.test(parts || '') ? -2 : -1); };
     // cross — «андреевский крест»: четыре самых крупных лепестка (диагональные верхние 2, 3 и нижние крылья 8, 9); остальные добавим между ними позже.
     const CROSS = [2, 3, 8, 9];
