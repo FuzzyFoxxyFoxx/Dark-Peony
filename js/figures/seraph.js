@@ -1056,7 +1056,7 @@
             const n0 = pp.length / 3;
             // «Нити» (идея автора, 2026-10-01): точки лежат на линиях v = const — они повторяют контур лепестка (у кромки — по краю, к середине всё уже, сходятся у основания и кончика), как жилки пиона.
             // ?rows=0 — прежнее облако (случайный разброс ±0.4 клетки в обе стороны). rowK — во сколько раз реже нити, чем шаг h (вдоль нити точки плотнее).
-            const ROWS = DP.params.get('rows') !== '0', rowK = ROWS ? parseFloat(DP.params.get('rowk') || '1.35') : 1;
+            const ROWS = DP.params.get('rows') !== '0', rowK = ROWS ? parseFloat(DP.params.get('rowk') || '2.6') : 1;
             const nU = Math.ceil(P.L / h), nV = Math.ceil(2 * P.W / (h * rowK));
             let sd = k * 101.7;
             const base = petalPoint(P, 0, 0);
@@ -1181,7 +1181,7 @@
                 const slitR = (phi) => { const cx = Math.cos(phi), sy = Math.sin(phi); let lo = 0, hi = 1.6; for (let it = 0; it < 28; it++) { const mid = (lo + hi) / 2, x = mid * cx, y = mid * sy; if (Math.abs(x) < 1 && y < eyeHU(x) && y > -eyeHL(x)) lo = mid; else hi = mid; } return lo; };
                 const NT = 360, tbl = [0]; for (let t = 1; t <= NT; t++) { const a0 = (t - 1) / NT * Math.PI * 2, a1 = t / NT * Math.PI * 2, r0 = slitR(a0), r1 = slitR(a1); tbl.push(tbl[t - 1] + Math.hypot(r1 * Math.cos(a1) - r0 * Math.cos(a0), r1 * Math.sin(a1) - r0 * Math.sin(a0))); }
                 const P0 = tbl[NT], phiAt = (f) => { const target = f * P0; let lo = 0, hi = NT; while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (tbl[mid] <= target) lo = mid; else hi = mid; } const fr = (target - tbl[lo]) / Math.max(1e-6, tbl[lo + 1] - tbl[lo]); return (lo + fr) / NT * Math.PI * 2; };
-                const along = hStep * 0.85, radial = hStep * 1.9 / 0.55;           // шаг вдоль нити и (в долях контура) между нитями
+                const along = hStep * 0.85, radial = hStep * 1.9 / 0.55 * parseFloat(DP.params.get('eyerowk') || '1.8');           // шаг вдоль нити и (в долях контура) между нитями
                 for (let ci = 0, k = 1.012; k < 6; ci++) {
                     const n = Math.max(24, Math.ceil(k * P0 / along)), ph0 = seededRandom(sd += 1.7);
                     for (let j = 0; j < n; j++) {
