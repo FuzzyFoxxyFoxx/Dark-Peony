@@ -72,6 +72,7 @@
         lidT: 0.01,                   // толщина века у разреза (зазор до яблока); к уголкам сходит на нет
         lowerSq: 1.0,                // сжатие нижнего профиля по y (S-переход в скулу ближе)
         grooveDepth: 0.095, grooveW: 0.09, grooveY: 0.67,   // борозда (орбитопальпебральная): глубина, ширина, высота — гауссов провал поверх гладкого профиля, идёт вместе со складками, к уголкам гаснет
+        smallBoost: 0.9,              // яркость малых глаз: (полуширина центрального / полуширина глаза)^smallBoost, не более ×2.6
         edgeFade: 0.044,              // ширина перехода в ноль у края разреза (локальные единицы; ≈ 3 частицы)
         lidSide: 1.0,                 // 1 — изгиб века над зрачком; −1 — зеркально (изгиб на противоположной стороне)
         lidLocal: 0.75, lidW: 0.8,   // доля движения века, локальная над роговицей (остальное — целиком), ширина изгиба по x
@@ -579,7 +580,7 @@
         uniform float uIrisOnly, uIrisSpeed, uIrisFreq, uIrisClump, uIrisWave, uIrisDrift, uIrisFlare, uIrisFlareSpeed, uRingGain, uRimIris, uIrisDie, uRingMid, uRingFrom, uDieSoft;
         uniform vec4 uEyeC[${MAX_EYES}];     // центр (x, y, z) и полуширина
         uniform vec4 uEyeR[${MAX_EYES}];     // x — поворот в плоскости, y — глаз показан
-        uniform float uEdgeFade, uCornea, uLidFollow, uLidLocal, uLidW, uLidSide;
+        uniform float uSmallBoost, uEdgeFade, uCornea, uLidFollow, uLidLocal, uLidW, uLidSide;
         uniform vec4 uEyeFade;               // x — неровность контура прозрачности, y — скорость, z — где начинается спад
         attribute vec4 aE, aP;
         attribute vec4 aEB, aEK;             // глаз на лепестке: основание лепестка (x, y, угол оси, полуширина лепестка) и aK лепестка
@@ -735,6 +736,7 @@
             gl_PointSize = irisSz * uSize * uViewportScale * (0.7 + aSizeScale * 0.5) * (kind > 4.5 ? 3.2 : (kind > 3.5 ? 0.7 : 1.0)) * min(2.2, sqrt(stretch)) / (0.35 + 0.06 * dist);
             dpMorphFinish();
             // спрятать: глаз не показан или точка закрыта (размер 0 на Metal не прячет — выносим за экран)
+            vA *= clamp(pow(uEyeC[0].w / max(ec.w, 0.05), uSmallBoost), 1.0, 2.6);   // чем глаз меньше центрального, тем ярче его точки (автор: малые глаза бледнеют при разрежении нитей)
             if (kind < 4.5) vA *= aF.x;   // затухание у кромки лепестка (кожа/белок/радужка не выходят за лепесток)
             if (er.y < 0.5 || vA < 0.01) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; }
         }
@@ -1056,7 +1058,7 @@
             const n0 = pp.length / 3;
             // «Нити» (идея автора, 2026-10-01): точки лежат на линиях v = const — они повторяют контур лепестка (у кромки — по краю, к середине всё уже, сходятся у основания и кончика), как жилки пиона.
             // ?rows=0 — прежнее облако (случайный разброс ±0.4 клетки в обе стороны). rowK — во сколько раз реже нити, чем шаг h (вдоль нити точки плотнее).
-            const ROWS = DP.params.get('rows') !== '0', rowK = ROWS ? parseFloat(DP.params.get('rowk') || '2.6') : 1;
+            const ROWS = DP.params.get('rows') !== '0', rowK = ROWS ? parseFloat(DP.params.get('rowk') || '1.35') : 1;
             const nU = Math.ceil(P.L / h), nV = Math.ceil(2 * P.W / (h * rowK));
             let sd = k * 101.7;
             const base = petalPoint(P, 0, 0);
@@ -1486,6 +1488,7 @@
             const eyeU = Object.assign({ uRing: { value: ringU }, uRingM: { value: ringM }, uT0 }, { uIrisSpeed: { get value() { return DP.config.seraphIris.speed; } }, uIrisFreq: { get value() { return DP.config.seraphIris.freq; } }, uRingMid: { get value() { return DP.config.seraphIris.ringMid; } }, uRingFrom: { get value() { return 0.95 - 0.7 * DP.config.seraphIris.ringReach; } }, uDieSoft: { get value() { return DP.config.seraphIris.dieSoft; } }, uIrisDie: { get value() { return DP.config.seraphIris.die; } }, uRimIris: { get value() { return DP.config.seraphIris.rim; } }, uRingGain: { get value() { return DP.config.seraphIris.ringGain; } }, uIrisDrift: { get value() { return DP.config.seraphIris.drift; } }, uIrisFlare: { get value() { return DP.config.seraphIris.flare; } }, uIrisFlareSpeed: { get value() { return DP.config.seraphIris.flareSpeed; } }, uIrisClump: { get value() { return DP.config.seraphIris.clump; } }, uIrisWave: { get value() { return DP.config.seraphIris.wave; } }, uIrisGain: { get value() { return DP.config.seraphIris.gain; } }, uIrisOnly: { value: IRIS_ONLY ? 1 : 0 }, uSize: { value: IRIS_ONLY ? 2.6 : 1.9 },
                 uEyeLook: { get value() { return eyeLook.set(EL.rim, EL.ball, EL.skinBase, EL.skinCurve); } },
                 uEdgeFade: { get value() { return EL.edgeFade; } },
+                uSmallBoost: { get value() { return EL.smallBoost; } },
                 uCornea: { get value() { return EL.cornea; } },
                 uLidFollow: { get value() { return EL.lidFollow; } },
                 uDownK: { get value() { return EL.downK; } },
