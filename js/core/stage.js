@@ -424,7 +424,7 @@
             drawHud(Math.max(1, window.innerWidth), Math.max(1, window.innerHeight));
         }
     };
-    if (DP.params.get('bg') === '0') DP.background.setVisible(false);
+    if (DP.params.get('bg') !== '1') DP.background.setVisible(false);   // космос пока выключен (автор, 2026-10-02): вернуть — ?bg=1
     // Кокон — по центру фигур: всё фоновое, что ближе к камере, чем центр фигуры (+ запас), не рисуется.
     cocoon.value = camera.position.distanceTo(new THREE.Vector3(0, -0.48, 0)) + bg.cocoonMargin;
 
@@ -435,6 +435,7 @@
     // крестики. Большая — то же с радиусом R2 (выходит за экран), без знаков на пересечениях.
     // Все линии одной толщины; крестики масштабируются вместе с кругами (размер — доля R).
     const hudCanvas = document.getElementById('hudCanvas');
+    if (DP.params.get('hud') !== '1') hudCanvas.style.display = 'none';   // круги и оси пока выключены (автор, 2026-10-02): вернуть — ?hud=1
     const hudCtx = hudCanvas.getContext('2d');
 
     function drawHud(w, h) {
