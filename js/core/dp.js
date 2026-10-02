@@ -321,6 +321,8 @@
     function detectQuality() {
         const forced = params.get('q');
         if (forced && DP.QUALITY_TIERS[forced]) return forced;
+        // iPhone/iPad: Safari скрывает число ядер (4) и тянул 'medium' — серафим на iPhone 15 Pro Max выходил тёмным и редким (автор, 2026-10-02); эталон high проверен на iPhone 15 — принудительно high (вручную: ?q=medium)
+        if (/iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) return 'high';
         const mem = navigator.deviceMemory || 8;          // нет в Safari/Firefox → считаем «достаточно»
         const cores = navigator.hardwareConcurrency || 8;
         if (mem <= 2 || cores <= 2) return 'low';
